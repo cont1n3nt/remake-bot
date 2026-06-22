@@ -97,13 +97,22 @@ class SheetsRepository:
 
     @_retry
     def append_transaction(self, nickname: str, tx_type: str, amount: float) -> None:
-        """Append a new transaction row. tx_type: 'buy' or 'sell'."""
+        """Append a transaction row, copying formulas from the row above."""
         index = self._last_row() + 1
 
         if tx_type == "buy":
             self._sheet.insert_row(["", nickname, True, False, amount], index)
         else:
             self._sheet.insert_row(["", nickname, False, True, amount], index)
+
+        source = self._sheet.row_values(index - 1, value_render_option='FORMULA')
+        cells = []
+        for col, val in enumerate(source):
+            if isinstance(val, str) and val.startswith("="):
+                cells.append(gspread.Cell(row=index, col=col + 1, value=val))
+
+        if cells:
+            self._sheet.update_cells(cells)
 
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:
