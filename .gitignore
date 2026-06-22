@@ -5,6 +5,5 @@ dist/
 build/
 .env
 *.json
-!creds.example.json
 .venv/
 venv/

@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     discord_token: str = Field(default="", validation_alias="DISCORD_TOKEN")
-    google_sheets_creds: str = Field(default="creds.json", validation_alias="GOOGLE_SHEETS_CREDS")
+    google_sheets_creds: str = Field(default="credentials.json", validation_alias="GOOGLE_SHEETS_CREDS")
     google_sheets_url: str = Field(default="", validation_alias="GOOGLE_SHEETS_URL")
     guild_id: int = Field(default=0, validation_alias="GUILD_ID")
 
