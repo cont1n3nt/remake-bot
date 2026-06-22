@@ -1,7 +1,0 @@
-discord.py==2.6.3
-python-dotenv==1.1.1
-aiosqlite==0.21.0
-pydantic==2.13.4
-pydantic-settings==2.14.2
-gspread==6.2.1
-google-auth==2.55.0
