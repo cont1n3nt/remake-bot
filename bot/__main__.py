@@ -14,7 +14,7 @@ def main() -> None:
     if not settings.is_valid:
         raise RuntimeError("Missing required environment variables")
 
-    repo = SheetsRepository(settings.google_sheets_creds, settings.google_sheets_url)
+    repo = SheetsRepository(settings.sheet_name, settings.google_sheets_creds, settings.google_sheets_url)
     sheets_service = SheetsService(repo)
     user_service = UserService(sheets_service)
 
