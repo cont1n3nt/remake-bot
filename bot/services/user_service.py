@@ -10,12 +10,12 @@ class UserService:
         self._sheets = sheets
 
     def get_profile(self, discord_id: str) -> Optional[User]:
-        """Get user profile data."""
+        # получения профиля пользователя по discord_id
         pass
 
     def set_referral_code(self, discord_id: str, code: str) -> User:
         """
-        Set referral code for user.
+        Установить реферальный код для пользователя
 
         Raises:
             ValueError: if code already taken or user already has a code.
@@ -23,5 +23,5 @@ class UserService:
         pass
 
     def get_referral_info(self, discord_id: str) -> User:
-        """Get referral stats for user."""
+        # Статистика по рефералам для пользователя
         pass
