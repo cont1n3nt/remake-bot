@@ -14,7 +14,7 @@ def profile_embed(user: User) -> Embed:
     embed.add_field(name="Referral role", value=user.referral_role if user.referral_role else "—")
     embed.add_field(name="Приглашено", value=str(user.referral_count))
     if user.referred_by:
-        embed.add_field(name="Пришел от", value=user.referred_by)
+        embed.add_field(name="Ник пригласившего", value=user.referred_by)
     return embed
 
 
@@ -22,6 +22,7 @@ def transaction_confirmation_embed(
     nickname: str,
     tx_type: str,
     amount: float,
+    referrer: str | None = None,
 ) -> Embed:
     label = "Покупка" if tx_type == "buy" else "Продажа"
     embed = Embed(
@@ -31,6 +32,8 @@ def transaction_confirmation_embed(
     embed.add_field(name="Ник", value=nickname)
     embed.add_field(name="Тип", value=label)
     embed.add_field(name="Сумма", value=str(amount))
+    if referrer:
+        embed.add_field(name="Ник пригласившего", value=referrer)
     return embed
 
 

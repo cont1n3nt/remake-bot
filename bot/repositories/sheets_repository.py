@@ -11,7 +11,7 @@ from bot.config.constants import (
     COL_REFERRED_BY, COL_UNIQUE_NICK,
     COL_TOTAL_COINS, COL_TOTAL_XP, COL_RANK,
     COL_REFERRAL_COUNT, COL_REFERRAL_ROLE, COL_BOOSTER,
-    MAX_RETRIES, RETRY_MIN_WAIT,
+    DATA_START_ROW, MAX_RETRIES, RETRY_MIN_WAIT,
 )
 
 
@@ -71,6 +71,14 @@ class SheetsRepository:
 
         vals = self._sheet.row_values(cell.row)
 
+        # Read referred_by from first raw data row (column H on the B-row)
+        referred_by = None
+        b_cell = self._sheet.find(nickname, in_column=COL_NICKNAME)
+        if b_cell is not None:
+            h_val = self._sheet.cell(b_cell.row, COL_REFERRED_BY).value
+            if h_val and h_val.strip():
+                referred_by = h_val.strip()
+
         return {
             "nickname": vals[COL_UNIQUE_NICK - 1],
             "coins": self._parse_float(vals[COL_TOTAL_COINS - 1]),
@@ -79,6 +87,7 @@ class SheetsRepository:
             "referral_count": self._parse_int(vals[COL_REFERRAL_COUNT - 1]),
             "referral_role": vals[COL_REFERRAL_ROLE - 1] if len(vals) >= COL_REFERRAL_ROLE else "",
             "booster": len(vals) >= COL_BOOSTER and vals[COL_BOOSTER - 1] == "TRUE",
+            "referred_by": referred_by,
         }
 
     def _last_row(self) -> int:
@@ -101,23 +110,69 @@ class SheetsRepository:
         return True
 
     @_retry
-    def append_transaction(self, nickname: str, tx_type: str, amount: float) -> None:
+    def append_transaction(
+        self, nickname: str, tx_type: str, amount: float,
+        referrer: str | None = None,
+    ) -> None:
         """Append a transaction row, copying formulas from the row above."""
         index = self._last_row() + 1
+        row = ["", nickname, True, False, amount, "", "", referrer or ""]
 
         if tx_type == "buy":
-            self._sheet.insert_row(["", nickname, True, False, amount], index)
+            self._sheet.insert_row(row, index)
         else:
-            self._sheet.insert_row(["", nickname, False, True, amount], index)
+            row[2], row[3] = False, True
+            self._sheet.insert_row(row, index)
 
-        source = self._sheet.row_values(index - 1, value_render_option='FORMULA')
-        cells = []
-        for col, val in enumerate(source):
-            if isinstance(val, str) and val.startswith("="):
-                cells.append(gspread.Cell(row=index, col=col + 1, value=val))
+        if index > 2:
+            sheet_id = self._sheet.id
+            src_start = index - 2
+            src_end = index - 1
+            dst_start = index - 1
+            dst_end = index
 
-        if cells:
-            self._sheet.update_cells(cells)
+            self._spreadsheet.batch_update({
+                "requests": [
+                    {
+                        "copyPaste": {
+                            "source": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": src_start,
+                                "endRowIndex": src_end,
+                                "startColumnIndex": 5,   # F (0-based)
+                                "endColumnIndex": 7,     # G (exclusive)
+                            },
+                            "destination": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": dst_start,
+                                "endRowIndex": dst_end,
+                                "startColumnIndex": 5,
+                                "endColumnIndex": 7,
+                            },
+                            "pasteType": "PASTE_FORMULA",
+                        }
+                    },
+                    {
+                        "copyPaste": {
+                            "source": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": src_start,
+                                "endRowIndex": src_end,
+                                "startColumnIndex": 10,  # K (0-based)
+                                "endColumnIndex": 15,    # O (exclusive)
+                            },
+                            "destination": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": dst_start,
+                                "endRowIndex": dst_end,
+                                "startColumnIndex": 10,
+                                "endColumnIndex": 15,
+                            },
+                            "pasteType": "PASTE_FORMULA",
+                        }
+                    },
+                ]
+            })
 
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:

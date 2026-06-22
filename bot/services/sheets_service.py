@@ -23,6 +23,7 @@ class SheetsService:
             referral_count=data["referral_count"],
             referral_role=data["referral_role"],
             booster=data["booster"],
+            referred_by=data.get("referred_by"),
         )
 
     def ensure_user(self, nickname: str) -> bool:
@@ -35,7 +36,8 @@ class SheetsService:
         return self._repo.user_has_referral(nickname)
 
     def save_transaction(
-        self, nickname: str, tx_type: str, amount: float
+        self, nickname: str, tx_type: str, amount: float,
+        referrer: str | None = None,
     ) -> Transaction:
-        self._repo.append_transaction(nickname, tx_type, amount)
+        self._repo.append_transaction(nickname, tx_type, amount, referrer)
         return Transaction(nickname=nickname, tx_type=tx_type, amount=amount)

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import discord
@@ -14,15 +15,20 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
 
     nickname = discord.ui.TextInput(
         label="Ник",
-        placeholder="Хемуль",
+        placeholder="Ник игрока",
     )
     tx_type = discord.ui.TextInput(
         label="Тип",
-        placeholder="buy или sell",
+        placeholder="buy/sell",
     )
     amount = discord.ui.TextInput(
         label="Сумма",
-        placeholder="625000",
+        placeholder="Сумма",
+    )
+    referrer = discord.ui.TextInput(
+        label="Ник пригласившего",
+        placeholder="Ник пригласившего",
+        required=False,
     )
 
     def __init__(self, sheets_service: SheetsService) -> None:
@@ -55,18 +61,25 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
             return
 
         nickname = self.nickname.value.strip()
+        referrer = self.referrer.value.strip() or None
+
+        await interaction.response.defer()
+
         try:
-            self._sheets_service.save_transaction(nickname, tx_type, amount)
+            await asyncio.to_thread(
+                self._sheets_service.save_transaction,
+                nickname, tx_type, amount, referrer,
+            )
         except Exception as e:
             logger.error("tab save error: %s", e)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=error_embed(f"Ошибка при сохранении: {e}"),
                 ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(
-            embed=transaction_confirmation_embed(nickname, tx_type, amount),
+        await interaction.followup.send(
+            embed=transaction_confirmation_embed(nickname, tx_type, amount, referrer),
         )
 
 

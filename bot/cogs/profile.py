@@ -1,3 +1,6 @@
+import asyncio
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -5,6 +8,8 @@ from discord.ext import commands
 from bot.services.user_service import UserService
 from bot.services.referral_service import ReferralService
 from bot.utils.embeds import profile_embed, referral_embed, error_embed
+
+logger = logging.getLogger("bot")
 
 
 class ProfileCog(commands.Cog):
@@ -22,7 +27,16 @@ class ProfileCog(commands.Cog):
     @app_commands.command(name="profile")
     @app_commands.describe(nickname="Ваш ник в таблице")
     async def profile(self, interaction: discord.Interaction, nickname: str) -> None:
-        user = self._user_service.get_profile(nickname)
+        try:
+            user = await asyncio.to_thread(self._user_service.get_profile, nickname)
+        except Exception as e:
+            logger.error("profile error: %s", e)
+            await interaction.response.send_message(
+                embed=error_embed("Ошибка при загрузке профиля"),
+                ephemeral=True,
+            )
+            return
+
         if user is None:
             await interaction.response.send_message(
                 embed=error_embed("Пользователь не найден"),
@@ -44,10 +58,19 @@ class ProfileCog(commands.Cog):
         referrer_nick: str,
     ) -> None:
         try:
-            self._user_service.set_referral(your_nick, referrer_nick)
+            await asyncio.to_thread(
+                self._user_service.set_referral, your_nick, referrer_nick,
+            )
         except ValueError as e:
             await interaction.response.send_message(
                 embed=error_embed(str(e)),
+                ephemeral=True,
+            )
+            return
+        except Exception as e:
+            logger.error("refer error: %s", e)
+            await interaction.response.send_message(
+                embed=error_embed("Ошибка при установке реферала"),
                 ephemeral=True,
             )
             return
@@ -59,7 +82,16 @@ class ProfileCog(commands.Cog):
     @app_commands.command(name="referrals")
     @app_commands.describe(nickname="Ваш ник в таблице")
     async def referrals(self, interaction: discord.Interaction, nickname: str) -> None:
-        user = self._user_service.get_referral_info(nickname)
+        try:
+            user = await asyncio.to_thread(self._user_service.get_referral_info, nickname)
+        except Exception as e:
+            logger.error("referrals error: %s", e)
+            await interaction.response.send_message(
+                embed=error_embed("Ошибка при загрузке рефералов"),
+                ephemeral=True,
+            )
+            return
+
         if user is None:
             await interaction.response.send_message(
                 embed=error_embed("Пользователь не найден"),
@@ -67,7 +99,6 @@ class ProfileCog(commands.Cog):
             )
             return
 
-        referrals = self._referral_service.get_referral_count(nickname)
         embed = profile_embed(user)
         embed.add_field(name="Приглашено", value=str(user.referral_count), inline=False)
 
