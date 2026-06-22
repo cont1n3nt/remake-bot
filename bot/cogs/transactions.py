@@ -66,7 +66,7 @@ class TransactionsCog(commands.Cog):
         self._sheets_service = sheets_service
 
     @app_commands.command(name="tab")
-    @app_commands.checks.has_role("Admin")
+    @app_commands.checks.has_permissions(administrator=True)
     async def tab(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(TransactionModal(self._sheets_service))
 
@@ -74,9 +74,9 @@ class TransactionsCog(commands.Cog):
     async def tab_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
-        if isinstance(error, app_commands.MissingRole):
+        if isinstance(error, app_commands.MissingPermissions):
             await interaction.response.send_message(
-                embed=error_embed("Недостаточно прав. Требуется роль Admin."),
+                embed=error_embed("Недостаточно прав. Требуются права администратора."),
                 ephemeral=True,
             )
 
