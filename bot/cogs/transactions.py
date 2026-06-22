@@ -56,7 +56,6 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
 
         nickname = self.nickname.value.strip()
         try:
-            self._sheets_service.ensure_user(nickname)
             self._sheets_service.save_transaction(nickname, tx_type, amount)
         except Exception as e:
             logger.error("tab save error: %s", e)

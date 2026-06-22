@@ -81,8 +81,8 @@ class SheetsRepository:
             "booster": len(vals) >= COL_BOOSTER and vals[COL_BOOSTER - 1] == "TRUE",
         }
 
-    def _next_row(self) -> int:
-        return len(self._sheet.col_values(COL_NICKNAME)) + 1
+    def _last_row(self) -> int:
+        return len(self._sheet.col_values(COL_NICKNAME))
 
     @_retry
     def ensure_user(self, nickname: str) -> bool:
@@ -91,28 +91,19 @@ class SheetsRepository:
         if cell is not None:
             return False
 
-        row = self._next_row()
-        self._sheet.update_cell(row, COL_NICKNAME, nickname)
+        index = self._last_row() + 1
+        self._sheet.insert_row(["", nickname], index)
         return True
 
     @_retry
     def append_transaction(self, nickname: str, tx_type: str, amount: float) -> None:
         """Append a new transaction row. tx_type: 'buy' or 'sell'."""
-        row = self._next_row()
-
-        cells = [
-            gspread.Cell(row=row, col=COL_NICKNAME, value=nickname),
-            gspread.Cell(row=row, col=COL_AMOUNT, value=str(amount)),
-        ]
+        index = self._last_row() + 1
 
         if tx_type == "buy":
-            cells.append(gspread.Cell(row=row, col=COL_BUY, value="TRUE"))
-            cells.append(gspread.Cell(row=row, col=COL_SELL, value="FALSE"))
+            self._sheet.insert_row(["", nickname, True, False, amount], index)
         else:
-            cells.append(gspread.Cell(row=row, col=COL_SELL, value="TRUE"))
-            cells.append(gspread.Cell(row=row, col=COL_BUY, value="FALSE"))
-
-        self._sheet.update_cells(cells)
+            self._sheet.insert_row(["", nickname, False, True, amount], index)
 
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:
