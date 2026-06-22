@@ -9,19 +9,21 @@ class UserService:
     def __init__(self, sheets: SheetsService) -> None:
         self._sheets = sheets
 
-    def get_profile(self, discord_id: str) -> Optional[User]:
-        # получения профиля пользователя по discord_id
-        pass
+    def get_profile(self, nickname: str) -> Optional[User]:
+        return self._sheets.get_user(nickname)
 
-    def set_referral_code(self, discord_id: str, code: str) -> User:
-        """
-        Установить реферальный код для пользователя
+    def set_referral(self, nickname: str, referrer: str) -> User:
+        if nickname.lower() == referrer.lower():
+            raise ValueError("Нельзя указать самого себя")
 
-        Raises:
-            ValueError: if code already taken or user already has a code.
-        """
-        pass
+        user = self._sheets.get_user(nickname)
+        if user is None:
+            self._sheets.ensure_user(nickname)
+        elif user.referred_by:
+            raise ValueError("Реферал уже указан, изменить нельзя")
 
-    def get_referral_info(self, discord_id: str) -> User:
-        # Статистика по рефералам для пользователя
-        pass
+        self._sheets.set_referred_by(nickname, referrer)
+        return self._sheets.get_user(nickname) or User(nickname=nickname)
+
+    def get_referral_info(self, nickname: str) -> Optional[User]:
+        return self._sheets.get_user(nickname)

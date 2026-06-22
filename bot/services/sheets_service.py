@@ -10,29 +10,32 @@ class SheetsService:
     def __init__(self, repo: SheetsRepository) -> None:
         self._repo = repo
 
-    def get_user(self, discord_id: str) -> Optional[User]:
-        """Fetch user from sheets and map to User model."""
-        pass
+    def get_user(self, nickname: str) -> Optional[User]:
+        data = self._repo.find_user(nickname)
+        if data is None:
+            return None
 
-    def create_user(self, discord_id: str, nickname: str) -> User:
-        """Create new user row and return User model."""
-        pass
+        return User(
+            nickname=data["nickname"],
+            coins=data["coins"],
+            xp=data["xp"],
+            rank=data["rank"],
+            referral_count=data["referral_count"],
+            referral_role=data["referral_role"],
+            booster=data["booster"],
+        )
+
+    def ensure_user(self, nickname: str) -> bool:
+        return self._repo.ensure_user(nickname)
+
+    def set_referred_by(self, nickname: str, referrer: str) -> None:
+        self._repo.set_referred_by(nickname, referrer)
+
+    def user_has_referral(self, nickname: str) -> bool:
+        return self._repo.user_has_referral(nickname)
 
     def save_transaction(
-        self,
-        discord_id: str,
-        nickname: str,
-        tx_type: str,
-        amount: float,
-        raw_log: str,
+        self, nickname: str, tx_type: str, amount: float
     ) -> Transaction:
-        """Build Transaction, append to sheets, return it."""
-        pass
-
-    def find_by_referral_code(self, code: str) -> Optional[User]:
-        """Find user by referral code."""
-        pass
-
-    def ensure_user(self, discord_id: str, nickname: str) -> User:
-        """Return existing user or create new one."""
-        pass
+        self._repo.append_transaction(nickname, tx_type, amount)
+        return Transaction(nickname=nickname, tx_type=tx_type, amount=amount)
