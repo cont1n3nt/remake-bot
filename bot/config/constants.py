@@ -1,6 +1,5 @@
 from typing import Final
 
-
 SHEET_USERS: Final[str] = "Users"
 SHEET_TRANSACTIONS: Final[str] = "Transactions"
 

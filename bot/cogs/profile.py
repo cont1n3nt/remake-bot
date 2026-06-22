@@ -13,18 +13,18 @@ class ProfileCog(commands.Cog):
 
     @app_commands.command(name="profile")
     async def profile(self, interaction: discord.Interaction) -> None:
-        """Show your profile with coins, XP, level."""
+        # profile command
         pass
 
     @app_commands.command(name="ref")
     @app_commands.describe(code="Your unique referral code")
     async def set_referral(self, interaction: discord.Interaction, code: str) -> None:
-        """Set your referral code (one time only)."""
+        # ref command
         pass
 
     @app_commands.command(name="referrals")
     async def referrals(self, interaction: discord.Interaction) -> None:
-        """Show your referral stats."""
+        # referrals command
         pass
 
 

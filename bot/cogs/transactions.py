@@ -37,7 +37,7 @@ class TransactionsCog(commands.Cog):
     @app_commands.command(name="tab")
     @app_commands.checks.has_role("Admin")
     async def tab(self, interaction: discord.Interaction) -> None:
-        """Record a trade (admin only)."""
+        # запись трейда (только для админа)
         await interaction.response.send_modal(TransactionModal(self._sheets_service))
 
     @tab.error

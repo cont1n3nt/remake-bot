@@ -1,29 +1,17 @@
-from dataclasses import dataclass, field
-
-from dotenv import load_dotenv
-import os
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-load_dotenv()
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-
-@dataclass
-class Settings:
-    discord_token: str = field(default_factory=lambda: os.getenv("DISCORD_TOKEN", ""))
-    google_sheets_creds: str = field(
-        default_factory=lambda: os.getenv("GOOGLE_SHEETS_CREDS", "creds.json")
-    )
-    google_sheets_url: str = field(
-        default_factory=lambda: os.getenv("GOOGLE_SHEETS_URL", "")
-    )
+    discord_token: str = Field(default="", validation_alias="DISCORD_TOKEN")
+    google_sheets_creds: str = Field(default="creds.json", validation_alias="GOOGLE_SHEETS_CREDS")
+    google_sheets_url: str = Field(default="", validation_alias="GOOGLE_SHEETS_URL")
+    guild_id: int = Field(default=0, validation_alias="GUILD_ID")
 
     users_sheet_name: str = "Users"
     transactions_sheet_name: str = "Transactions"
-
-    guild_id: int = field(
-        default_factory=lambda: int(os.getenv("GUILD_ID", "0"))
-    )
-
     admin_role_name: str = "Admin"
 
     @property
