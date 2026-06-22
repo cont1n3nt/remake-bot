@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Environment variables (contains Discord token)
+.env
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.iml
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Logs & Databases
+*.log
+*.sqlite
+*.db
+*.sqlite3
+
+# Testing & Coverage
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+htmlcov/
+coverage.xml
+*.cover
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.typeshed/
+
+# Jupyter / Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Project specific
+instance/
+.webassets-cache
