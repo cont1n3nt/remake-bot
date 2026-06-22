@@ -104,21 +104,14 @@ class SheetsRepository:
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:
         """Update column H for every transaction row of this user."""
-        try:
-            cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
-        except CellNotFound:
-            return
-
+        cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
         for cell in cells:
             self._sheet.update_cell(cell.row, COL_REFERRED_BY, referrer)
 
     @_retry
     def find_referrals(self, nickname: str) -> list[dict]:
         """Find all users who have this nickname in column H."""
-        try:
-            cells = self._sheet.findall(nickname, in_column=COL_REFERRED_BY)
-        except CellNotFound:
-            return []
+        cells = self._sheet.findall(nickname, in_column=COL_REFERRED_BY)
 
         result = []
         for cell in cells:
@@ -136,11 +129,7 @@ class SheetsRepository:
     @_retry
     def user_has_referral(self, nickname: str) -> bool:
         """Check if user already has a referrer set in column H."""
-        try:
-            cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
-        except CellNotFound:
-            return False
-
+        cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
         for cell in cells:
             h_value = self._sheet.cell(cell.row, COL_REFERRED_BY).value
             if h_value and h_value.strip():

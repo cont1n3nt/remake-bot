@@ -1,11 +1,9 @@
-import discord
 from discord import app_commands
 from discord.ext import commands
 
 from bot.services.user_service import UserService
 from bot.services.referral_service import ReferralService
 from bot.utils.embeds import profile_embed, referral_embed, error_embed
-from bot.repositories.sheets_repository import SheetsRepository
 
 
 class ProfileCog(commands.Cog):
