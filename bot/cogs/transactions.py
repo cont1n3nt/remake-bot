@@ -1,9 +1,13 @@
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from bot.services.sheets_service import SheetsService
 from bot.utils.embeds import transaction_confirmation_embed, error_embed
+
+logger = logging.getLogger("bot")
 
 
 class TransactionModal(discord.ui.Modal, title="Новая сделка"):
@@ -51,8 +55,16 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
             return
 
         nickname = self.nickname.value.strip()
-        self._sheets_service.ensure_user(nickname)
-        self._sheets_service.save_transaction(nickname, tx_type, amount)
+        try:
+            self._sheets_service.ensure_user(nickname)
+            self._sheets_service.save_transaction(nickname, tx_type, amount)
+        except Exception as e:
+            logger.error("tab save error: %s", e)
+            await interaction.response.send_message(
+                embed=error_embed(f"Ошибка при сохранении: {e}"),
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.send_message(
             embed=transaction_confirmation_embed(nickname, tx_type, amount),
@@ -74,10 +86,20 @@ class TransactionsCog(commands.Cog):
     async def tab_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
+        logger.error("tab error: %s", error)
+
         if isinstance(error, app_commands.MissingPermissions):
+            text = "Недостаточно прав. Требуются права администратора."
+        else:
+            text = f"Ошибка: {error}"
+
+        try:
             await interaction.response.send_message(
-                embed=error_embed("Недостаточно прав. Требуются права администратора."),
-                ephemeral=True,
+                embed=error_embed(text), ephemeral=True,
+            )
+        except discord.errors.InteractionResponded:
+            await interaction.followup.send(
+                embed=error_embed(text), ephemeral=True,
             )
 
 
