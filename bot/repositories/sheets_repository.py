@@ -82,28 +82,106 @@ class SheetsRepository:
         }
 
     def _last_row(self) -> int:
-        return len(self._sheet.col_values(COL_NICKNAME))
+        return len(self._sheet.get_all_values())
+
+    def _insert_with_formulas(
+        self, target_row: int, source_row: int, col_values: dict[int, object]
+    ) -> None:
+        """Insert a row, copy formulas from source, write values to specific columns.
+
+        Args:
+            target_row: 1-indexed row to insert at (existing rows shift down).
+            source_row: 1-indexed row to copy formulas from.
+            col_values: {0-based column_index: value} — written after copying.
+        """
+        sheet_id = self._sheet.id
+
+        requests = [
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": target_row - 1,
+                        "endIndex": target_row,
+                    },
+                    "inheritFromBefore": True,
+                }
+            },
+            {
+                "copyPaste": {
+                    "source": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": source_row - 1,
+                        "endRowIndex": source_row,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": 12,
+                    },
+                    "destination": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": target_row - 1,
+                        "endRowIndex": target_row,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": 12,
+                    },
+                    "pasteType": "PASTE_FORMULA",
+                }
+            },
+        ]
+
+        if col_values:
+            cells = []
+            for col in range(12):
+                if col in col_values:
+                    val = col_values[col]
+                    if isinstance(val, bool):
+                        cells.append({"userEnteredValue": {"boolValue": val}})
+                    elif isinstance(val, (int, float)):
+                        cells.append({"userEnteredValue": {"numberValue": val}})
+                    else:
+                        cells.append({"userEnteredValue": {"stringValue": str(val)}})
+            if cells:
+                requests.append({
+                    "updateCells": {
+                        "rows": [{"values": cells}],
+                        "fields": "userEnteredValue",
+                        "start": {
+                            "sheetId": sheet_id,
+                            "rowIndex": target_row - 1,
+                            "columnIndex": 0,
+                        },
+                    }
+                })
+
+        self._spreadsheet.batch_update({"requests": requests})
 
     @_retry
     def ensure_user(self, nickname: str) -> bool:
-        """Check if nickname exists in column B. Return True if created."""
+        """Check if nickname exists. Return True if created."""
         cell = self._sheet.find(nickname, in_column=COL_NICKNAME)
         if cell is not None:
             return False
 
-        index = self._last_row() + 1
-        self._sheet.insert_row(["", nickname], index)
+        last = self._last_row()
+        self._insert_with_formulas(last + 1, last, {1: nickname})
         return True
 
     @_retry
     def append_transaction(self, nickname: str, tx_type: str, amount: float) -> None:
-        """Append a new transaction row. tx_type: 'buy' or 'sell'."""
-        index = self._last_row() + 1
+        """Append a transaction row with formulas + checkboxes."""
+        last = self._last_row()
+        is_buy = tx_type == "buy"
 
-        if tx_type == "buy":
-            self._sheet.insert_row(["", nickname, True, False, amount], index)
-        else:
-            self._sheet.insert_row(["", nickname, False, True, amount], index)
+        self._insert_with_formulas(
+            last + 1,
+            last,
+            {
+                1: nickname,
+                2: is_buy,
+                3: not is_buy,
+                4: amount,
+            },
+        )
 
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:
