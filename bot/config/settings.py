@@ -10,8 +10,7 @@ class Settings(BaseSettings):
     google_sheets_url: str = Field(default="", validation_alias="GOOGLE_SHEETS_URL")
     guild_id: int = Field(default=0, validation_alias="GUILD_ID")
 
-    users_sheet_name: str = "Users"
-    transactions_sheet_name: str = "Transactions"
+    sheet_name: str = "Лист1"
     admin_role_name: str = "Admin"
 
     @property
