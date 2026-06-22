@@ -4,7 +4,7 @@ from typing import Optional
 
 import gspread
 from google.oauth2.service_account import Credentials
-from gspread.exceptions import CellNotFound, APIError
+from gspread.exceptions import APIError
 
 from bot.config.constants import (
     COL_NICKNAME, COL_BUY, COL_SELL, COL_AMOUNT,
@@ -65,9 +65,8 @@ class SheetsRepository:
     @_retry
     def find_user(self, nickname: str) -> Optional[dict]:
         """Search unique nickname in column J, return stats dict or None."""
-        try:
-            cell = self._sheet.find(nickname, in_column=COL_UNIQUE_NICK)
-        except CellNotFound:
+        cell = self._sheet.find(nickname, in_column=COL_UNIQUE_NICK)
+        if cell is None:
             return None
 
         vals = self._sheet.row_values(cell.row)
@@ -85,12 +84,12 @@ class SheetsRepository:
     @_retry
     def ensure_user(self, nickname: str) -> bool:
         """Check if nickname exists in column B. Return True if created."""
-        try:
-            self._sheet.find(nickname, in_column=COL_NICKNAME)
+        cell = self._sheet.find(nickname, in_column=COL_NICKNAME)
+        if cell is not None:
             return False
-        except CellNotFound:
-            self._sheet.append_row(["", nickname])
-            return True
+
+        self._sheet.append_row(["", nickname])
+        return True
 
     @_retry
     def append_transaction(self, nickname: str, tx_type: str, amount: float) -> None:
