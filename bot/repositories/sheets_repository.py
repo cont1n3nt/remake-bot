@@ -82,7 +82,12 @@ class SheetsRepository:
         }
 
     def _last_row(self) -> int:
-        return len(self._sheet.col_values(COL_NICKNAME))
+        cells = self._sheet.range(f"B1:B")
+        last = 1
+        for cell in cells:
+            if cell.value:
+                last = cell.row
+        return last
 
     @_retry
     def ensure_user(self, nickname: str) -> bool:
