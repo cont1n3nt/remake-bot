@@ -17,10 +17,6 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
         label="Ник",
         placeholder="Ник игрока",
     )
-    tx_type = discord.ui.TextInput(
-        label="Тип",
-        placeholder="buy/sell",
-    )
     amount = discord.ui.TextInput(
         label="Сумма",
         placeholder="Сумма",
@@ -31,18 +27,13 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
         required=False,
     )
 
-    def __init__(self, sheets_service: SheetsService) -> None:
+    def __init__(self, sheets_service: SheetsService, tx_type: str) -> None:
         super().__init__()
         self._sheets_service = sheets_service
+        self._tx_type = tx_type
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        tx_type = self.tx_type.value.strip().lower()
-        if tx_type not in ("buy", "sell"):
-            await interaction.response.send_message(
-                embed=error_embed("Тип должен быть buy или sell"),
-                ephemeral=True,
-            )
-            return
+        tx_type = self._tx_type
 
         try:
             amount = float(self.amount.value.replace(" ", ""))
@@ -71,7 +62,7 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
                 nickname, tx_type, amount, referrer,
             )
         except Exception as e:
-            logger.error("tab save error: %s", e)
+            logger.error("add save error by %s: %s", interaction.user, e)
             await interaction.followup.send(
                 embed=error_embed(f"Ошибка при сохранении: {e}"),
                 ephemeral=True,
@@ -80,6 +71,30 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
 
         await interaction.followup.send(
             embed=transaction_confirmation_embed(nickname, tx_type, amount, referrer),
+            ephemeral=True,
+        )
+
+
+class TransactionView(discord.ui.View):
+
+    def __init__(self, sheets_service: SheetsService) -> None:
+        super().__init__()
+        self._sheets_service = sheets_service
+
+    @discord.ui.button(label="Покупка", style=discord.ButtonStyle.green)
+    async def buy_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        await interaction.response.send_modal(
+            TransactionModal(self._sheets_service, "buy"),
+        )
+
+    @discord.ui.button(label="Продажа", style=discord.ButtonStyle.red)
+    async def sell_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        await interaction.response.send_modal(
+            TransactionModal(self._sheets_service, "sell"),
         )
 
 
@@ -89,16 +104,19 @@ class TransactionsCog(commands.Cog):
         self.bot = bot
         self._sheets_service = sheets_service
 
-    @app_commands.command(name="tab")
+    @app_commands.command(name="add")
     @app_commands.checks.has_permissions(administrator=True)
-    async def tab(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(TransactionModal(self._sheets_service))
+    async def add(self, interaction: discord.Interaction) -> None:
+        view = TransactionView(self._sheets_service)
+        await interaction.response.send_message(
+            "**Выберите тип сделки:**", view=view, ephemeral=True,
+        )
 
-    @tab.error
-    async def tab_error(
+    @add.error
+    async def add_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
-        logger.error("tab error: %s", error)
+        logger.error("add error by %s: %s", interaction.user, error)
 
         if isinstance(error, app_commands.MissingPermissions):
             text = "Недостаточно прав. Требуются права администратора."

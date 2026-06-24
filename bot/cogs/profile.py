@@ -7,7 +7,7 @@ from discord.ext import commands
 
 from bot.services.user_service import UserService
 from bot.services.referral_service import ReferralService
-from bot.utils.embeds import profile_embed, referral_embed, error_embed
+from bot.utils.embeds import profile_embed, referral_embed, referrals_embed, error_embed
 
 logger = logging.getLogger("bot")
 
@@ -27,82 +27,126 @@ class ProfileCog(commands.Cog):
     @app_commands.command(name="profile")
     @app_commands.describe(nickname="Ваш ник в таблице")
     async def profile(self, interaction: discord.Interaction, nickname: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+
         try:
             user = await asyncio.to_thread(self._user_service.get_profile, nickname)
         except Exception as e:
-            logger.error("profile error: %s", e)
-            await interaction.response.send_message(
+            logger.error("profile error by %s: %s", interaction.user, e)
+            await interaction.followup.send(
                 embed=error_embed("Ошибка при загрузке профиля"),
                 ephemeral=True,
             )
             return
 
         if user is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=error_embed("Пользователь не найден"),
                 ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(embed=profile_embed(user))
+        rank_progress = self._referral_service.get_rank_progress(user.xp)
+        rank_bonus = self._referral_service.get_rank_bonus(user.xp)
+
+        await interaction.followup.send(
+            embed=profile_embed(user, rank_progress, rank_bonus), ephemeral=True,
+        )
 
     @app_commands.command(name="refer")
+    @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(
-        your_nick="Ваш ник в таблице",
-        referrer_nick="Ник того, кто вас пригласил",
+        ник_игрока="Ник в таблице",
+        ник_пригласившего="Кто пригласил",
     )
     async def set_referral(
         self,
         interaction: discord.Interaction,
-        your_nick: str,
-        referrer_nick: str,
+        ник_игрока: str,
+        ник_пригласившего: str,
     ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
         try:
             await asyncio.to_thread(
-                self._user_service.set_referral, your_nick, referrer_nick,
+                self._user_service.set_referral, ник_игрока, ник_пригласившего,
             )
         except ValueError as e:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=error_embed(str(e)),
                 ephemeral=True,
             )
             return
         except Exception as e:
-            logger.error("refer error: %s", e)
-            await interaction.response.send_message(
+            logger.error("refer error by %s: %s", interaction.user, e)
+            await interaction.followup.send(
                 embed=error_embed("Ошибка при установке реферала"),
                 ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(
-            embed=referral_embed(referrer_nick),
+        await interaction.followup.send(
+            embed=referral_embed(ник_пригласившего), ephemeral=True,
         )
+
+    @set_referral.error
+    async def refer_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ) -> None:
+        logger.error("refer error by %s: %s", interaction.user, error)
+
+        if isinstance(error, app_commands.MissingPermissions):
+            text = "Недостаточно прав. Требуются права администратора."
+        else:
+            text = f"Ошибка: {error}"
+
+        try:
+            await interaction.response.send_message(
+                embed=error_embed(text), ephemeral=True,
+            )
+        except discord.errors.InteractionResponded:
+            await interaction.followup.send(
+                embed=error_embed(text), ephemeral=True,
+            )
 
     @app_commands.command(name="referrals")
     @app_commands.describe(nickname="Ваш ник в таблице")
     async def referrals(self, interaction: discord.Interaction, nickname: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+
         try:
             user = await asyncio.to_thread(self._user_service.get_referral_info, nickname)
         except Exception as e:
-            logger.error("referrals error: %s", e)
-            await interaction.response.send_message(
+            logger.error("referrals error by %s: %s", interaction.user, e)
+            await interaction.followup.send(
                 embed=error_embed("Ошибка при загрузке рефералов"),
                 ephemeral=True,
             )
             return
 
         if user is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=error_embed("Пользователь не найден"),
                 ephemeral=True,
             )
             return
 
-        embed = profile_embed(user)
-        embed.add_field(name="Приглашено", value=str(user.referral_count), inline=False)
+        referred_users = await asyncio.to_thread(
+            self._referral_service.get_referred_users, nickname,
+        )
+        count = len(referred_users)
+        level = self._referral_service.get_referral_level(count)
+        level_name = self._referral_service.get_level_name(level)
+        level_bonus = self._referral_service.get_level_bonus(level)
+        progress = self._referral_service.get_next_level_progress(count)
+        next_bonus = self._referral_service.get_level_bonus(level + 1)
 
-        await interaction.response.send_message(embed=embed)
+        embed = referrals_embed(
+            user, referred_users, level, level_name,
+            level_bonus, progress, next_bonus,
+        )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

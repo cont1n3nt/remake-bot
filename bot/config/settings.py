@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     google_sheets_url: str = Field(default="", validation_alias="GOOGLE_SHEETS_URL")
     guild_id: int = Field(default=0, validation_alias="GUILD_ID")
     sheet_name: str = Field(default="Лист1", validation_alias="SHEET_NAME")
-    admin_role_name: str = "GAY"
+    admin_role_name: str = "Глава Шёпота"
 
     @property
     def is_valid(self) -> bool:
