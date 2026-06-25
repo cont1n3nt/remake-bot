@@ -24,6 +24,7 @@ class SheetsService:
             referral_role=data["referral_role"],
             booster=data["booster"],
             referred_by=data.get("referred_by"),
+            turnover=data.get("turnover", 0.0),
         )
 
     def ensure_user(self, nickname: str) -> bool:

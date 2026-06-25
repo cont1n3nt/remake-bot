@@ -6,6 +6,7 @@ from discord.ext import commands
 
 from bot.config.settings import settings
 from bot.repositories.sheets_repository import SheetsRepository
+from bot.services.audit_logger import AuditLogger
 from bot.services.sheets_service import SheetsService
 from bot.services.user_service import UserService
 from bot.services.referral_service import ReferralService
@@ -34,6 +35,7 @@ def main() -> None:
     bot.sheets_service = sheets_service
     bot.user_service = user_service
     bot.referral_service = referral_service
+    bot.audit_logger = AuditLogger(bot, settings.audit_channel_id)
 
     @bot.event
     async def on_ready() -> None:

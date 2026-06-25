@@ -52,6 +52,13 @@ class ProfileCog(commands.Cog):
         await interaction.followup.send(
             embed=profile_embed(user, rank_progress, rank_bonus), ephemeral=True,
         )
+        try:
+            await self.bot.audit_logger.log(
+                interaction.user, "/profile",
+                f"никнейм=\"{nickname}\"",
+            )
+        except Exception:
+            pass
 
     @app_commands.command(name="refer")
     @app_commands.checks.has_permissions(administrator=True)
@@ -88,6 +95,13 @@ class ProfileCog(commands.Cog):
         await interaction.followup.send(
             embed=referral_embed(ник_пригласившего), ephemeral=True,
         )
+        try:
+            await self.bot.audit_logger.log(
+                interaction.user, "/refer",
+                f"ник_игрока=\"{ник_игрока}\", ник_пригласившего=\"{ник_пригласившего}\"",
+            )
+        except Exception:
+            pass
 
     @set_referral.error
     async def refer_error(
@@ -99,6 +113,13 @@ class ProfileCog(commands.Cog):
             text = "Недостаточно прав. Требуются права администратора."
         else:
             text = f"Ошибка: {error}"
+
+        try:
+            await self.bot.audit_logger.log(
+                interaction.user, "/refer", str(error), success=False,
+            )
+        except Exception:
+            pass
 
         try:
             await interaction.response.send_message(
@@ -147,6 +168,13 @@ class ProfileCog(commands.Cog):
         )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        try:
+            await self.bot.audit_logger.log(
+                interaction.user, "/referrals",
+                f"никнейм=\"{nickname}\", рефералов={count}",
+            )
+        except Exception:
+            pass
 
 
 async def setup(bot: commands.Bot) -> None:

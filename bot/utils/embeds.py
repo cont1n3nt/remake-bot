@@ -3,8 +3,13 @@ from discord import Embed, Colour
 from bot.models.user import User
 
 
-def _fmt(n: float) -> str:
-    return str(int(n)) if n == int(n) else str(n)
+def _fmt(n: float | int) -> str:
+    s = str(int(n)) if isinstance(n, float) and n == int(n) else str(n)
+    parts = s.split(".")
+    parts[0] = " ".join(reversed(
+        [parts[0][max(0, i - 3):i] for i in range(len(parts[0]), 0, -3)][::-1]
+    ))
+    return ".".join(parts)
 
 
 def _progress_bar(current: int, total: int, size: int = 10) -> str:
@@ -23,16 +28,17 @@ def profile_embed(
     )
     embed.add_field(name="\U0001fa99 Coins", value=_fmt(user.coins))
     embed.add_field(name="\u26a1 XP", value=_fmt(user.xp))
+    embed.add_field(name="Общий оборот", value=_fmt(user.turnover))
     embed.add_field(name="Ранг", value=user.rank if user.rank else "—")
     embed.add_field(name="Реферальная роль", value=user.referral_role if user.referral_role else "—")
-    embed.add_field(name="Приглашено", value=str(user.referral_count))
+    embed.add_field(name="Приглашено", value=_fmt(user.referral_count))
 
     if rank_progress:
         current, needed, next_name = rank_progress
         bar = _progress_bar(current, needed)
         embed.add_field(
             name=f"До «{next_name}»",
-            value=f"{bar} {current}/{needed}",
+            value=f"{bar} {_fmt(current)}/{_fmt(needed)}",
             inline=False,
         )
 
@@ -96,9 +102,9 @@ def referrals_embed(
     if referred_users:
         text = "\n".join(f"• {u}" for u in referred_users[:25])
         if len(referred_users) > 25:
-            text += f"\n… и ещё {len(referred_users) - 25}"
+            text += f"\n… и ещё {_fmt(len(referred_users) - 25)}"
         embed.add_field(
-            name=f"Приглашено ({len(referred_users)})",
+            name=f"Приглашено ({_fmt(len(referred_users))})",
             value=text,
             inline=False,
         )
@@ -108,7 +114,7 @@ def referrals_embed(
     current, needed, next_name = next_progress
     if next_name:
         bar = _progress_bar(current, needed)
-        prog_text = f"{bar} {current}/{needed}"
+        prog_text = f"{bar} {_fmt(current)}/{_fmt(needed)}"
         if next_bonus:
             prog_text += f"\n{next_bonus}"
         embed.add_field(

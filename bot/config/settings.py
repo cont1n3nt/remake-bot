@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     guild_id: int = Field(default=0, validation_alias="GUILD_ID")
     sheet_name: str = Field(default="Лист1", validation_alias="SHEET_NAME")
     admin_role_name: str = "Глава Шёпота"
+    audit_channel_id: int = Field(default=0, validation_alias="AUDIT_CHANNEL_ID")
 
     @property
     def is_valid(self) -> bool:

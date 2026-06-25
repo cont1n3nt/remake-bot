@@ -11,3 +11,4 @@ class User:
     referral_role: str = ""
     referred_by: str | None = None
     booster: bool = False
+    turnover: float = 0.0

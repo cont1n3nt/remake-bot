@@ -73,6 +73,15 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
             embed=transaction_confirmation_embed(nickname, tx_type, amount, referrer),
             ephemeral=True,
         )
+        try:
+            audit = interaction.client.audit_logger
+            ref_txt = f', реферер="{referrer}"' if referrer else ""
+            await audit.log(
+                interaction.user, "/add",
+                f'никнейм="{nickname}", тип="{tx_type}", сумма={amount}{ref_txt}',
+            )
+        except Exception:
+            pass
 
 
 class TransactionView(discord.ui.View):
@@ -117,6 +126,13 @@ class TransactionsCog(commands.Cog):
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
         logger.error("add error by %s: %s", interaction.user, error)
+
+        try:
+            await interaction.client.audit_logger.log(
+                interaction.user, "/add", str(error), success=False,
+            )
+        except Exception:
+            pass
 
         if isinstance(error, app_commands.MissingPermissions):
             text = "Недостаточно прав. Требуются права администратора."
