@@ -55,7 +55,7 @@ class ProfileCog(commands.Cog):
         try:
             await self.bot.audit_logger.log(
                 interaction.user, "/profile",
-                f"никнейм=\"{nickname}\"",
+                {"Никнейм": nickname},
             )
         except Exception:
             pass
@@ -98,7 +98,7 @@ class ProfileCog(commands.Cog):
         try:
             await self.bot.audit_logger.log(
                 interaction.user, "/refer",
-                f"ник_игрока=\"{ник_игрока}\", ник_пригласившего=\"{ник_пригласившего}\"",
+                {"Ник игрока": ник_игрока, "Ник пригласившего": ник_пригласившего},
             )
         except Exception:
             pass
@@ -116,7 +116,7 @@ class ProfileCog(commands.Cog):
 
         try:
             await self.bot.audit_logger.log(
-                interaction.user, "/refer", str(error), success=False,
+                interaction.user, "/refer", {"Ошибка": str(error)}, success=False,
             )
         except Exception:
             pass
@@ -171,7 +171,7 @@ class ProfileCog(commands.Cog):
         try:
             await self.bot.audit_logger.log(
                 interaction.user, "/referrals",
-                f"никнейм=\"{nickname}\", рефералов={count}",
+                {"Никнейм": nickname, "Рефералов": count},
             )
         except Exception:
             pass

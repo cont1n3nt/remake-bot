@@ -1,10 +1,17 @@
 import logging
-from datetime import datetime
 
 import discord
 from discord import Embed, Colour
 
 logger = logging.getLogger("bot")
+
+
+COMMAND_LABELS = {
+    "/add": "📋 Добавление сделки",
+    "/profile": "👤 Профиль",
+    "/refer": "🔗 Назначение реферала",
+    "/referrals": "👥 Рефералы",
+}
 
 
 class AuditLogger:
@@ -17,7 +24,7 @@ class AuditLogger:
         self,
         user: discord.User | discord.Member,
         command: str,
-        details: str = "",
+        details: dict | str | None = None,
         success: bool = True,
     ) -> None:
         channel = self._bot.get_channel(self._channel_id)
@@ -25,18 +32,32 @@ class AuditLogger:
             return
 
         try:
+            title = COMMAND_LABELS.get(command, f"📋 {command}")
             embed = Embed(
-                title=f"📋 {command}",
+                title=title,
                 colour=Colour.green() if success else Colour.red(),
-                timestamp=datetime.now(),
             )
-            embed.set_author(
-                name=f"{user} ({user.id})",
-                icon_url=user.display_avatar.url,
-            )
-            embed.add_field(name="User", value=user.mention, inline=False)
+            embed.add_field(name="\U0001f464 Пользователь", value=f"{user.mention} (`{user.id}`)")
+
             if details:
-                embed.add_field(name="Details", value=details, inline=False)
+                if isinstance(details, dict):
+                    lines = []
+                    for k, v in details.items():
+                        if v is not None and v != "":
+                            lines.append(f"└ {k}: {v}")
+                    embed.add_field(
+                        name="\U0001f4dd Детали лога",
+                        value="\n".join(lines),
+                        inline=False,
+                    )
+                else:
+                    embed.add_field(
+                        name="\U0001f4dd Детали лога",
+                        value=str(details),
+                        inline=False,
+                    )
+
+            embed.set_footer(text=f"Успешно" if success else "Ошибка")
 
             await channel.send(embed=embed)
         except Exception as e:

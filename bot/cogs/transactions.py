@@ -69,17 +69,35 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
             )
             return
 
-        await interaction.followup.send(
+        confirm_msg = await interaction.followup.send(
             embed=transaction_confirmation_embed(nickname, tx_type, amount, referrer),
             ephemeral=True,
         )
+
+        await interaction.channel.send(
+            "> 🤝 Сделка успешно завершена!\n"
+            "> Спасибо, что выбираете «Клондайк Шёпота». Пожалуйста, уделите пару секунд "
+            "и оставьте свой честный отзыв в канале <#1490342809075716237>.\n"
+            "> \n"
+            "> Ваш отзыв — это лучшая поддержка для развития нашего проекта и будущего бота! 💚"
+        )
+
+        try:
+            await interaction.delete_original_response()
+        except Exception:
+            pass
+
         try:
             audit = interaction.client.audit_logger
-            ref_txt = f', реферер="{referrer}"' if referrer else ""
-            await audit.log(
-                interaction.user, "/add",
-                f'никнейм="{nickname}", тип="{tx_type}", сумма={amount}{ref_txt}',
-            )
+            tx_label = "Покупка" if tx_type == "buy" else "Продажа"
+            details = {
+                "Никнейм": nickname,
+                "Тип сделки": tx_label,
+                "Сумма": str(int(amount)) if amount == int(amount) else str(amount),
+            }
+            if referrer:
+                details["Реферер"] = referrer
+            await audit.log(interaction.user, "/add", details)
         except Exception:
             pass
 
@@ -129,7 +147,7 @@ class TransactionsCog(commands.Cog):
 
         try:
             await interaction.client.audit_logger.log(
-                interaction.user, "/add", str(error), success=False,
+                interaction.user, "/add", {"Ошибка": str(error)}, success=False,
             )
         except Exception:
             pass

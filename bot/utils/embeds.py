@@ -6,9 +6,12 @@ from bot.models.user import User
 def _fmt(n: float | int) -> str:
     s = str(int(n)) if isinstance(n, float) and n == int(n) else str(n)
     parts = s.split(".")
-    parts[0] = " ".join(reversed(
-        [parts[0][max(0, i - 3):i] for i in range(len(parts[0]), 0, -3)][::-1]
-    ))
+    int_part = parts[0]
+    groups = []
+    while int_part:
+        groups.append(int_part[-3:])
+        int_part = int_part[:-3]
+    parts[0] = " ".join(reversed(groups))
     return ".".join(parts)
 
 
@@ -114,14 +117,17 @@ def referrals_embed(
     current, needed, next_name = next_progress
     if next_name:
         bar = _progress_bar(current, needed)
-        prog_text = f"{bar} {_fmt(current)}/{_fmt(needed)}"
-        if next_bonus:
-            prog_text += f"\n{next_bonus}"
         embed.add_field(
             name=f"До «{next_name}»",
-            value=prog_text,
+            value=f"{bar} {_fmt(current)}/{_fmt(needed)}",
             inline=False,
         )
+        if next_bonus:
+            embed.add_field(
+                name="\U0001f381 Награда следующей роли",
+                value=next_bonus,
+                inline=False,
+            )
 
     return embed
 

@@ -7,3 +7,4 @@ build/
 *.json
 .venv/
 venv/
+selfbot/
