@@ -89,7 +89,7 @@ class SheetsRepository:
             "referral_role": vals[COL_REFERRAL_ROLE - 1] if len(vals) >= COL_REFERRAL_ROLE else "",
             "booster": len(vals) >= COL_BOOSTER and vals[COL_BOOSTER - 1] == "TRUE",
             "referred_by": referred_by,
-            "turnover": self._parse_float(vals[COL_TOTAL_TURNOVER - 1]),
+            "turnover": self._parse_float(vals[COL_TOTAL_TURNOVER - 1]) if len(vals) >= COL_TOTAL_TURNOVER else 0.0,
         }
 
     def _last_row(self) -> int:

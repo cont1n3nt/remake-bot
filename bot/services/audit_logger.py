@@ -7,10 +7,10 @@ logger = logging.getLogger("bot")
 
 
 COMMAND_LABELS = {
-    "/add": "📋 Добавление сделки",
-    "/profile": "👤 Профиль",
-    "/refer": "🔗 Назначение реферала",
-    "/referrals": "👥 Рефералы",
+    "/add": "[ /add ] 📋 Добавление сделки",
+    "/profile": "[ /profile ] 👤 Профиль",
+    "/refer": "[ /refer ] 🔗 Назначение реферала",
+    "/referrals": "[ /referrals ] 👥 Рефералы",
 }
 
 
