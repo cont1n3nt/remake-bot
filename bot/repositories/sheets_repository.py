@@ -100,6 +100,59 @@ class SheetsRepository:
                 last = cell.row
         return last
 
+    def _copy_formulas_to_new_row(self, index: int) -> None:
+        """Copy formulas from row above (index-1) to the new row (index)."""
+        if index <= 2:
+            return
+        sheet_id = self._sheet.id
+        src_start = index - 2
+        src_end = index - 1
+        dst_start = index - 1
+        dst_end = index
+
+        self._spreadsheet.batch_update({
+            "requests": [
+                {
+                    "copyPaste": {
+                        "source": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": src_start,
+                            "endRowIndex": src_end,
+                            "startColumnIndex": 5,   # F (0-based)
+                            "endColumnIndex": 7,     # G (exclusive)
+                        },
+                        "destination": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": dst_start,
+                            "endRowIndex": dst_end,
+                            "startColumnIndex": 5,
+                            "endColumnIndex": 7,
+                        },
+                        "pasteType": "PASTE_FORMULA",
+                    }
+                },
+                {
+                    "copyPaste": {
+                        "source": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": src_start,
+                            "endRowIndex": src_end,
+                            "startColumnIndex": 10,  # K (0-based)
+                            "endColumnIndex": 21,    # U (exclusive)
+                        },
+                        "destination": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": dst_start,
+                            "endRowIndex": dst_end,
+                            "startColumnIndex": 10,
+                            "endColumnIndex": 21,
+                        },
+                        "pasteType": "PASTE_FORMULA",
+                    }
+                },
+            ]
+        })
+
     @_retry
     def ensure_user(self, nickname: str) -> bool:
         """Check if nickname exists in column B. Return True if created."""
@@ -109,6 +162,7 @@ class SheetsRepository:
 
         index = self._last_row() + 1
         self._sheet.insert_row(["", nickname], index)
+        self._copy_formulas_to_new_row(index)
         return True
 
     @_retry
@@ -126,55 +180,7 @@ class SheetsRepository:
             row[2], row[3] = False, True
             self._sheet.insert_row(row, index)
 
-        if index > 2:
-            sheet_id = self._sheet.id
-            src_start = index - 2
-            src_end = index - 1
-            dst_start = index - 1
-            dst_end = index
-
-            self._spreadsheet.batch_update({
-                "requests": [
-                    {
-                        "copyPaste": {
-                            "source": {
-                                "sheetId": sheet_id,
-                                "startRowIndex": src_start,
-                                "endRowIndex": src_end,
-                                "startColumnIndex": 5,   # F (0-based)
-                                "endColumnIndex": 7,     # G (exclusive)
-                            },
-                            "destination": {
-                                "sheetId": sheet_id,
-                                "startRowIndex": dst_start,
-                                "endRowIndex": dst_end,
-                                "startColumnIndex": 5,
-                                "endColumnIndex": 7,
-                            },
-                            "pasteType": "PASTE_FORMULA",
-                        }
-                    },
-                    {
-                        "copyPaste": {
-                            "source": {
-                                "sheetId": sheet_id,
-                                "startRowIndex": src_start,
-                                "endRowIndex": src_end,
-                                "startColumnIndex": 10,  # K (0-based)
-                                "endColumnIndex": 21,    # U (exclusive)
-                            },
-                            "destination": {
-                                "sheetId": sheet_id,
-                                "startRowIndex": dst_start,
-                                "endRowIndex": dst_end,
-                                "startColumnIndex": 10,
-                                "endColumnIndex": 21,
-                            },
-                            "pasteType": "PASTE_FORMULA",
-                        }
-                    },
-                ]
-            })
+        self._copy_formulas_to_new_row(index)
 
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:
