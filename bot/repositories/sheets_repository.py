@@ -65,27 +65,42 @@ class SheetsRepository:
 
     @_retry
     def find_user(self, nickname: str) -> Optional[dict]:
-        """Search unique nickname in column J, return stats dict or None."""
+        """Return user stats by nickname. Confirms existence via column J,
+        then reads formula values from the first B-row with actual data."""
+        # Confirm user exists via UNIQUE column J
         cell = self._sheet.find(nickname, in_column=COL_UNIQUE_NICK)
         if cell is None:
             return None
 
-        vals = self._sheet.row_values(cell.row)
+        # Find all B-rows and pick the first one with formula values
+        b_cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
+        vals = None
+        first_b_row = None
+        for b_cell in b_cells:
+            if first_b_row is None:
+                first_b_row = b_cell.row
+            row_vals = self._sheet.row_values(b_cell.row)
+            if len(row_vals) >= COL_TOTAL_TURNOVER and row_vals[COL_TOTAL_TURNOVER - 1].strip():
+                vals = row_vals
+                break
 
-        # Read referred_by from first raw data row (column H on the B-row)
+        if vals is None:
+            # No B-row with formula data — fallback to UNIQUE row
+            vals = self._sheet.row_values(cell.row)
+
+        # Read referred_by from first raw data row
         referred_by = None
-        b_cell = self._sheet.find(nickname, in_column=COL_NICKNAME)
-        if b_cell is not None:
-            h_val = self._sheet.cell(b_cell.row, COL_REFERRED_BY).value
+        if first_b_row is not None:
+            h_val = self._sheet.cell(first_b_row, COL_REFERRED_BY).value
             if h_val and h_val.strip():
                 referred_by = h_val.strip()
 
         return {
             "nickname": vals[COL_UNIQUE_NICK - 1],
-            "coins": self._parse_float(vals[COL_TOTAL_COINS - 1]),
-            "xp": self._parse_float(vals[COL_TOTAL_XP - 1]),
+            "coins": self._parse_float(vals[COL_TOTAL_COINS - 1]) if len(vals) >= COL_TOTAL_COINS else 0.0,
+            "xp": self._parse_float(vals[COL_TOTAL_XP - 1]) if len(vals) >= COL_TOTAL_XP else 0.0,
             "rank": vals[COL_RANK - 1] if len(vals) >= COL_RANK else "",
-            "referral_count": self._parse_int(vals[COL_REFERRAL_COUNT - 1]),
+            "referral_count": self._parse_int(vals[COL_REFERRAL_COUNT - 1]) if len(vals) >= COL_REFERRAL_COUNT else 0,
             "referral_role": vals[COL_REFERRAL_ROLE - 1] if len(vals) >= COL_REFERRAL_ROLE else "",
             "booster": len(vals) >= COL_BOOSTER and vals[COL_BOOSTER - 1] == "TRUE",
             "referred_by": referred_by,
