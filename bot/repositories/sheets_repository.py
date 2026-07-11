@@ -65,33 +65,30 @@ class SheetsRepository:
 
     @_retry
     def find_user(self, nickname: str) -> Optional[dict]:
-        """Return user stats by nickname. Confirms existence via column J,
-        then reads formula values from the first B-row with actual data."""
-        # Confirm user exists via UNIQUE column J
+        """Return user stats by nickname. Finds user in column J (unique),
+        then reads formula values from ticket rows (column A) or falls back to J-row."""
         cell = self._sheet.find(nickname, in_column=COL_UNIQUE_NICK)
         if cell is None:
             return None
 
-        # Find all B-rows and pick the first one with formula values
-        b_cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
+        ticket_cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
         vals = None
-        first_b_row = None
-        for b_cell in b_cells:
-            if first_b_row is None:
-                first_b_row = b_cell.row
-            row_vals = self._sheet.row_values(b_cell.row)
+        first_ticket_row = None
+        for tc in ticket_cells:
+            if first_ticket_row is None:
+                first_ticket_row = tc.row
+            row_vals = self._sheet.row_values(tc.row)
             if len(row_vals) >= COL_TOTAL_TURNOVER and row_vals[COL_TOTAL_TURNOVER - 1].strip():
                 vals = row_vals
                 break
 
         if vals is None:
-            # No B-row with formula data — fallback to UNIQUE row
             vals = self._sheet.row_values(cell.row)
 
-        # Read referred_by from first raw data row
+        # Read referred_by from first ticket row
         referred_by = None
-        if first_b_row is not None:
-            h_val = self._sheet.cell(first_b_row, COL_REFERRED_BY).value
+        if first_ticket_row is not None:
+            h_val = self._sheet.cell(first_ticket_row, COL_REFERRED_BY).value
             if h_val and h_val.strip():
                 referred_by = h_val.strip()
 
@@ -112,7 +109,7 @@ class SheetsRepository:
         }
 
     def _last_row(self) -> int:
-        cells = self._sheet.range(f"B1:B")
+        cells = self._sheet.range(f"A1:A")
         last = 1
         for cell in cells:
             if cell.value:
@@ -155,13 +152,13 @@ class SheetsRepository:
 
     @_retry
     def ensure_user(self, nickname: str) -> bool:
-        """Check if nickname exists in column B. Return True if created."""
+        """Check if nickname exists in column A (ticket section). Return True if created."""
         cell = self._sheet.find(nickname, in_column=COL_NICKNAME)
         if cell is not None:
             return False
 
         index = self._last_row() + 1
-        self._sheet.insert_row(["", nickname], index)
+        self._sheet.insert_row([nickname], index)
         self._copy_formulas_to_new_row(index)
         return True
 
@@ -172,26 +169,26 @@ class SheetsRepository:
     ) -> None:
         """Append a transaction row, copying formulas from the row above."""
         index = self._last_row() + 1
-        row = ["", nickname, True, False, amount, "", "", referrer or ""]
+        row = [nickname, True, False, amount, "", "", referrer or ""]
 
         if tx_type == "buy":
             self._sheet.insert_row(row, index)
         else:
-            row[2], row[3] = False, True
+            row[1], row[2] = False, True
             self._sheet.insert_row(row, index)
 
         self._copy_formulas_to_new_row(index)
 
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:
-        """Update column H for every transaction row of this user."""
+        """Update column G (Пришел от) for every transaction row of this user."""
         cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
         for cell in cells:
             self._sheet.update_cell(cell.row, COL_REFERRED_BY, referrer)
 
     @_retry
     def find_referrals(self, nickname: str) -> list[dict]:
-        """Find all users who have this nickname in column H."""
+        """Find all users who have this nickname in column G (Пришел от)."""
         cells = self._sheet.findall(nickname, in_column=COL_REFERRED_BY)
 
         result = []
@@ -204,7 +201,7 @@ class SheetsRepository:
 
     @_retry
     def get_user_nicknames(self) -> list[str]:
-        """Return all unique nicknames from column B (raw data)."""
+        """Return all unique nicknames from column A (ticket rows)."""
         return self._sheet.col_values(COL_NICKNAME)[DATA_START_ROW - 1:]
 
     @_retry
