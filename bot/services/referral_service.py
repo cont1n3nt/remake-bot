@@ -94,13 +94,11 @@ class ReferralService:
 
     def get_rank_progress(self, xp: float) -> tuple | None:
         idx = self.get_rank_index(xp)
-        if idx == -1:
-            return (int(xp), RANK_THRESHOLDS[0], RANK_NAMES[0])
         if idx == len(RANK_THRESHOLDS) - 1:
             return None
-        prev = RANK_THRESHOLDS[idx]
         nxt = RANK_THRESHOLDS[idx + 1]
-        return (int(xp) - prev, nxt - prev, RANK_NAMES[idx + 1])
+        next_name = RANK_NAMES[idx + 1]
+        return (int(xp), nxt, next_name)
 
     def get_rank_bonus(self, xp: float) -> str:
         idx = self.get_rank_index(xp)

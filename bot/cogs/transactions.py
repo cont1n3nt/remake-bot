@@ -27,16 +27,19 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
         required=False,
     )
 
-    def __init__(self, sheets_service: SheetsService, tx_type: str) -> None:
+    def __init__(self, sheets_service: SheetsService, tx_type: str, original_msg: discord.Message | None = None) -> None:
         super().__init__()
         self._sheets_service = sheets_service
         self._tx_type = tx_type
+        self._original_msg = original_msg
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         tx_type = self._tx_type
 
         try:
-            amount = float(self.amount.value.replace(" ", ""))
+            cleaned = self.amount.value
+            cleaned = cleaned.replace(" ", "").replace("₽", "").replace("руб", "").replace(",", ".")
+            amount = float(cleaned)
         except ValueError:
             await interaction.response.send_message(
                 embed=error_embed("Некорректная сумма"),
@@ -82,10 +85,12 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
             "> Ваш отзыв — это лучшая поддержка для развития нашего проекта и будущего бота! 💚"
         )
 
-        try:
-            await interaction.delete_original_response()
-        except Exception:
-            pass
+        # Delete original "Выберите тип сделки:" message
+        if self._original_msg:
+            try:
+                await self._original_msg.delete()
+            except Exception:
+                pass
 
         try:
             audit = interaction.client.audit_logger
@@ -104,16 +109,17 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
 
 class TransactionView(discord.ui.View):
 
-    def __init__(self, sheets_service: SheetsService) -> None:
+    def __init__(self, sheets_service: SheetsService, original_msg: discord.Message | None = None) -> None:
         super().__init__()
         self._sheets_service = sheets_service
+        self._original_msg = original_msg
 
     @discord.ui.button(label="Покупка", style=discord.ButtonStyle.green)
     async def buy_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
         await interaction.response.send_modal(
-            TransactionModal(self._sheets_service, "buy"),
+            TransactionModal(self._sheets_service, "buy", self._original_msg),
         )
 
     @discord.ui.button(label="Продажа", style=discord.ButtonStyle.red)
@@ -121,7 +127,7 @@ class TransactionView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
         await interaction.response.send_modal(
-            TransactionModal(self._sheets_service, "sell"),
+            TransactionModal(self._sheets_service, "sell", self._original_msg),
         )
 
 
@@ -138,6 +144,7 @@ class TransactionsCog(commands.Cog):
         await interaction.response.send_message(
             "**Выберите тип сделки:**", view=view, ephemeral=True,
         )
+        view._original_msg = await interaction.original_response()
 
     @add.error
     async def add_error(

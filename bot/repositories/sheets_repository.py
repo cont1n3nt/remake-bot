@@ -95,6 +95,10 @@ class SheetsRepository:
             if h_val and h_val.strip():
                 referred_by = h_val.strip()
 
+        # Read turnover directly from column O at the UNIQUE J-row
+        turnover_raw = self._sheet.cell(cell.row, COL_TOTAL_TURNOVER).value
+        turnover = self._parse_float(turnover_raw)
+
         return {
             "nickname": vals[COL_UNIQUE_NICK - 1],
             "coins": self._parse_float(vals[COL_TOTAL_COINS - 1]) if len(vals) >= COL_TOTAL_COINS else 0.0,
@@ -104,7 +108,7 @@ class SheetsRepository:
             "referral_role": vals[COL_REFERRAL_ROLE - 1] if len(vals) >= COL_REFERRAL_ROLE else "",
             "booster": len(vals) >= COL_BOOSTER and vals[COL_BOOSTER - 1] == "TRUE",
             "referred_by": referred_by,
-            "turnover": self._parse_float(vals[COL_TOTAL_TURNOVER - 1]) if len(vals) >= COL_TOTAL_TURNOVER else 0.0,
+            "turnover": turnover,
         }
 
     def _last_row(self) -> int:
@@ -127,25 +131,6 @@ class SheetsRepository:
 
         self._spreadsheet.batch_update({
             "requests": [
-                {
-                    "copyPaste": {
-                        "source": {
-                            "sheetId": sheet_id,
-                            "startRowIndex": src_start,
-                            "endRowIndex": src_end,
-                            "startColumnIndex": 5,   # F (0-based)
-                            "endColumnIndex": 7,     # G (exclusive)
-                        },
-                        "destination": {
-                            "sheetId": sheet_id,
-                            "startRowIndex": dst_start,
-                            "endRowIndex": dst_end,
-                            "startColumnIndex": 5,
-                            "endColumnIndex": 7,
-                        },
-                        "pasteType": "PASTE_FORMULA",
-                    }
-                },
                 {
                     "copyPaste": {
                         "source": {

@@ -38,10 +38,9 @@ def profile_embed(
 
     if rank_progress:
         current, needed, next_name = rank_progress
-        bar = _progress_bar(current, needed)
         embed.add_field(
-            name=f"До «{next_name}»",
-            value=f"{bar} {_fmt(current)}/{_fmt(needed)}",
+            name=f"До ранга {next_name}",
+            value=f"{_fmt(current)} / {_fmt(needed)} XP",
             inline=False,
         )
 
