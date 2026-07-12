@@ -44,20 +44,30 @@ class SheetsRepository:
         self._sheet = self._spreadsheet.worksheet(sheet_name)
 
     @staticmethod
-    def _parse_float(value: str) -> float:
-        if not value or value.strip() == "":
+    def _parse_float(value) -> float:
+        if value is None:
             return 0.0
-        cleaned = value.replace(" ", "").replace(",", ".")
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        if not s:
+            return 0.0
+        cleaned = s.replace(" ", "").replace(",", ".")
         try:
             return float(cleaned)
         except ValueError:
             return 0.0
 
     @staticmethod
-    def _parse_int(value: str) -> int:
-        if not value or value.strip() == "":
+    def _parse_int(value) -> int:
+        if value is None:
             return 0
-        cleaned = value.replace(" ", "").replace(",", ".")
+        if isinstance(value, (int, float)):
+            return int(value)
+        s = str(value).strip()
+        if not s:
+            return 0
+        cleaned = s.replace(" ", "").replace(",", ".")
         try:
             return int(float(cleaned))
         except ValueError:

@@ -46,7 +46,7 @@ def profile_embed(
         )
 
     if rank_bonus:
-        embed.add_field(name="Бонус ранга", value=rank_bonus, inline=False)
+        embed.add_field(name="Бонус текущего ранга", value=rank_bonus, inline=False)
 
     embed.add_field(name="\U0001f680 Бустер сервера", value="✅" if user.booster else "❌")
 
