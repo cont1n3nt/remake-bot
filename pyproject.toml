@@ -1,0 +1,16 @@
+[project]
+name = "discord-trade-bot"
+version = "0.1.0"
+description = "Discord bot for tracking trades via Google Sheets"
+requires-python = ">=3.12"
+dependencies = [
+    "discord.py>=2.4,<3.0",
+    "gspread>=6.0,<7.0",
+    "pydantic>=2.0,<3.0",
+    "pydantic-settings>=2.0,<3.0",
+    "google-auth>=2.0,<3.0",
+    "python-dotenv>=1.0,<2.0",
+]
+
+[project.scripts]
+bot = "bot.__main__:main"
