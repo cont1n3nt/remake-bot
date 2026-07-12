@@ -65,39 +65,30 @@ class SheetsRepository:
 
     @_retry
     def find_user(self, nickname: str) -> Optional[dict]:
-        """Return user stats by nickname. Finds user in column J (unique),
-        then reads formula values from ticket rows (column B) or falls back to J-row."""
+        """Return user stats by nickname from the user database (J-S columns).
+        Finds the user in column J (Уникальный ник) and reads data
+        from J-S columns of that same row."""
         cell = self._sheet.find(nickname, in_column=COL_UNIQUE_NICK)
         if cell is None:
             return None
 
-        ticket_cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
-        vals = None
-        first_ticket_row = None
-        for tc in ticket_cells:
-            if first_ticket_row is None:
-                first_ticket_row = tc.row
-            row_vals = self._sheet.row_values(tc.row)
-            if len(row_vals) >= COL_TOTAL_TURNOVER and row_vals[COL_TOTAL_TURNOVER - 1].strip():
-                vals = row_vals
-                break
+        # Read all data from the J-row (user database section)
+        vals = self._sheet.row_values(cell.row)
 
-        if vals is None:
-            vals = self._sheet.row_values(cell.row)
-
-        # Read referred_by from first ticket row
+        # Read referred_by from ticket rows (column H)
         referred_by = None
-        if first_ticket_row is not None:
-            h_val = self._sheet.cell(first_ticket_row, COL_REFERRED_BY).value
+        ticket_cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
+        if ticket_cells:
+            h_val = self._sheet.cell(ticket_cells[0].row, COL_REFERRED_BY).value
             if h_val and h_val.strip():
                 referred_by = h_val.strip()
 
-        # Read turnover directly from column O at the UNIQUE J-row
+        # Read turnover from column O of the J-row
         turnover_raw = self._sheet.cell(cell.row, COL_TOTAL_TURNOVER).value
         turnover = self._parse_float(turnover_raw)
 
         return {
-            "nickname": vals[COL_UNIQUE_NICK - 1],
+            "nickname": vals[COL_UNIQUE_NICK - 1] if len(vals) >= COL_UNIQUE_NICK else nickname,
             "coins": self._parse_float(vals[COL_TOTAL_COINS - 1]) if len(vals) >= COL_TOTAL_COINS else 0.0,
             "xp": self._parse_float(vals[COL_TOTAL_XP - 1]) if len(vals) >= COL_TOTAL_XP else 0.0,
             "rank": vals[COL_RANK - 1] if len(vals) >= COL_RANK else "",
@@ -201,8 +192,8 @@ class SheetsRepository:
 
     @_retry
     def get_user_nicknames(self) -> list[str]:
-        """Return all unique nicknames from column B (ticket rows)."""
-        return self._sheet.col_values(COL_NICKNAME)[DATA_START_ROW - 1:]
+        """Return all unique nicknames from column J (user database)."""
+        return self._sheet.col_values(COL_UNIQUE_NICK)[DATA_START_ROW - 1:]
 
     @_retry
     def user_has_referral(self, nickname: str) -> bool:

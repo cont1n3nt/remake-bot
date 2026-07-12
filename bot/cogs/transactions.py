@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 import discord
 from discord import app_commands
@@ -38,7 +39,9 @@ class TransactionModal(discord.ui.Modal, title="Новая сделка"):
 
         try:
             cleaned = self.amount.value
-            cleaned = cleaned.replace(" ", "").replace("₽", "").replace("руб", "").replace(",", ".")
+            # Удалить ВСЕ пробельные символы (обычные, non-breaking и др.)
+            cleaned = re.sub(r'\s+', '', cleaned)
+            cleaned = cleaned.replace("₽", "").replace("руб", "").replace(",", ".")
             amount = float(cleaned)
         except ValueError:
             await interaction.response.send_message(
