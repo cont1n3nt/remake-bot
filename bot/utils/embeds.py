@@ -20,6 +20,17 @@ def _progress_bar(current: int, total: int, size: int = 10) -> str:
     return "🟦" * filled + "⬜" * (size - filled)
 
 
+def _has(val) -> bool:
+    """Return True if value is non-empty (not None, 0, '', '—', 0.0)."""
+    if val is None:
+        return False
+    if isinstance(val, (int, float)):
+        return val != 0
+    if isinstance(val, str):
+        return val.strip() not in ("", "—", "0")
+    return bool(val)
+
+
 def profile_embed(
     user: User,
     rank_progress: tuple[int, int, str] | None = None,
@@ -31,10 +42,21 @@ def profile_embed(
     )
     embed.add_field(name="\U0001fa99 Coins", value=_fmt(user.coins))
     embed.add_field(name="\u26a1 XP", value=_fmt(user.xp))
-    embed.add_field(name="Общий оборот", value=_fmt(user.turnover))
-    embed.add_field(name="Ранг", value=user.rank if user.rank else "—")
-    embed.add_field(name="Реферальная роль", value=user.referral_role if user.referral_role else "—")
-    embed.add_field(name="Приглашено", value=_fmt(user.referral_count))
+
+    if _has(user.turnover):
+        embed.add_field(name="Общий оборот", value=_fmt(user.turnover))
+
+    if _has(user.rank):
+        embed.add_field(name="Ранг", value=user.rank)
+
+    if _has(user.referral_role):
+        embed.add_field(name="Реферальная роль", value=user.referral_role)
+
+    if _has(user.referral_count):
+        embed.add_field(name="Приглашено", value=_fmt(user.referral_count))
+
+    if rank_bonus:
+        embed.add_field(name="Бонус текущего ранга", value=rank_bonus, inline=False)
 
     if rank_progress:
         current, needed, next_name = rank_progress
@@ -45,10 +67,8 @@ def profile_embed(
             inline=False,
         )
 
-    if rank_bonus:
-        embed.add_field(name="Бонус текущего ранга", value=rank_bonus, inline=False)
-
-    embed.add_field(name="\U0001f680 Бустер сервера", value="✅" if user.booster else "❌")
+    if user.booster:
+        embed.add_field(name="\U0001f680 Бустер сервера", value="✅")
 
     if user.referred_by:
         embed.add_field(name="Ник пригласившего", value=user.referred_by)
