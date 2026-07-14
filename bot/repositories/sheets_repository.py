@@ -151,6 +151,48 @@ class SheetsRepository:
             ]
         })
 
+    def _ensure_jrow(self, nickname: str) -> None:
+        """Copy K-U formulas to the UNIQUE row for this nickname if empty."""
+        try:
+            cell = self._sheet.find(nickname, in_column=COL_UNIQUE_NICK)
+            if cell is None:
+                return
+            k_raw = self._sheet.cell(cell.row, COL_TOTAL_COINS).value
+            if k_raw and str(k_raw).strip():
+                return
+            src_row = None
+            for b_cell in self._sheet.findall(nickname, in_column=COL_NICKNAME):
+                br = self._sheet.row_values(b_cell.row)
+                if len(br) >= COL_TOTAL_COINS and br[COL_TOTAL_COINS - 1].strip():
+                    src_row = b_cell.row
+                    break
+            if src_row is None or src_row == cell.row:
+                return
+            sid = self._sheet.id
+            self._spreadsheet.batch_update({
+                "requests": [{
+                    "copyPaste": {
+                        "source": {
+                            "sheetId": sid,
+                            "startRowIndex": src_row - 1,
+                            "endRowIndex": src_row,
+                            "startColumnIndex": 10,
+                            "endColumnIndex": 21,
+                        },
+                        "destination": {
+                            "sheetId": sid,
+                            "startRowIndex": cell.row - 1,
+                            "endRowIndex": cell.row,
+                            "startColumnIndex": 10,
+                            "endColumnIndex": 21,
+                        },
+                        "pasteType": "PASTE_FORMULA",
+                    }
+                }]
+            })
+        except Exception:
+            pass
+
     @_retry
     def ensure_user(self, nickname: str) -> bool:
         """Check if nickname exists in column B (ticket section). Return True if created."""
@@ -161,6 +203,7 @@ class SheetsRepository:
         index = self._last_row() + 1
         self._sheet.insert_row(["", nickname], index)
         self._copy_formulas_to_new_row(index)
+        self._ensure_jrow(nickname)
         return True
 
     @_retry
@@ -179,6 +222,9 @@ class SheetsRepository:
             self._sheet.insert_row(row, index)
 
         self._copy_formulas_to_new_row(index)
+        self._ensure_jrow(nickname)
+        if referrer:
+            self._ensure_jrow(referrer)
 
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:
