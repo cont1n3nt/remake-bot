@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 import discord
 from discord import app_commands
@@ -55,7 +56,7 @@ class TransactionsCog(commands.Cog):
         interaction: discord.Interaction,
         тип: str,
         ник: str,
-        сумма: int,
+        сумма: str,
         ник_пригласившего: str | None = None,
     ) -> None:
         await interaction.response.defer()
@@ -63,7 +64,15 @@ class TransactionsCog(commands.Cog):
         nickname = ник.strip()
         referrer = ник_пригласившего.strip() if ник_пригласившего else None
 
-        if сумма <= 0:
+        try:
+            cleaned = re.sub(r'\s+', '', сумма)
+            cleaned = cleaned.replace("₽", "").replace("руб", "").replace(",", ".")
+            amount = float(cleaned)
+        except ValueError:
+            await interaction.followup.send(embed=error_embed("Некорректная сумма"), ephemeral=True)
+            return
+
+        if amount <= 0:
             await interaction.followup.send(embed=error_embed("Сумма должна быть больше 0"), ephemeral=True)
             return
 
@@ -86,7 +95,7 @@ class TransactionsCog(commands.Cog):
                 pass
 
         try:
-            await asyncio.to_thread(self._sheets_service.save_transaction, nickname, тип, сумма, referrer)
+            await asyncio.to_thread(self._sheets_service.save_transaction, nickname, тип, amount, referrer)
         except Exception as e:
             logger.error("add save error by %s: %s", interaction.user, e)
             await interaction.followup.send(embed=error_embed(f"Ошибка при сохранении: {e}"), ephemeral=True)
@@ -95,7 +104,7 @@ class TransactionsCog(commands.Cog):
         await asyncio.sleep(2)
 
         await interaction.followup.send(
-            embed=transaction_confirmation_embed(nickname, тип, сумма, referrer),
+            embed=transaction_confirmation_embed(nickname, тип, amount, referrer),
             ephemeral=True,
         )
 
@@ -147,7 +156,7 @@ class TransactionsCog(commands.Cog):
             details = {
                 "Никнейм": nickname,
                 "Тип сделки": tx_label,
-                "Сумма": str(сумма),
+                "Сумма": str(int(amount)) if amount == int(amount) else str(amount),
             }
             if referrer:
                 details["Реферер"] = referrer
