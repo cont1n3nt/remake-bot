@@ -45,6 +45,7 @@ def main() -> None:
         await bot.load_extension("bot.cogs.profile")
         await bot.load_extension("bot.cogs.transactions")
         await bot.load_extension("bot.cogs.tickets")
+        await bot.load_extension("bot.cogs.roles")
         guild = Object(id=settings.guild_id)
         bot.tree.copy_global_to(guild=guild)
         await bot.tree.sync(guild=guild)
