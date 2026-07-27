@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 from typing import Optional
 
 import discord
@@ -12,7 +13,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.repositories.sheets_repository import SheetsRepository
-from bot.utils.embeds import error_embed
+from bot.utils.embeds import error_embed, resolve_emoji
 
 logger = logging.getLogger("bot")
 
@@ -32,13 +33,15 @@ def _fmt(n: float) -> str:
 
 class PriceListView(discord.ui.View):
     def __init__(self, resources: list[dict], boosts: list[dict],
-                 page: int = 0, show_resources: bool = True):
+                 page: int = 0, show_resources: bool = True,
+                 guild: Optional[discord.Guild] = None):
         super().__init__(timeout=120)
         self.resources = resources
         self.boosts = boosts
         self.page = page
         self.show_resources = show_resources
         self.per_page = 15
+        self._guild = guild
 
     def _build_embed(self) -> discord.Embed:
         items = self.resources if self.show_resources else self.boosts
@@ -52,7 +55,8 @@ class PriceListView(discord.ui.View):
         total_pages = max(1, math.ceil(len(items) / self.per_page))
         for it in chunk:
             price = _fmt(it.get("price_buy", 0)) if self.show_resources else _fmt(it.get("price_sell", 0))
-            emoji = it.get("emoji", "") + " " if it.get("emoji") else ""
+            e = resolve_emoji(it.get("emoji", ""), self._guild)
+            emoji = e + " " if e else ""
             embed.add_field(name=f"{emoji}{it['name']}", value=f"{price} ₽", inline=True)
         embed.set_footer(text=f"Страница {self.page + 1}/{total_pages} • Всего: {len(items)}")
         return embed
@@ -179,7 +183,7 @@ class AdminCmdsCog(commands.Cog):
             items = await asyncio.to_thread(self._repo.get_all_items)
             resources = [it for it in items if it["category"] == "resource"]
             boosts = [it for it in items if it["category"] == "boost"]
-            view = PriceListView(resources, boosts)
+            view = PriceListView(resources, boosts, guild=interaction.guild)
             await interaction.followup.send(embed=view._build_embed(), view=view, ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
@@ -204,7 +208,13 @@ class AdminCmdsCog(commands.Cog):
         try:
             content = (await file.read()).decode("utf-8-sig")
             reader = csv.DictReader(io.StringIO(content))
+
+            # Collect old prices before import
+            old_items = {it["name"]: it for it in await asyncio.to_thread(self._repo.get_all_items)}
+            guild = interaction.guild
+
             count = 0
+            changes = []
             for row in reader:
                 name = row.get("Название", "").strip()
                 cat = row.get("Категория", "").strip()
@@ -214,14 +224,39 @@ class AdminCmdsCog(commands.Cog):
                 ps = float(ps_raw.replace(" ", "").replace(",", ".")) if ps_raw else None
                 emoji = row.get("Эмодзи", "").strip()
                 if name and cat:
+                    old = old_items.get(name)
+                    old_pb = old.get("price_buy") if old else None
+                    old_ps = old.get("price_sell") if old else None
                     await asyncio.to_thread(
                         self._repo.upsert_item, name, cat,
                         price_buy=pb, price_sell=ps, emoji=emoji,
                     )
                     count += 1
+                    if old and (old_pb != pb or old_ps != ps):
+                        parts = []
+                        if old_pb != pb:
+                            parts.append(f"Скупка: {_fmt(old_pb) if old_pb is not None else '—'} → {_fmt(pb) if pb is not None else '—'}")
+                        if old_ps != ps:
+                            parts.append(f"Продажа: {_fmt(old_ps) if old_ps is not None else '—'} → {_fmt(ps) if ps is not None else '—'}")
+                        e = resolve_emoji(old.get("emoji", ""), guild)
+                        emoji_str = e + " " if e else ""
+                        changes.append(f"• {emoji_str}{name} | {'; '.join(parts)}")
             # sync prices
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
-            await interaction.followup.send(f"✅ Импортировано {count} позиций.", ephemeral=True)
+            msg = f"✅ Импортировано {count} позиций."
+            if changes:
+                chunks = []
+                chunk = "**Изменения цен:**\n"
+                for c in changes:
+                    if len(chunk) + len(c) + 1 > 1900:
+                        chunks.append(chunk)
+                        chunk = ""
+                    chunk += c + "\n"
+                if chunk:
+                    chunks.append(chunk)
+                for c in chunks:
+                    await interaction.followup.send(c, ephemeral=True)
+            await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 

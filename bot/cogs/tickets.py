@@ -214,6 +214,7 @@ class TicketCog(commands.Cog):
     ) -> None:
         """Скачивает изображение, запускает OCR, сохраняет результат."""
         try:
+            await self.ocr.reload_prices()
             img_bytes = await attachment.read()
 
             # OCR с таймаутом 30 секунд

@@ -1,10 +1,12 @@
 import re
-from typing import Union
 
 
 def safe_calc(expression: str) -> float:
-    cleaned = expression.replace(" ", "")
+    # Remove all currency symbols and non-math characters
+    cleaned = re.sub(r'[₽$€¥£₸₴฿₩₪₫₭₮₰₱₲₳₵₶₷₸₹₺₻₼₽₾₿\s]', '', expression)
     cleaned = cleaned.replace(",", ".")
+    # Handle "k" / "к" suffix (thousands)
+    cleaned = re.sub(r'(\d+)[kк]', r'\1*1000', cleaned, flags=re.IGNORECASE)
     import simpleeval
     result = simpleeval.simple_eval(
         cleaned,

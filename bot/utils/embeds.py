@@ -1,6 +1,29 @@
+import re
+
+import discord
 from discord import Embed, Colour
 
 from bot.models.user import User
+
+
+_EMOJI_RE = re.compile(r"<a?:\w+:\d+>")
+
+
+def resolve_emoji(emoji_str: str, guild: discord.Guild | None = None) -> str:
+    """Convert stored emoji to Discord format <:name:id> using guild emoji list.
+    If the emoji is already in Discord format, returns as-is.
+    If not found in guild, returns empty string."""
+    if not emoji_str:
+        return ""
+    if _EMOJI_RE.match(emoji_str):
+        return emoji_str
+    if guild is None:
+        return ""
+    name = emoji_str.strip(":")
+    for e in guild.emojis:
+        if e.name == name:
+            return str(e)
+    return ""
 
 
 def _fmt(n: float | int) -> str:

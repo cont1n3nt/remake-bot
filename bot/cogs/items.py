@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 import discord
@@ -10,7 +11,7 @@ from discord.ext import commands
 
 from bot.repositories.sheets_repository import SheetsRepository
 from bot.utils.calculator import safe_calc
-from bot.utils.embeds import error_embed
+from bot.utils.embeds import error_embed, resolve_emoji
 
 logger = logging.getLogger("bot")
 
@@ -30,9 +31,10 @@ class ItemsCog(commands.Cog):
     async def _autocomplete_items(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
         items = await asyncio.to_thread(self._repo.get_all_items)
         matches = [it for it in items if current.lower() in it["name"].lower()]
+        guild = interaction.guild
         return [
             app_commands.Choice(
-                name=f"{it['emoji']} {it['name']}" if it.get("emoji") else it["name"],
+                name=f"{resolve_emoji(it.get('emoji', ''), guild)} {it['name']}" if it.get("emoji") else it["name"],
                 value=it["name"],
             )
             for it in matches[:25]
@@ -41,9 +43,10 @@ class ItemsCog(commands.Cog):
     async def _autocomplete_resources(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
         items = [it for it in (await asyncio.to_thread(self._repo.get_all_items)) if it["category"] == "resource"]
         matches = [it for it in items if current.lower() in it["name"].lower()]
+        guild = interaction.guild
         return [
             app_commands.Choice(
-                name=f"{it['emoji']} {it['name']}" if it.get("emoji") else it["name"],
+                name=f"{resolve_emoji(it.get('emoji', ''), guild)} {it['name']}" if it.get("emoji") else it["name"],
                 value=it["name"],
             )
             for it in matches[:25]
@@ -52,17 +55,18 @@ class ItemsCog(commands.Cog):
     async def _autocomplete_boosts(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
         items = [it for it in (await asyncio.to_thread(self._repo.get_all_items)) if it["category"] == "boost"]
         matches = [it for it in items if current.lower() in it["name"].lower()]
+        guild = interaction.guild
         return [
             app_commands.Choice(
-                name=f"{it['emoji']} {it['name']}" if it.get("emoji") else it["name"],
+                name=f"{resolve_emoji(it.get('emoji', ''), guild)} {it['name']}" if it.get("emoji") else it["name"],
                 value=it["name"],
             )
             for it in matches[:25]
         ]
 
-    def _format_price_change(self, it: dict, old_price: Optional[float], new_price: float, is_buy: bool) -> str:
-        emoji = it.get("emoji", "")
-        emoji_str = f"{emoji} " if emoji else ""
+    def _format_price_change(self, it: dict, old_price: Optional[float], new_price: float, is_buy: bool, guild: Optional[discord.Guild] = None) -> str:
+        e = resolve_emoji(it.get("emoji", ""), guild)
+        emoji_str = e + " " if e else ""
         label = "Скупка" if is_buy else "Продажа"
         old_str = _fmt(old_price) if old_price is not None else "—"
         return f"{emoji_str}{it['name']} ({label}): `{old_str} ₽` → `{_fmt(new_price)} ₽`"
@@ -89,10 +93,8 @@ class ItemsCog(commands.Cog):
             old_price = it.get("price_buy")
             await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_buy=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
-            emoji = it.get("emoji", "")
-            emoji_str = f"{emoji} " if emoji else ""
-            await interaction.followup.send(
-                f"✅ {emoji_str}{it['name']}: цена скупки изменена на {_fmt(amount)} ₽", ephemeral=True)
+            change = self._format_price_change(it, old_price, amount, is_buy=True, guild=interaction.guild)
+            await interaction.followup.send(f"✅ {change}", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 
@@ -124,10 +126,8 @@ class ItemsCog(commands.Cog):
             old_price = it.get("price_sell")
             await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_sell=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
-            emoji = it.get("emoji", "")
-            emoji_str = f"{emoji} " if emoji else ""
-            await interaction.followup.send(
-                f"✅ {emoji_str}{it['name']}: цена продажи изменена на {_fmt(amount)} ₽", ephemeral=True)
+            change = self._format_price_change(it, old_price, amount, is_buy=False, guild=interaction.guild)
+            await interaction.followup.send(f"✅ {change}", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 
@@ -167,8 +167,9 @@ class ItemsCog(commands.Cog):
         try:
             it = await asyncio.to_thread(self._repo.upsert_item, name.strip(), category, price_buy=pb, price_sell=ps, emoji=emoji.strip())
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
-            e = it.get("emoji", "") + " " if it.get("emoji") else ""
-            await interaction.followup.send(f"✅ {e}{it['name']} добавлен (ID: {it['id']})", ephemeral=True)
+            e = resolve_emoji(it.get("emoji", ""), interaction.guild)
+            emoji_str = e + " " if e else ""
+            await interaction.followup.send(f"✅ {emoji_str}{it['name']} добавлен (ID: {it['id']})", ephemeral=True)
         except Exception as ex:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {ex}"), ephemeral=True)
 

@@ -110,6 +110,23 @@ PRICES_FILE = "prices.json"; REFERRALS_FILE = "referrals.json"; DEAL_REPORTS_DIR
 #  (c)  ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ                                       #
 # =================================================================== #
 
+import re as _re2
+
+_EMOJI_RE = _re2.compile(r"<a?:\w+:\d+>")
+
+def _resolve_emoji(emoji_str: str, guild=None) -> str:
+    if not emoji_str:
+        return ""
+    if _EMOJI_RE.match(emoji_str):
+        return emoji_str
+    if guild is None:
+        return ""
+    name = emoji_str.strip(":")
+    for e in guild.emojis:
+        if e.name == name:
+            return str(e)
+    return ""
+
 def _fmt(n: float) -> str:
     if n == int(n): return str(int(n))
     return f"{n:.2f}".rstrip("0").rstrip(".")
@@ -129,8 +146,10 @@ async def _safe_defer(interaction: discord.Interaction, ephemeral: bool = True) 
 # ------------------------------------------------------------------ #
 
 def safe_calc(expression: str) -> float:
-    cleaned = expression.replace(" ", "")
+    import re as _re
+    cleaned = _re.sub(r'[₽$€¥£₸₴฿₩₪₫₭₮₰₱₲₳₵₶₷₸₹₺₻₼₽₾₿\s]', '', expression)
     cleaned = cleaned.replace(",", ".")
+    cleaned = _re.sub(r'(\d+)[kк]', r'\1*1000', cleaned, flags=_re.IGNORECASE)
     import simpleeval
     result = simpleeval.simple_eval(
         cleaned,
@@ -690,19 +709,22 @@ def _build_analytics_embed(txs: list[dict], title: str) -> discord.Embed:
 async def _autocomplete_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
     items = _db_get_all()
     matches = [it for it in items if current.lower() in it.name.lower()]
-    return [app_commands.Choice(name=f"{it.emoji} {it.name}" if it.emoji else it.name, value=it.name)
+    guild = interaction.guild
+    return [app_commands.Choice(name=f"{_resolve_emoji(it.emoji, guild)} {it.name}" if it.emoji else it.name, value=it.name)
             for it in matches[:25]]
 
 async def _autocomplete_resources(interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
     items = [it for it in _db_get_all() if it.category == "resource"]
     matches = [it for it in items if current.lower() in it.name.lower()]
-    return [app_commands.Choice(name=f"{it.emoji} {it.name}" if it.emoji else it.name, value=it.name)
+    guild = interaction.guild
+    return [app_commands.Choice(name=f"{_resolve_emoji(it.emoji, guild)} {it.name}" if it.emoji else it.name, value=it.name)
             for it in matches[:25]]
 
 async def _autocomplete_boosts(interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
     items = [it for it in _db_get_all() if it.category == "boost"]
     matches = [it for it in items if current.lower() in it.name.lower()]
-    return [app_commands.Choice(name=f"{it.emoji} {it.name}" if it.emoji else it.name, value=it.name)
+    guild = interaction.guild
+    return [app_commands.Choice(name=f"{_resolve_emoji(it.emoji, guild)} {it.name}" if it.emoji else it.name, value=it.name)
             for it in matches[:25]]
 
 # ------------------------------------------------------------------ #
@@ -740,11 +762,12 @@ class TicketFormModal(discord.ui.Modal):
 # ------------------------------------------------------------------ #
 
 class PriceListView(discord.ui.View):
-    def __init__(self, resources: list[Item], boosts: list[Item], page: int = 0, show_resources: bool = True):
+    def __init__(self, resources: list[Item], boosts: list[Item],
+                 page: int = 0, show_resources: bool = True, guild=None):
         super().__init__(timeout=120)
         self.resources = resources; self.boosts = boosts
         self.page = page; self.show_resources = show_resources
-        self.per_page = 15
+        self.per_page = 15; self._guild = guild
 
     def _build_embed(self) -> discord.Embed:
         items = self.resources if self.show_resources else self.boosts
@@ -755,7 +778,8 @@ class PriceListView(discord.ui.View):
         total_pages = max(1, math.ceil(len(items) / self.per_page))
         for it in chunk:
             price = _fmt(it.price_buy) if self.show_resources else _fmt(it.price_sell)
-            emoji = it.emoji + " " if it.emoji else ""
+            e = _resolve_emoji(it.emoji, self._guild)
+            emoji = e + " " if e else ""
             embed.add_field(name=f"{emoji}{it.name}", value=f"{price} ₽", inline=True)
         embed.set_footer(text=f"Страница {self.page + 1}/{total_pages} • Всего: {len(items)}")
         return embed
@@ -986,7 +1010,8 @@ async def setup_commands(bot: commands.Bot) -> None:
                 await interaction.followup.send(embed=_error_embed("Предмет не найден в базе."), ephemeral=True); return
             _db_upsert(it.name, it.category, price_buy=amount)
             _sync_prices_from_db()
-            emoji = it.emoji + " " if it.emoji else ""
+            e = _resolve_emoji(it.emoji, interaction.guild)
+            emoji = e + " " if e else ""
             await interaction.followup.send(
                 f"✅ {emoji}{it.name}: цена скупки изменена на {_fmt(amount)} ₽", ephemeral=True)
         except Exception as e:
@@ -1018,7 +1043,8 @@ async def setup_commands(bot: commands.Bot) -> None:
                 await interaction.followup.send(embed=_error_embed("Буст не найден в базе."), ephemeral=True); return
             _db_upsert(it.name, it.category, price_sell=amount)
             _sync_prices_from_db()
-            emoji = it.emoji + " " if it.emoji else ""
+            e = _resolve_emoji(it.emoji, interaction.guild)
+            emoji = e + " " if e else ""
             await interaction.followup.send(
                 f"✅ {emoji}{it.name}: цена продажи изменена на {_fmt(amount)} ₽", ephemeral=True)
         except Exception as e:
@@ -1055,8 +1081,9 @@ async def setup_commands(bot: commands.Bot) -> None:
         try:
             it = _db_upsert(name.strip(), category, price_buy=pb, price_sell=ps, emoji=emoji.strip())
             _sync_prices_from_db()
-            e = it.emoji + " " if it.emoji else ""
-            await interaction.followup.send(f"✅ {e}{it.name} добавлен (ID: {it.id})", ephemeral=True)
+            e = _resolve_emoji(it.emoji, interaction.guild)
+            emoji_str = e + " " if e else ""
+            await interaction.followup.send(f"✅ {emoji_str}{it.name} добавлен (ID: {it.id})", ephemeral=True)
         except Exception as ex:
             await interaction.followup.send(embed=_error_embed(f"Ошибка: {ex}"), ephemeral=True)
         try: await _audit_log(interaction.client, interaction.user, "/item_add",
@@ -1188,7 +1215,7 @@ async def setup_commands(bot: commands.Bot) -> None:
             items = _db_get_all()
             resources = [it for it in items if it.category == "resource"]
             boosts = [it for it in items if it.category == "boost"]
-            view = PriceListView(resources, boosts)
+            view = PriceListView(resources, boosts, guild=interaction.guild)
             await interaction.followup.send(embed=view._build_embed(), view=view, ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=_error_embed(f"Ошибка: {e}"), ephemeral=True)
@@ -1214,7 +1241,9 @@ async def setup_commands(bot: commands.Bot) -> None:
         try:
             content = (await file.read()).decode("utf-8-sig")
             reader = csv.DictReader(io.StringIO(content))
+            old_items = {it.name.lower(): it for it in _db_get_all()}
             count = 0
+            changes = []
             for row in reader:
                 name = row.get("Название", "").strip()
                 cat = row.get("Категория", "").strip()
@@ -1222,10 +1251,35 @@ async def setup_commands(bot: commands.Bot) -> None:
                 ps = _gs_parse_float(row.get("Цена продажи", "")) if row.get("Цена продажи", "").strip() else None
                 emoji = row.get("Эмодзи", "").strip()
                 if name and cat:
+                    old = old_items.get(name.lower())
+                    old_pb = old.price_buy if old else None
+                    old_ps = old.price_sell if old else None
                     _db_upsert(name, cat, price_buy=pb, price_sell=ps, emoji=emoji)
                     count += 1
+                    if old and (old_pb != pb or old_ps != ps):
+                        parts = []
+                        if old_pb != pb:
+                            parts.append(f"Скупка: {_fmt(old_pb) if old_pb is not None else '—'} → {_fmt(pb) if pb is not None else '—'}")
+                        if old_ps != ps:
+                            parts.append(f"Продажа: {_fmt(old_ps) if old_ps is not None else '—'} → {_fmt(ps) if ps is not None else '—'}")
+                        e = _resolve_emoji(old.emoji if old else "", interaction.guild)
+                        e_str = e + " " if e else ""
+                        changes.append(f"• {e_str}{name} | {'; '.join(parts)}")
             _sync_prices_from_db()
-            await interaction.followup.send(f"✅ Импортировано {count} позиций.", ephemeral=True)
+            msg = f"✅ Импортировано {count} позиций."
+            if changes:
+                chunks = []
+                chunk = "**Изменения цен:**\n"
+                for c in changes:
+                    if len(chunk) + len(c) + 1 > 1900:
+                        chunks.append(chunk)
+                        chunk = ""
+                    chunk += c + "\n"
+                if chunk:
+                    chunks.append(chunk)
+                for c in chunks:
+                    await interaction.followup.send(c, ephemeral=True)
+            await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=_error_embed(f"Ошибка: {e}"), ephemeral=True)
         try: await _audit_log(interaction.client, interaction.user, "/new_price", {"Файл": file.filename})

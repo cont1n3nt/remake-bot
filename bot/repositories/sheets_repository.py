@@ -214,8 +214,10 @@ class SheetsRepository:
         referrer: str | None = None,
     ) -> None:
         """Append a transaction row, copying formulas from the row above."""
+        from datetime import datetime, timezone, timedelta
+        now = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%d.%m.%y %H:%M")
         index = self._last_row() + 1
-        row = ["", nickname, True, False, amount, "", "", referrer or ""]
+        row = [now, nickname, True, False, amount, "", "", referrer or ""]
 
         if tx_type == "buy":
             self._sheet.insert_row(row, index)
@@ -345,7 +347,11 @@ class SheetsRepository:
                price_buy if price_buy is not None else "",
                price_sell if price_sell is not None else "",
                emoji, now]
-        self._sheet.append_row(row)
+        # Write to AA-AG columns instead of A-G
+        items = self.get_all_items()
+        next_row = DATA_START_ROW + len(items)
+        cell_range = f"AA{next_row}:AG{next_row}"
+        self._sheet.update(cell_range, [row], value_input_option="USER_ENTERED")
         return {
             "id": new_id, "name": name, "category": category,
             "price_buy": price_buy, "price_sell": price_sell,
