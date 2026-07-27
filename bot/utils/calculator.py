@@ -2,10 +2,10 @@ import re
 
 
 def safe_calc(expression: str) -> float:
-    # Remove all currency symbols and non-math characters
-    cleaned = re.sub(r'[₽$€¥£₸₴฿₩₪₫₭₮₰₱₲₳₵₶₷₸₹₺₻₼₽₾₿\s]', '', expression)
+    # Keep only digits, decimal separators, math operators, and k/к suffix
+    cleaned = re.sub(r'[^\d.,+*/\skк-]', '', expression)
+    cleaned = re.sub(r'\s', '', cleaned)
     cleaned = cleaned.replace(",", ".")
-    # Handle "k" / "к" suffix (thousands)
     cleaned = re.sub(r'(\d+)[kк]', r'\1*1000', cleaned, flags=re.IGNORECASE)
     import simpleeval
     result = simpleeval.simple_eval(

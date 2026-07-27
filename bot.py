@@ -147,7 +147,8 @@ async def _safe_defer(interaction: discord.Interaction, ephemeral: bool = True) 
 
 def safe_calc(expression: str) -> float:
     import re as _re
-    cleaned = _re.sub(r'[₽$€¥£₸₴฿₩₪₫₭₮₰₱₲₳₵₶₷₸₹₺₻₼₽₾₿\s]', '', expression)
+    cleaned = _re.sub(r'[^\d.,+*/\skк-]', '', expression)
+    cleaned = _re.sub(r'\s', '', cleaned)
     cleaned = cleaned.replace(",", ".")
     cleaned = _re.sub(r'(\d+)[kк]', r'\1*1000', cleaned, flags=_re.IGNORECASE)
     import simpleeval
