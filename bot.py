@@ -117,6 +117,13 @@ def _fmt(n: float) -> str:
 def is_monitored(channel_id: int) -> bool:
     return channel_id in MONITORED_CHANNELS
 
+async def _safe_defer(interaction: discord.Interaction, ephemeral: bool = True) -> None:
+    if not interaction.response.is_done():
+        try:
+            await interaction.response.defer(ephemeral=ephemeral)
+        except Exception:
+            pass
+
 # ------------------------------------------------------------------ #
 #  SAFE CALCULATOR                                                   #
 # ------------------------------------------------------------------ #
@@ -815,7 +822,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.choices(тип=[app_commands.Choice(name="Покупка", value="buy"), app_commands.Choice(name="Продажа", value="sell")])
     @app_commands.checks.has_permissions(administrator=True)
     async def add(interaction: discord.Interaction, тип: str, ник: str, сумма: str, ник_пригласившего: Optional[str] = None):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         nickname = ник.strip()
         referrer = ник_пригласившего.strip() if ник_пригласившего else None
         try:
@@ -858,7 +865,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @bot.tree.command(name="profile", description="👤 Показать профиль пользователя")
     @app_commands.describe(nickname="Ваш ник в таблице")
     async def profile(interaction: discord.Interaction, nickname: str):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             u = await asyncio.to_thread(_gs_get_user_profile, nickname)
         except Exception as e:
@@ -877,7 +884,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.describe(ник_игрока="Ник в таблице", ник_пригласившего="Кто пригласил")
     @app_commands.checks.has_permissions(administrator=True)
     async def refer(interaction: discord.Interaction, ник_игрока: str, ник_пригласившего: str):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         if ник_игрока.lower() == ник_пригласившего.lower():
             await interaction.followup.send(embed=_error_embed("Нельзя указать самого себя"), ephemeral=True); return
         try:
@@ -904,7 +911,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @bot.tree.command(name="referrals", description="👥 Показать список рефералов пользователя и дату прикрепления")
     @app_commands.describe(nickname="Ваш ник в таблице")
     async def referrals(interaction: discord.Interaction, nickname: str):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             u = await asyncio.to_thread(_gs_get_user_profile, nickname)
             refs = await asyncio.to_thread(_gs_get_referred_users, nickname)
@@ -928,7 +935,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @bot.tree.command(name="logs", description="📜 (Админ) Вывести полные логи всех совершенных сделок от новых к старым")
     @app_commands.checks.has_permissions(administrator=True)
     async def logs(interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             ws = _gs(); vals = ws.get(f"A{ DATA_START_ROW }:H2000")
         except Exception as e:
@@ -969,7 +976,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.autocomplete(item=_autocomplete_resources)
     @app_commands.checks.has_permissions(administrator=True)
     async def setprice(interaction: discord.Interaction, item: str, price: str):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try: amount = safe_calc(price)
         except Exception:
             await interaction.followup.send(embed=_error_embed("Некорректная цена."), ephemeral=True); return
@@ -1001,7 +1008,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.autocomplete(item=_autocomplete_boosts)
     @app_commands.checks.has_permissions(administrator=True)
     async def setboost(interaction: discord.Interaction, item: str, price: str):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try: amount = safe_calc(price)
         except Exception:
             await interaction.followup.send(embed=_error_embed("Некорректная цена."), ephemeral=True); return
@@ -1038,7 +1045,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.checks.has_permissions(administrator=True)
     async def item_add(interaction: discord.Interaction, name: str, category: str,
                        price_buy: Optional[str] = None, price_sell: Optional[str] = None, emoji: str = ""):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             pb = safe_calc(price_buy) if price_buy else None
         except: pb = None
@@ -1070,7 +1077,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.autocomplete(item=_autocomplete_items)
     @app_commands.checks.has_permissions(administrator=True)
     async def del_item(interaction: discord.Interaction, item: str):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             if _db_delete(item):
                 _sync_prices_from_db()
@@ -1094,7 +1101,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @bot.tree.command(name="sync_prices", description="🔄 (Админ) Принудительно выгрузить и обновить актуальные цены в основную таблицу")
     @app_commands.checks.has_permissions(administrator=True)
     async def sync_prices(interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             cnt = _sync_prices_from_db()
             await interaction.followup.send(f"✅ Синхронизация завершена. Выгружено {len(cnt)} цен.", ephemeral=True)
@@ -1116,7 +1123,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.describe(user="Уведомить участника о тикете в личных сообщениях")
     @app_commands.checks.has_permissions(administrator=True)
     async def tag(interaction: discord.Interaction, user: discord.User):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         embed = discord.Embed(title="📢 Уведомление по тикету",
             description=f"Здравствуйте, {user.mention}!\nВ вашем активном тикете {interaction.channel.mention} поступило новое сообщение. Команда ожидает вашего ответа, чтобы продолжить сделку или решить вопрос.\nПожалуйста, вернитесь в чат, когда будете готовы!",
             colour=discord.Color.brand_green())
@@ -1146,7 +1153,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @bot.tree.command(name="give_price", description="📥 (Админ) Скачать файл с текущими ценами")
     @app_commands.checks.has_permissions(administrator=True)
     async def give_price(interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             items = _db_get_all()
             buf = io.StringIO(); w = csv.writer(buf)
@@ -1176,7 +1183,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @bot.tree.command(name="price_list", description="📋 (Админ) Показать прайс-лист ресурсов с кнопкой переключения на бусты")
     @app_commands.checks.has_permissions(administrator=True)
     async def price_list(interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             items = _db_get_all()
             resources = [it for it in items if it.category == "resource"]
@@ -1201,7 +1208,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.describe(file="CSV-файл с колонками: Название, Категория, Цена скупки, Цена продажи, Эмодзи")
     @app_commands.checks.has_permissions(administrator=True)
     async def new_price(interaction: discord.Interaction, file: discord.Attachment):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         if not file.filename.endswith(".csv"):
             await interaction.followup.send(embed=_error_embed("Файл должен быть в формате CSV."), ephemeral=True); return
         try:
@@ -1237,7 +1244,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.describe(дата="Дата в формате ДД.ММ.ГГГГ (например 26.07.2026)")
     @app_commands.checks.has_permissions(administrator=True)
     async def day(interaction: discord.Interaction, дата: str):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             d = datetime.strptime(дата.strip(), "%d.%m.%Y").date()
         except:
@@ -1264,7 +1271,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.describe(год="Год (например 2026)", неделя="Номер недели (1-53)")
     @app_commands.checks.has_permissions(administrator=True)
     async def week(interaction: discord.Interaction, год: int, неделя: int):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         try:
             start = datetime.strptime(f"{год}-W{неделя:02d}-1", "%G-W%V-%u").date()
             end = start + timedelta(days=6)
@@ -1292,7 +1299,7 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.describe(месяц="Месяц (1-12)", год="Год (например 2026)")
     @app_commands.checks.has_permissions(administrator=True)
     async def month(interaction: discord.Interaction, месяц: int, год: int):
-        await interaction.response.defer(ephemeral=True)
+        await _safe_defer(interaction)
         if not 1 <= месяц <= 12:
             await interaction.followup.send(embed=_error_embed("Месяц должен быть от 1 до 12."), ephemeral=True); return
         try:
@@ -1314,12 +1321,87 @@ async def setup_commands(bot: commands.Bot) -> None:
             except: await i.followup.send("Недостаточно прав.", ephemeral=True)
 
     # ---------------------------------------------------------------- #
+    #  /set_rank
+    # ---------------------------------------------------------------- #
+    @bot.tree.command(name="set_rank", description="🏅 (Админ) Вручную установить ранговую роль участнику")
+    @app_commands.describe(user="Участник", rank="Название ранга")
+    @app_commands.choices(rank=[
+        app_commands.Choice(name="Standard", value="Standard"),
+        app_commands.Choice(name="Premium", value="Premium"),
+        app_commands.Choice(name="Prestige", value="Prestige"),
+        app_commands.Choice(name="Elite", value="Elite"),
+        app_commands.Choice(name="Legend", value="Legend"),
+    ])
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_rank(interaction: discord.Interaction, user: discord.Member, rank: str):
+        await _safe_defer(interaction)
+        rid = RANK_ROLES.get(rank)
+        if rid is None:
+            await interaction.followup.send(embed=_error_embed("Ранг не найден"), ephemeral=True); return
+        ro = interaction.guild.get_role(rid)
+        if ro is None:
+            await interaction.followup.send(embed=_error_embed("Роль не найдена на сервере"), ephemeral=True); return
+        try:
+            # снимаем старые ранговые роли
+            for rid_old in RANK_ROLES.values():
+                r_old = interaction.guild.get_role(rid_old)
+                if r_old and r_old in user.roles:
+                    await user.remove_roles(r_old, reason="set_rank")
+            await user.add_roles(ro, reason="set_rank")
+            await interaction.followup.send(f"✅ Роль `{rank}` назначена {user.mention}.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send(embed=_error_embed("Нет прав на назначение роли"), ephemeral=True)
+
+    @set_rank.error
+    async def set_rank_error(i: discord.Interaction, e: app_commands.AppCommandError):
+        if isinstance(e, app_commands.MissingPermissions):
+            try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
+            except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
+
+    # ---------------------------------------------------------------- #
+    #  /set_referral
+    # ---------------------------------------------------------------- #
+    @bot.tree.command(name="set_referral", description="🔗 (Админ) Вручную установить реферальную роль участнику")
+    @app_commands.describe(user="Участник", role="Название реферальной роли")
+    @app_commands.choices(role=[
+        app_commands.Choice(name="Скаут", value="Скаут"),
+        app_commands.Choice(name="Промоутер", value="Промоутер"),
+        app_commands.Choice(name="Вербовщик", value="Вербовщик"),
+        app_commands.Choice(name="Амбассадор", value="Амбассадор"),
+        app_commands.Choice(name="Рекламный Барон", value="Рекламный Барон"),
+    ])
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_referral(interaction: discord.Interaction, user: discord.Member, role: str):
+        await _safe_defer(interaction)
+        rid = REFERRAL_ROLES.get(role)
+        if rid is None:
+            await interaction.followup.send(embed=_error_embed("Роль не найдена"), ephemeral=True); return
+        ro = interaction.guild.get_role(rid)
+        if ro is None:
+            await interaction.followup.send(embed=_error_embed("Роль не найдена на сервере"), ephemeral=True); return
+        try:
+            for rid_old in REFERRAL_ROLES.values():
+                r_old = interaction.guild.get_role(rid_old)
+                if r_old and r_old in user.roles:
+                    await user.remove_roles(r_old, reason="set_referral")
+            await user.add_roles(ro, reason="set_referral")
+            await interaction.followup.send(f"✅ Роль `{role}` назначена {user.mention}.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send(embed=_error_embed("Нет прав на назначение роли"), ephemeral=True)
+
+    @set_referral.error
+    async def set_referral_error(i: discord.Interaction, e: app_commands.AppCommandError):
+        if isinstance(e, app_commands.MissingPermissions):
+            try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
+            except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
+
+    # ---------------------------------------------------------------- #
     #  Sync                                                            #
     # ---------------------------------------------------------------- #
     guild = Object(id=GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
-    logger.info("Commands synced")
+    logger.info("Commands synced to guild %s", GUILD_ID)
 
 # =================================================================== #
 #  (f)  MAIN — ЗАПУСК БОТА                                            #
@@ -1349,6 +1431,7 @@ def main() -> None:
         raise RuntimeError("Missing required environment variables: DISCORD_TOKEN, GOOGLE_SHEETS_URL")
 
     intents = discord.Intents.default()
+    intents.message_content = True
     bot = commands.Bot(command_prefix="/", intents=intents)
 
     _role_load_referrals()
@@ -1360,45 +1443,65 @@ def main() -> None:
 
     @bot.event
     async def on_message(message: discord.Message) -> None:
-        if message.author.bot: return
-        _in_cat = message.channel.category_id in CATEGORY_CHANNELS.values() if hasattr(message.channel, "category_id") else False
-        if not is_monitored(message.channel.id) and not _in_cat: return
-        if _in_cat:
-            images = [a for a in message.attachments if a.content_type and a.content_type.startswith("image/")]
-            if not images: return
-            await message.add_reaction("⏳")
-            prices = _load_prices()
-            for att in images:
-                try:
-                    img_bytes = await att.read()
-                    text = await asyncio.wait_for(_ocr_extract_text(img_bytes), timeout=30.0)
-                    text = text.strip()
-                    if not text: continue
-                    parsed = _ocr_parse_items(text)
-                    readable, total, unknown = _ocr_cross_reference(parsed, prices)
-                    items_str = "; ".join(readable)
-                    result = f"[OCR Result] Items: {items_str} | Total: {_fmt(total)} RUB"
-                    entry = {"type": "ocr", "timestamp": discord.utils.utcnow().isoformat(),
-                             "user_id": message.author.id, "user_name": str(message.author),
-                             "message_id": message.id, "filename": att.filename,
-                             "items": parsed, "total": total, "unknown": unknown, "raw_text": text}
-                    await _save_deal_report(message.channel.id, entry)
-                    await message.channel.send(f"```{result}```")
-                    if unknown:
-                        await message.channel.send(f"⚠️ Не удалось определить цену для: {', '.join(unknown)}. Проверьте базу цен или укажите стоимость вручную.")
-                except asyncio.TimeoutError:
-                    await message.channel.send("⏱ OCR-распознавание превысило таймаут (30 с).")
-                except ValueError as exc:
-                    await message.channel.send(f"⚠️ {exc}")
-                except Exception:
-                    logger.exception("Ошибка OCR при обработке %s", att.filename)
-                    await message.channel.send("⚠️ Произошла ошибка при OCR-распознавании.")
-            await message.remove_reaction("⏳", bot.user)
-            await message.add_reaction("✅")
+        if message.author.bot:
+            return
+        is_ticket = message.channel.category_id in CATEGORY_CHANNELS.values() if hasattr(message.channel, "category_id") else False
+        is_ticket = is_ticket or message.channel.id in CATEGORY_CHANNELS.values()
+        if not is_monitored(message.channel.id) and not is_ticket:
+            return
+        images = [a for a in message.attachments if a.content_type and a.content_type.startswith("image/")]
+        if not images:
+            return
+        await message.add_reaction("⏳")
+        prices = _load_prices()
+        for att in images:
+            try:
+                img_bytes = await att.read()
+                text = await asyncio.wait_for(_ocr_extract_text(img_bytes), timeout=30.0)
+                text = text.strip()
+                if not text:
+                    continue
+                parsed = _ocr_parse_items(text)
+                readable, total, unknown = _ocr_cross_reference(parsed, prices)
+                items_str = "; ".join(readable)
+                result = f"[OCR Result] Items: {items_str} | Total: {_fmt(total)} RUB"
+                entry = {"type": "ocr", "timestamp": discord.utils.utcnow().isoformat(),
+                         "user_id": message.author.id, "user_name": str(message.author),
+                         "message_id": message.id, "filename": att.filename,
+                         "items": parsed, "total": total, "unknown": unknown, "raw_text": text}
+                await _save_deal_report(message.channel.id, entry)
+                await message.channel.send(f"```{result}```")
+                if unknown:
+                    await message.channel.send(f"⚠️ Не удалось определить цену для: {', '.join(unknown)}. Проверьте базу цен или укажите стоимость вручную.")
+            except asyncio.TimeoutError:
+                await message.channel.send("⏱ OCR-распознавание превысило таймаут (30 с).")
+            except ValueError as exc:
+                await message.channel.send(f"⚠️ {exc}")
+            except Exception:
+                logger.exception("Ошибка OCR при обработке %s", att.filename)
+                await message.channel.send("⚠️ Произошла ошибка при OCR-распознавании.")
+        await message.remove_reaction("⏳", bot.user)
+        await message.add_reaction("✅")
 
     @bot.event
     async def setup_hook() -> None:
         await setup_commands(bot)
+
+    @bot.tree.error
+    async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.CommandNotFound):
+            try:
+                await interaction.response.send_message("❓ Команда не найдена. Попробуйте обновить Discord (Ctrl+R).", ephemeral=True)
+            except Exception:
+                pass
+        elif not isinstance(error, app_commands.MissingPermissions):
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(f"⚠️ Ошибка: {error}", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"⚠️ Ошибка: {error}", ephemeral=True)
+            except Exception:
+                pass
 
     bot.run(BOT_TOKEN)
 
