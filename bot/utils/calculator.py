@@ -12,12 +12,15 @@ def safe_calc(expression: str) -> float:
     if not cleaned:
         raise ValueError("Сумма не может быть пустой")
     import math
-    import simpleeval
-    result = simpleeval.simple_eval(
-        cleaned,
-        functions={"int": int, "float": float, "abs": abs, "round": round},
-        names={},
-    )
+    try:
+        import simpleeval
+        result = simpleeval.simple_eval(
+            cleaned,
+            functions={"int": int, "float": float, "abs": abs, "round": round},
+            names={},
+        )
+    except Exception:
+        result = float(cleaned)
     if not isinstance(result, (int, float)):
         raise ValueError("Результат не является числом")
     value = float(result)

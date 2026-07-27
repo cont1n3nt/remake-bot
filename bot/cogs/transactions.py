@@ -69,7 +69,10 @@ class TransactionsCog(commands.Cog):
         ник_пригласившего: str | None = None,
     ) -> None:
         if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
 
         nickname = ник.strip()
         if not nickname:
@@ -87,9 +90,11 @@ class TransactionsCog(commands.Cog):
                 await interaction.followup.send(embed=error_embed("Нельзя указывать самого себя."), ephemeral=True)
                 return
 
+        logger.debug("add input: сумма=%r ник=%r реферер=%r", сумма, nickname, referrer)
         try:
             amount = safe_calc(сумма)
-        except Exception:
+        except Exception as e:
+            logger.warning("add safe_calc failed: сумма=%r error=%s", сумма, e)
             await interaction.followup.send(embed=error_embed("Некорректное выражение в сумме."), ephemeral=True)
             return
 
