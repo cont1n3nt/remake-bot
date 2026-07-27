@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 
 import discord
 from discord import app_commands
@@ -27,10 +28,18 @@ REFERRAL_ROLES: dict[str, int] = {
     "🎩 Рекламный Барон": 1518584494410563625,
 }
 
+_MAX_NICK_LENGTH = 32
+
 
 def _role_mention(role_name: str, role_map: dict[str, int]) -> str:
     rid = role_map.get(role_name)
     return f"<@&{rid}>" if rid else role_name
+
+
+def _amount_str(amount: float) -> str:
+    if not math.isfinite(amount):
+        return str(amount)
+    return str(int(amount)) if amount == int(amount) else str(amount)
 
 
 class TransactionsCog(commands.Cog):
@@ -59,10 +68,24 @@ class TransactionsCog(commands.Cog):
         сумма: str,
         ник_пригласившего: str | None = None,
     ) -> None:
-        await interaction.response.defer(ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
 
         nickname = ник.strip()
+        if not nickname:
+            await interaction.followup.send(embed=error_embed("Ник не может быть пустым."), ephemeral=True)
+            return
+        if len(nickname) > _MAX_NICK_LENGTH:
+            await interaction.followup.send(
+                embed=error_embed(f"Ник слишком длинный (максимум {_MAX_NICK_LENGTH} символов)."), ephemeral=True,
+            )
+            return
+
         referrer = ник_пригласившего.strip() if ник_пригласившего else None
+        if referrer:
+            if referrer.lower() == nickname.lower():
+                await interaction.followup.send(embed=error_embed("Нельзя указывать самого себя."), ephemeral=True)
+                return
 
         try:
             amount = safe_calc(сумма)
@@ -93,13 +116,34 @@ class TransactionsCog(commands.Cog):
                 pass
 
         try:
+            await asyncio.to_thread(self._sheets_service.ensure_user, nickname)
+            if referrer:
+                await asyncio.to_thread(self._sheets_service.ensure_user, referrer)
+        except Exception:
+            pass
+
+        try:
             await asyncio.to_thread(self._sheets_service.save_transaction, nickname, тип, amount, referrer)
         except Exception as e:
             logger.error("add save error by %s: %s", interaction.user, e)
             await interaction.followup.send(embed=error_embed(f"Ошибка при сохранении: {e}"), ephemeral=True)
             return
 
-        await asyncio.sleep(2)
+        new_rank = ""
+        new_referral_role = ""
+        for attempt in range(5):
+            try:
+                after = await asyncio.to_thread(self._sheets_service.get_user, nickname)
+                if after:
+                    new_rank = after.rank or ""
+                    if referrer:
+                        after_ref = await asyncio.to_thread(self._sheets_service.get_user, referrer)
+                        new_referral_role = after_ref.referral_role or "" if after_ref else ""
+                    break
+            except Exception:
+                pass
+            if attempt < 4:
+                await asyncio.sleep(1)
 
         await interaction.followup.send(
             embed=transaction_confirmation_embed(nickname, тип, amount, referrer),
@@ -115,12 +159,6 @@ class TransactionsCog(commands.Cog):
         )
 
         try:
-            after = await asyncio.to_thread(self._sheets_service.get_user, nickname)
-            after_ref = await asyncio.to_thread(self._sheets_service.get_user, referrer) if referrer else None
-
-            new_rank = after.rank or "" if after else ""
-            new_referral_role = after_ref.referral_role or "" if after_ref else ""
-
             if new_rank and new_rank != old_rank:
                 mention = _role_mention(new_rank, RANK_ROLES)
                 if not old_rank:
@@ -154,7 +192,7 @@ class TransactionsCog(commands.Cog):
             details = {
                 "Никнейм": nickname,
                 "Тип сделки": tx_label,
-                "Сумма": str(int(amount)) if amount == int(amount) else str(amount),
+                "Сумма": _amount_str(amount),
             }
             if referrer:
                 details["Реферер"] = referrer

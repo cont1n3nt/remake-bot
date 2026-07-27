@@ -147,10 +147,15 @@ async def _safe_defer(interaction: discord.Interaction, ephemeral: bool = True) 
 
 def safe_calc(expression: str) -> float:
     import re as _re
+    if not expression or not expression.strip():
+        raise ValueError("Сумма не может быть пустой")
     cleaned = _re.sub(r'[^\d.,+*/\skк-]', '', expression)
     cleaned = _re.sub(r'\s', '', cleaned)
     cleaned = cleaned.replace(",", ".")
     cleaned = _re.sub(r'(\d+)[kк]', r'\1*1000', cleaned, flags=_re.IGNORECASE)
+    if not cleaned:
+        raise ValueError("Сумма не может быть пустой")
+    import math
     import simpleeval
     result = simpleeval.simple_eval(
         cleaned,
@@ -159,7 +164,10 @@ def safe_calc(expression: str) -> float:
     )
     if not isinstance(result, (int, float)):
         raise ValueError("Результат не является числом")
-    return float(result)
+    value = float(result)
+    if not math.isfinite(value):
+        raise ValueError("Сумма должна быть конечным числом")
+    return value
 
 # ------------------------------------------------------------------ #
 #  GOOGLE SHEETS – подключение                                        #
@@ -250,6 +258,87 @@ def _gs_set_referred_by(nickname: str, referrer: str) -> None:
     for c in ws.findall(nickname, in_column=COL_NICKNAME) or []:
         ws.update_cell(c.row, COL_REFERRED_BY, referrer)
 
+def _gs_copy_formulas(ws, index: int) -> None:
+    """Copy formulas from K-U range of the row above into the new row."""
+    if index <= 3:
+        return
+    try:
+        sid = ws.id
+        ws.client.session.post(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{ws.spreadsheet.id}:batchUpdate",
+            json={
+                "requests": [{
+                    "copyPaste": {
+                        "source": {
+                            "sheetId": sid,
+                            "startRowIndex": index - 2,
+                            "endRowIndex": index - 1,
+                            "startColumnIndex": 10,
+                            "endColumnIndex": 21,
+                        },
+                        "destination": {
+                            "sheetId": sid,
+                            "startRowIndex": index - 1,
+                            "endRowIndex": index,
+                            "startColumnIndex": 10,
+                            "endColumnIndex": 21,
+                        },
+                        "pasteType": "PASTE_FORMULA",
+                    }
+                }]
+            },
+        )
+    except Exception:
+        pass
+
+
+def _gs_ensure_jrow(nickname: str) -> None:
+    """Copy K-U formulas to the J-row for this nickname if empty."""
+    try:
+        ws = _gs()
+        cell = ws.find(nickname, in_column=COL_UNIQUE_NICK)
+        if cell is None:
+            return
+        k_val = ws.cell(cell.row, COL_TOTAL_COINS).value
+        if k_val and str(k_val).strip():
+            return
+        src = None
+        for bcell in ws.findall(nickname, in_column=COL_NICKNAME):
+            br = ws.row_values(bcell.row)
+            if len(br) >= COL_TOTAL_COINS and br[COL_TOTAL_COINS - 1].strip():
+                src = bcell.row
+                break
+        if src is None or src == cell.row:
+            return
+        sid = ws.id
+        ws.client.session.post(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{ws.spreadsheet.id}:batchUpdate",
+            json={
+                "requests": [{
+                    "copyPaste": {
+                        "source": {
+                            "sheetId": sid,
+                            "startRowIndex": src - 1,
+                            "endRowIndex": src,
+                            "startColumnIndex": 10,
+                            "endColumnIndex": 21,
+                        },
+                        "destination": {
+                            "sheetId": sid,
+                            "startRowIndex": cell.row - 1,
+                            "endRowIndex": cell.row,
+                            "startColumnIndex": 10,
+                            "endColumnIndex": 21,
+                        },
+                        "pasteType": "PASTE_FORMULA",
+                    }
+                }]
+            },
+        )
+    except Exception:
+        pass
+
+
 def _gs_add_transaction(nickname: str, tx_type: str, amount: float, referrer: Optional[str] = None) -> None:
     ws = _gs()
     import datetime as dt
@@ -258,6 +347,10 @@ def _gs_add_transaction(nickname: str, tx_type: str, amount: float, referrer: Op
     last = len(ws.col_values(COL_NICKNAME)) + 1
     row = [date_str, nickname, tx_type == "buy", tx_type == "sell", amount, "", "", referrer or ""]
     ws.insert_row(row, max(last, DATA_START_ROW))
+    _gs_copy_formulas(ws, max(last, DATA_START_ROW))
+    _gs_ensure_jrow(nickname)
+    if referrer:
+        _gs_ensure_jrow(referrer)
 
 # ------------------------------------------------------------------ #
 #  БАЗА ПРЕДМЕТОВ  (Google Sheets – столбцы AA:AG)                   #
@@ -848,8 +941,18 @@ async def setup_commands(bot: commands.Bot) -> None:
     @app_commands.checks.has_permissions(administrator=True)
     async def add(interaction: discord.Interaction, тип: str, ник: str, сумма: str, ник_пригласившего: Optional[str] = None):
         await _safe_defer(interaction)
+
         nickname = ник.strip()
+        if not nickname:
+            await interaction.followup.send(embed=_error_embed("Ник не может быть пустым."), ephemeral=True)
+            return
+
         referrer = ник_пригласившего.strip() if ник_пригласившего else None
+        if referrer:
+            if referrer.lower() == nickname.lower():
+                await interaction.followup.send(embed=_error_embed("Нельзя указывать самого себя."), ephemeral=True)
+                return
+
         try:
             amount = safe_calc(сумма)
         except Exception:
@@ -871,8 +974,10 @@ async def setup_commands(bot: commands.Bot) -> None:
         if referrer: embed.add_field(name="Ник пригласившего", value=referrer)
         await interaction.followup.send(embed=embed, ephemeral=True)
         try:
-            await _audit_log(interaction.client, interaction.user, "/add",
-                             {"Никнейм": nickname, "Тип": тип, "Сумма": _fmt(amount)})
+            details = {"Никнейм": nickname, "Тип": тип, "Сумма": _fmt(amount)}
+            if referrer:
+                details["Реферер"] = referrer
+            await _audit_log(interaction.client, interaction.user, "/add", details)
         except: pass
 
     @add.error
