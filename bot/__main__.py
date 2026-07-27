@@ -44,6 +44,7 @@ def main() -> None:
     async def setup_hook() -> None:
         await bot.load_extension("bot.cogs.profile")
         await bot.load_extension("bot.cogs.transactions")
+        await bot.load_extension("bot.cogs.tickets")
         guild = Object(id=settings.guild_id)
         bot.tree.copy_global_to(guild=guild)
         await bot.tree.sync(guild=guild)
