@@ -24,7 +24,7 @@ class ProfileCog(commands.Cog):
         self._user_service = user_service
         self._referral_service = referral_service
 
-    @app_commands.command(name="profile")
+    @app_commands.command(name="profile", description="👤 Показать профиль пользователя")
     @app_commands.describe(nickname="Ваш ник в таблице")
     async def profile(self, interaction: discord.Interaction, nickname: str) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -60,7 +60,7 @@ class ProfileCog(commands.Cog):
         except Exception:
             pass
 
-    @app_commands.command(name="refer")
+    @app_commands.command(name="refer", description="🔗 (Админ) Привязать реферала вручную")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(
         ник_игрока="Ник в таблице",
@@ -130,7 +130,7 @@ class ProfileCog(commands.Cog):
                 embed=error_embed(text), ephemeral=True,
             )
 
-    @app_commands.command(name="referrals")
+    @app_commands.command(name="referrals", description="👥 Показать список рефералов пользователя и дату прикрепления")
     @app_commands.describe(nickname="Ваш ник в таблице")
     async def referrals(self, interaction: discord.Interaction, nickname: str) -> None:
         await interaction.response.defer(ephemeral=True)

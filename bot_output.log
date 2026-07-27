@@ -6,3 +6,112 @@
 2026-07-27 17:57:01 [INFO] bot: Bot logged in as Связной#8197
 2026-07-27 17:57:02 [WARNING] bot: В категории Продажа бустов нет текстовых каналов
 2026-07-27 17:57:02 [WARNING] bot: В категории Заказ бустов нет текстовых каналов
+2026-07-27 18:04:55 [ERROR] discord.app_commands.tree: Ignoring exception in command tree
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1151, in wrapper
+    await self._call(interaction)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1283, in _call
+    command, options = self._get_app_command_options(data)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1187, in _get_app_command_options
+    raise CommandNotFound(name, parents)
+discord.app_commands.errors.CommandNotFound: Application command 'set_referral' not found
+2026-07-27 18:06:43 [ERROR] discord.app_commands.tree: Ignoring exception in command tree
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1151, in wrapper
+    await self._call(interaction)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1283, in _call
+    command, options = self._get_app_command_options(data)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1187, in _get_app_command_options
+    raise CommandNotFound(name, parents)
+discord.app_commands.errors.CommandNotFound: Application command 'set_referral' not found
+2026-07-27 18:08:37 [ERROR] asyncio: Task exception was never retrieved
+future: <Task finished name='CommandTree-invoker' coro=<CommandTree._from_interaction.<locals>.wrapper() done, defined at C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py:1149> exception=ClientConnectorError(ConnectionKey(host='discord.com', port=443, is_ssl=True, ssl=True, proxy=None, proxy_auth=None, proxy_headers_hash=None, server_hostname=None), OSError(22, 'Превышен таймаут семафора', None, 121, None))>
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohttp\connector.py", line 1301, in _wrap_create_connection
+    sock = await aiohappyeyeballs.start_connection(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohappyeyeballs\impl.py", line 124, in start_connection
+    raise first_exception
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohappyeyeballs\impl.py", line 75, in start_connection
+    sock = await _connect_sock(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohappyeyeballs\impl.py", line 210, in _connect_sock
+    await loop.sock_connect(sock, address)
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.12-64\Lib\asyncio\proactor_events.py", line 729, in sock_connect
+    return await self._proactor.connect(sock, address)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.12-64\Lib\asyncio\windows_events.py", line 803, in _poll
+    value = callback(transferred, key, ov)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Python\pythoncore-3.12-64\Lib\asyncio\windows_events.py", line 599, in finish_connect
+    ov.getresult()
+OSError: [WinError 121] Превышен таймаут семафора
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1151, in wrapper
+    await self._call(interaction)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1313, in _call
+    await command._invoke_error_handlers(interaction, e)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\commands.py", line 802, in _invoke_error_handlers
+    await self.on_error(interaction, error)  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\bot.py", line 853, in add_error
+    except: await i.followup.send(f"Ошибка: {e}", ephemeral=True)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\webhook\async_.py", line 1843, in send
+    data = await adapter.execute_webhook(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\webhook\async_.py", line 179, in request
+    async with session.request(
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohttp\client.py", line 1693, in __aenter__
+    self._resp: _RetType_co = await self._coro
+                              ^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohttp\client.py", line 858, in _request
+    resp = await handler(req)
+           ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohttp\client.py", line 812, in _connect_and_send_request
+    conn = await self._connector.connect(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohttp\connector.py", line 657, in connect
+    proto = await self._create_connection(req, traces, timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohttp\connector.py", line 1242, in _create_connection
+    _, proto = await self._create_direct_connection(req, traces, timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohttp\connector.py", line 1620, in _create_direct_connection
+    raise last_exc
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohttp\connector.py", line 1589, in _create_direct_connection
+    transp, proto = await self._wrap_create_connection(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\aiohttp\connector.py", line 1324, in _wrap_create_connection
+    raise client_error(req.connection_key, exc) from exc
+aiohttp.client_exceptions.ClientConnectorError: Cannot connect to host discord.com:443 ssl:default [Превышен таймаут семафора]
+2026-07-27 18:29:14 [ERROR] discord.app_commands.tree: Ignoring exception in command 'profile'
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\commands.py", line 858, in _do_call
+    return await self._callback(interaction, **params)  # type: ignore
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\bot.py", line 861, in profile
+    await interaction.response.defer(ephemeral=True)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\interactions.py", line 709, in defer
+    await adapter.create_interaction_response(
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\webhook\async_.py", line 223, in request
+    raise HTTPException(response, data)
+discord.errors.HTTPException: 400 Bad Request (error code: 40060): Interaction has already been acknowledged.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1310, in _call
+    await command._invoke_with_namespace(interaction, namespace)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\commands.py", line 883, in _invoke_with_namespace
+    return await self._do_call(interaction, transformed_values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\commands.py", line 876, in _do_call
+    raise CommandInvokeError(self, e) from e
+discord.app_commands.errors.CommandInvokeError: Command 'profile' raised an exception: HTTPException: 400 Bad Request (error code: 40060): Interaction has already been acknowledged.

@@ -11,18 +11,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.services.ocr_service import OcrService, _fmt
+from bot.config.constants import MONITORED_CHANNELS, CATEGORY_CHANNELS
 
 logger = logging.getLogger("bot")
-
-# ------------------------------------------------------------------ #
-#  Конфигурация тикет-каналов                                        #
-# ------------------------------------------------------------------ #
-
-CATEGORY_CHANNELS: dict[str, int] = {
-    "Продажа предметов": 1475149130748657841,
-    "Продажа бустов":   1503802805801058336,
-    "Заказ бустов":     1479228622014251049,
-}
 
 # Поля модалки для каждой категории
 CATEGORY_FIELDS: dict[str, list[dict]] = {
@@ -67,7 +58,7 @@ class TicketFormView(discord.ui.View):
         self, interaction: discord.Interaction, _button: discord.ui.Button,
     ) -> None:
         # Определяем категорию по ID канала
-        category = self._get_category(interaction.channel_id)
+        category = self._get_category(interaction)
         if category is None:
             await interaction.response.send_message(
                 "Этот канал не является каналом тикета.", ephemeral=True,
@@ -78,9 +69,10 @@ class TicketFormView(discord.ui.View):
         await interaction.response.send_modal(modal)
 
     @staticmethod
-    def _get_category(channel_id: int) -> Optional[str]:
+    def _get_category(interaction: discord.Interaction) -> Optional[str]:
+        ch_id = interaction.channel.category_id if hasattr(interaction.channel, "category_id") else interaction.channel_id
         for name, cid in CATEGORY_CHANNELS.items():
-            if cid == channel_id:
+            if cid == ch_id:
                 return name
         return None
 
@@ -153,17 +145,25 @@ class TicketCog(commands.Cog):
 
     async def _ensure_form_message(self, channel_id: int, category: str) -> None:
         """Проверяет, есть ли уже сообщение с формой в канале, и при
-        необходимости создаёт новое."""
+        необходимости создаёт новое.
+
+        Если channel_id — это категория, берём первый текстовый канал внутри."""
         channel = self.bot.get_channel(channel_id)
         if channel is None:
             logger.warning("Канал %s (ID %s) не найден", category, channel_id)
             return
 
-        # Ищем последнее сообщение от бота с компонентами
+        if isinstance(channel, discord.CategoryChannel):
+            text_ch = next((c for c in channel.text_channels), None)
+            if text_ch is None:
+                logger.warning("В категории %s нет текстовых каналов", category)
+                return
+            channel = text_ch
+
         try:
             async for msg in channel.history(limit=30):
                 if msg.author == self.bot.user and msg.components:
-                    return  # Уже существует
+                    return
         except Exception:
             pass
 
@@ -184,16 +184,16 @@ class TicketCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        """Обрабатывает изображения, прикреплённые к сообщениям в тикет-каналах."""
-        # Пропускаем сообщения ботов и свои собственные
+        """Обрабатывает изображения, прикреплённые к сообщениям
+        в тикет-каналах и отслеживаемых каналах."""
         if message.author.bot:
             return
 
-        # Проверяем, что канал входит в список тикет-каналов
-        if message.channel.id not in CATEGORY_CHANNELS.values():
+        is_ticket = message.channel.id in CATEGORY_CHANNELS.values()
+        is_monitored = message.channel.id in MONITORED_CHANNELS
+        if not is_ticket and not is_monitored:
             return
 
-        # Фильтруем только графические вложения
         images = [
             a for a in message.attachments
             if a.content_type and a.content_type.startswith("image/")
@@ -201,13 +201,11 @@ class TicketCog(commands.Cog):
         if not images:
             return
 
-        # Отправляем реакцию-«часики» в знак того, что началась обработка
         await message.add_reaction("⏳")
 
         for attachment in images:
             await self._process_image(message, attachment)
 
-        # Меняем реакцию на «готово»
         await message.remove_reaction("⏳", self.bot.user)
         await message.add_reaction("✅")
 
@@ -273,7 +271,8 @@ class TicketCog(commands.Cog):
     #  Команда /tag — уведомление участника в ЛС
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="tag")
+    @app_commands.command(name="tag", description="💬 (Админ) Отправить уведомление пользователю в личные сообщения о тикете")
+    @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(user="Уведомить участника о тикете в личных сообщениях")
     async def tag(
         self, interaction: discord.Interaction, user: discord.User,
@@ -325,6 +324,19 @@ class TicketCog(commands.Cog):
                 "Не удалось отправить сообщение пользователю.",
                 ephemeral=True,
             )
+
+    @tag.error
+    async def tag_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError,
+    ) -> None:
+        if isinstance(error, app_commands.MissingPermissions):
+            text = "Недостаточно прав. Требуются права администратора."
+        else:
+            text = f"Ошибка: {error}"
+        try:
+            await interaction.response.send_message(text, ephemeral=True)
+        except discord.errors.InteractionResponded:
+            await interaction.followup.send(text, ephemeral=True)
 
 
 # ------------------------------------------------------------------ #

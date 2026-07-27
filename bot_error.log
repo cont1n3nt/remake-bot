@@ -1,3 +1,47 @@
 [2026-07-27 17:56:57] [WARNING ] discord.ext.commands.bot: Privileged message content intent is missing, commands may not work as expected.
 [2026-07-27 17:56:57] [INFO    ] discord.client: logging in using static token
 [2026-07-27 17:56:59] [INFO    ] discord.gateway: Shard ID None has connected to Gateway (Session ID: ea81ef9896c69943ff4a30d58a440b5f).
+[2026-07-27 18:04:55] [ERROR   ] discord.app_commands.tree: Ignoring exception in command tree
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1151, in wrapper
+    await self._call(interaction)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1283, in _call
+    command, options = self._get_app_command_options(data)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1187, in _get_app_command_options
+    raise CommandNotFound(name, parents)
+discord.app_commands.errors.CommandNotFound: Application command 'set_referral' not found
+[2026-07-27 18:06:43] [ERROR   ] discord.app_commands.tree: Ignoring exception in command tree
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1151, in wrapper
+    await self._call(interaction)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1283, in _call
+    command, options = self._get_app_command_options(data)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1187, in _get_app_command_options
+    raise CommandNotFound(name, parents)
+discord.app_commands.errors.CommandNotFound: Application command 'set_referral' not found
+[2026-07-27 18:29:14] [ERROR   ] discord.app_commands.tree: Ignoring exception in command 'profile'
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\commands.py", line 858, in _do_call
+    return await self._callback(interaction, **params)  # type: ignore
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\bot.py", line 861, in profile
+    await interaction.response.defer(ephemeral=True)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\interactions.py", line 709, in defer
+    await adapter.create_interaction_response(
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\webhook\async_.py", line 223, in request
+    raise HTTPException(response, data)
+discord.errors.HTTPException: 400 Bad Request (error code: 40060): Interaction has already been acknowledged.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\tree.py", line 1310, in _call
+    await command._invoke_with_namespace(interaction, namespace)
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\commands.py", line 883, in _invoke_with_namespace
+    return await self._do_call(interaction, transformed_values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\commands.py", line 876, in _do_call
+    raise CommandInvokeError(self, e) from e
+discord.app_commands.errors.CommandInvokeError: Command 'profile' raised an exception: HTTPException: 400 Bad Request (error code: 40060): Interaction has already been acknowledged.

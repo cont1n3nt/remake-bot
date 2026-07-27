@@ -12,6 +12,8 @@ from bot.config.constants import (
     COL_TOTAL_COINS, COL_TOTAL_XP, COL_RANK,
     COL_REFERRAL_COUNT, COL_REFERRAL_ROLE, COL_BOOSTER,
     COL_TOTAL_TURNOVER,
+    COL_DB_ID, COL_DB_NAME, COL_DB_CATEGORY,
+    COL_DB_PRICE_BUY, COL_DB_PRICE_SELL, COL_DB_EMOJI, COL_DB_UPDATED,
     DATA_START_ROW, MAX_RETRIES, RETRY_MIN_WAIT,
 )
 
@@ -260,3 +262,106 @@ class SheetsRepository:
             if h_value and h_value.strip():
                 return True
         return False
+
+    # ------------------------------------------------------------------ #
+    #  База предметов (DataBase AA:AG)                                    #
+    # ------------------------------------------------------------------ #
+
+    @_retry
+    def get_all_items(self) -> list[dict]:
+        """Return all items from the DataBase section (AA:AG columns)."""
+        vals = self._sheet.get(f"AA{DATA_START_ROW}:AG{self._sheet.row_count}")
+        items = []
+        for row in vals:
+            if len(row) < 2 or not str(row[1]).strip():
+                continue
+            try:
+                items.append({
+                    "id": int(row[0]) if row[0] else 0,
+                    "name": str(row[1]).strip(),
+                    "category": str(row[2]).strip() if len(row) > 2 else "",
+                    "price_buy": self._parse_float(row[3]) if len(row) > 3 else None,
+                    "price_sell": self._parse_float(row[4]) if len(row) > 4 else None,
+                    "emoji": str(row[5]).strip() if len(row) > 5 else "",
+                    "updated_at": str(row[6]).strip() if len(row) > 6 else "",
+                })
+            except (ValueError, IndexError):
+                continue
+        return items
+
+    @_retry
+    def find_item(self, name: str) -> Optional[dict]:
+        """Find item by name in the DataBase (column AB)."""
+        cell = self._sheet.find(name, in_column=COL_DB_NAME)
+        if cell is None:
+            return None
+        row = self._sheet.row_values(cell.row)
+        return {
+            "id": self._parse_int(row[COL_DB_ID - 1]) if len(row) >= COL_DB_ID else 0,
+            "name": str(row[COL_DB_NAME - 1]).strip() if len(row) >= COL_DB_NAME else name,
+            "category": str(row[COL_DB_CATEGORY - 1]).strip() if len(row) >= COL_DB_CATEGORY else "",
+            "price_buy": self._parse_float(row[COL_DB_PRICE_BUY - 1]) if len(row) >= COL_DB_PRICE_BUY else None,
+            "price_sell": self._parse_float(row[COL_DB_PRICE_SELL - 1]) if len(row) >= COL_DB_PRICE_SELL else None,
+            "emoji": str(row[COL_DB_EMOJI - 1]).strip() if len(row) >= COL_DB_EMOJI else "",
+            "updated_at": str(row[COL_DB_UPDATED - 1]).strip() if len(row) >= COL_DB_UPDATED else "",
+        }
+
+    @_retry
+    def _db_next_id(self) -> int:
+        items = self.get_all_items()
+        return max((it["id"] for it in items), default=0) + 1
+
+    @_retry
+    def upsert_item(self, name: str, category: str,
+                    price_buy: Optional[float] = None,
+                    price_sell: Optional[float] = None,
+                    emoji: str = "") -> dict:
+        """Insert or update an item in the DataBase."""
+        from datetime import datetime, timezone, timedelta
+        now = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%d.%m.%Y %H:%M")
+        existing = self.find_item(name)
+        if existing:
+            row_num = None
+            cell = self._sheet.find(name, in_column=COL_DB_NAME)
+            if cell:
+                row_num = cell.row
+            updates = {}
+            if category:
+                updates[COL_DB_CATEGORY] = category
+            if price_buy is not None:
+                updates[COL_DB_PRICE_BUY] = price_buy
+            if price_sell is not None:
+                updates[COL_DB_PRICE_SELL] = price_sell
+            if emoji:
+                updates[COL_DB_EMOJI] = emoji
+            updates[COL_DB_UPDATED] = now
+            for col, val in updates.items():
+                self._sheet.update_cell(row_num, col, val)
+            existing.update(updates)
+            existing["updated_at"] = now
+            return existing
+        new_id = self._db_next_id()
+        row = [new_id, name, category,
+               price_buy if price_buy is not None else "",
+               price_sell if price_sell is not None else "",
+               emoji, now]
+        self._sheet.append_row(row)
+        return {
+            "id": new_id, "name": name, "category": category,
+            "price_buy": price_buy, "price_sell": price_sell,
+            "emoji": emoji, "updated_at": now,
+        }
+
+    @_retry
+    def delete_item(self, name: str) -> bool:
+        """Delete item by name from the DataBase."""
+        cell = self._sheet.find(name, in_column=COL_DB_NAME)
+        if cell is None:
+            return False
+        self._sheet.delete_rows(cell.row)
+        return True
+
+    @_retry
+    def get_transactions(self, start_row: int = DATA_START_ROW, end_row: int = 2000) -> list[list]:
+        """Get all transaction rows (A:H columns)."""
+        return self._sheet.get(f"A{start_row}:H{end_row}")

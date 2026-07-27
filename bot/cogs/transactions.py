@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 
 import discord
 from discord import app_commands
@@ -8,6 +7,7 @@ from discord.ext import commands
 
 from bot.services.sheets_service import SheetsService
 from bot.utils.embeds import transaction_confirmation_embed, error_embed
+from bot.utils.calculator import safe_calc
 
 logger = logging.getLogger("bot")
 
@@ -39,12 +39,12 @@ class TransactionsCog(commands.Cog):
         self.bot = bot
         self._sheets_service = sheets_service
 
-    @app_commands.command(name="add")
+    @app_commands.command(name="add", description="📝 (Админ) Записать новую сделку в Google Таблицу (сумма, тип, ник) с авто-калькулятором")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.describe(
         тип="Тип сделки",
         ник="Ник игрока",
-        сумма="Сумма сделки",
+        сумма="Сумма сделки (поддерживает выражения: 727 540 + 110 222)",
         ник_пригласившего="Ник того, кто пригласил игрока (необязательно)",
     )
     @app_commands.choices(тип=[
@@ -59,17 +59,15 @@ class TransactionsCog(commands.Cog):
         сумма: str,
         ник_пригласившего: str | None = None,
     ) -> None:
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         nickname = ник.strip()
         referrer = ник_пригласившего.strip() if ник_пригласившего else None
 
         try:
-            cleaned = re.sub(r'\s+', '', сумма)
-            cleaned = cleaned.replace("₽", "").replace("руб", "").replace(",", ".")
-            amount = float(cleaned)
-        except ValueError:
-            await interaction.followup.send(embed=error_embed("Некорректная сумма"), ephemeral=True)
+            amount = safe_calc(сумма)
+        except Exception:
+            await interaction.followup.send(embed=error_embed("Некорректное выражение в сумме."), ephemeral=True)
             return
 
         if amount <= 0:
