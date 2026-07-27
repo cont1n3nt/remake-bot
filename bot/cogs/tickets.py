@@ -278,25 +278,44 @@ class TicketCog(commands.Cog):
     async def tag(
         self, interaction: discord.Interaction, user: discord.User,
     ) -> None:
-        """Отправляет пользователю ЛС со ссылкой на текущий тикет-канал."""
+        """Отправляет пользователю Embed-уведомление в ЛС со ссылкой на канал."""
         await interaction.response.defer(ephemeral=True)
+
+        # Embed-карточка уведомления
+        embed = discord.Embed(
+            title="📢 Уведомление по тикету",
+            description=(
+                f"Здравствуйте, {user.mention}!\n"
+                f"В вашем активном тикете {interaction.channel.mention} поступило "
+                f"новое сообщение. Команда ожидает вашего ответа, чтобы продолжить "
+                f"сделку или решить вопрос.\n"
+                f"Пожалуйста, вернитесь в чат, когда будете готовы!"
+            ),
+            colour=discord.Color.brand_green(),
+        )
+        embed.add_field(
+            name="🔮 От Главы Шёпота",
+            value="Команда «Клондайк Шёпота»",
+            inline=False,
+        )
+        # Аватарка сервера в footer
+        icon = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
+        embed.set_footer(
+            text="Маркетплейс «Клондайк Шёпота»",
+            icon_url=icon,
+        )
+        embed.timestamp = discord.utils.utcnow()
 
         # Кнопка-ссылка на канал
         view = discord.ui.View()
         view.add_item(discord.ui.Button(
-            label="Перейти к тикету",
+            label="🔗 Перейти к тикету",
             url=interaction.channel.jump_url,
             style=discord.ButtonStyle.link,
         ))
 
-        content = (
-            f"ℹ️ **Уведомление о тикете**\n"
-            f"Пользователь {interaction.user.mention} приглашает вас в тикет "
-            f"в канале {interaction.channel.mention}."
-        )
-
         try:
-            await user.send(content=content, view=view)
+            await user.send(embed=embed, view=view)
             await interaction.followup.send(
                 f"✅ Уведомление отправлено пользователю {user.mention}.",
                 ephemeral=True,
