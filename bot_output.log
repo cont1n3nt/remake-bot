@@ -1,0 +1,8 @@
+2026-07-27 17:56:57 [WARNING] discord.client: PyNaCl is not installed, voice will NOT be supported
+2026-07-27 17:56:57 [WARNING] discord.ext.commands.bot: Privileged message content intent is missing, commands may not work as expected.
+2026-07-27 17:56:57 [INFO] discord.client: logging in using static token
+2026-07-27 17:56:58 [INFO] bot: Commands synced
+2026-07-27 17:56:59 [INFO] discord.gateway: Shard ID None has connected to Gateway (Session ID: ea81ef9896c69943ff4a30d58a440b5f).
+2026-07-27 17:57:01 [INFO] bot: Bot logged in as Связной#8197
+2026-07-27 17:57:02 [WARNING] bot: В категории Продажа бустов нет текстовых каналов
+2026-07-27 17:57:02 [WARNING] bot: В категории Заказ бустов нет текстовых каналов

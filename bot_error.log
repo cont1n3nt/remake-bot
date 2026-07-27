@@ -1,8 +1,3 @@
-Traceback (most recent call last):
-  File "C:\Users\user\Desktop\code\bot\bot.py", line 20, in <module>
-    from discord import app_commands
-  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\__init__.py", line 12, in <module>
-    from .commands import *
-  File "C:\Users\user\Desktop\code\bot\venv\Lib\site-packages\discord\app_commands\commands.py", line 51, in <module>
-    from ..enums import AppCommandOptionType, AppCommandType, ChannelType, Locale
-ModuleNotFoundError: No module named 'discord.enums'
+[2026-07-27 17:56:57] [WARNING ] discord.ext.commands.bot: Privileged message content intent is missing, commands may not work as expected.
+[2026-07-27 17:56:57] [INFO    ] discord.client: logging in using static token
+[2026-07-27 17:56:59] [INFO    ] discord.gateway: Shard ID None has connected to Gateway (Session ID: ea81ef9896c69943ff4a30d58a440b5f).

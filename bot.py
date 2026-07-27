@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 import discord
-from discord import app_commands
+from discord import Object, app_commands
 from discord.ext import commands
 
 logger = logging.getLogger("bot")
@@ -707,7 +707,8 @@ class TicketFormView(discord.ui.View):
         super().__init__(timeout=None)
     @discord.ui.button(label="📝 Заполнить форму", style=discord.ButtonStyle.primary, custom_id="ticket_form:open")
     async def open_form(self, interaction: discord.Interaction, _b: discord.ui.Button):
-        cat = next((n for n, c in CATEGORY_CHANNELS.items() if c == interaction.channel_id), None)
+        ch_id = interaction.channel.category_id if hasattr(interaction.channel, "category_id") else interaction.channel_id
+        cat = next((n for n, c in CATEGORY_CHANNELS.items() if c == ch_id), None)
         if cat is None:
             await interaction.response.send_message("Это не канал тикета.", ephemeral=True); return
         await interaction.response.send_modal(TicketFormModal(cat))
@@ -781,6 +782,12 @@ async def _ensure_form_messages(bot: commands.Bot) -> None:
         ch = bot.get_channel(cid)
         if ch is None:
             logger.warning("Канал %s (ID %s) не найден", category, cid); continue
+        # Если это категория — берём первый текстовый канал внутри
+        if isinstance(ch, discord.CategoryChannel):
+            text_ch = next((c for c in ch.text_channels), None)
+            if text_ch is None:
+                logger.warning("В категории %s нет текстовых каналов", category); continue
+            ch = text_ch
         try:
             exists = False
             async for msg in ch.history(limit=30):
@@ -1354,8 +1361,9 @@ def main() -> None:
     @bot.event
     async def on_message(message: discord.Message) -> None:
         if message.author.bot: return
-        if not is_monitored(message.channel.id) and message.channel.id not in CATEGORY_CHANNELS.values(): return
-        if message.channel.id in CATEGORY_CHANNELS.values():
+        _in_cat = message.channel.category_id in CATEGORY_CHANNELS.values() if hasattr(message.channel, "category_id") else False
+        if not is_monitored(message.channel.id) and not _in_cat: return
+        if _in_cat:
             images = [a for a in message.attachments if a.content_type and a.content_type.startswith("image/")]
             if not images: return
             await message.add_reaction("⏳")
