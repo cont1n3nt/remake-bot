@@ -23,13 +23,17 @@ class ItemsCog(commands.Cog):
         self.bot = bot
         self._repo = repo
 
+    @staticmethod
+    def _clean_choice_name(it: dict) -> str:
+        """Return clean item name without emoji codes for dropdown display."""
+        return it["name"]
+
     async def _autocomplete_items(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
         items = await asyncio.to_thread(self._repo.get_all_items)
         matches = [it for it in items if current.lower() in it["name"].lower()]
-        guild = interaction.guild
         return [
             app_commands.Choice(
-                name=f"{resolve_emoji(it.get('emoji', ''), guild)} {it['name']}" if it.get("emoji") else it["name"],
+                name=self._clean_choice_name(it),
                 value=it["name"],
             )
             for it in matches[:25]
@@ -38,10 +42,9 @@ class ItemsCog(commands.Cog):
     async def _autocomplete_resources(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
         items = [it for it in (await asyncio.to_thread(self._repo.get_all_items)) if it["category"] == "resource"]
         matches = [it for it in items if current.lower() in it["name"].lower()]
-        guild = interaction.guild
         return [
             app_commands.Choice(
-                name=f"{resolve_emoji(it.get('emoji', ''), guild)} {it['name']}" if it.get("emoji") else it["name"],
+                name=self._clean_choice_name(it),
                 value=it["name"],
             )
             for it in matches[:25]
@@ -50,10 +53,9 @@ class ItemsCog(commands.Cog):
     async def _autocomplete_boosts(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
         items = [it for it in (await asyncio.to_thread(self._repo.get_all_items)) if it["category"] == "boost"]
         matches = [it for it in items if current.lower() in it["name"].lower()]
-        guild = interaction.guild
         return [
             app_commands.Choice(
-                name=f"{resolve_emoji(it.get('emoji', ''), guild)} {it['name']}" if it.get("emoji") else it["name"],
+                name=self._clean_choice_name(it),
                 value=it["name"],
             )
             for it in matches[:25]

@@ -346,6 +346,15 @@ class SheetsRepository:
         }
 
     @_retry
+    def find_item_by_name_and_category(self, name: str, category: str) -> Optional[dict]:
+        """Find item by name AND category. Case-insensitive for both."""
+        items = self.get_all_items()
+        for it in items:
+            if it["name"].strip().lower() == name.strip().lower() and it["category"].strip().lower() == category.strip().lower():
+                return it
+        return None
+
+    @_retry
     def _db_next_id(self) -> int:
         items = self.get_all_items()
         return max((it["id"] for it in items), default=0) + 1
@@ -417,25 +426,26 @@ class SheetsRepository:
             return None
 
     @_retry
-    def _update_price_in_sheet(self, ws, item_name: str, price: float, name_col: int = 1, price_col: int = 2) -> bool:
-        """Find item by name in a worksheet and update its price.
-        
-        Scans column A for item name, updates price in column B.
-        Returns True if found and updated.
-        """
+    def _find_item_cell_in_sheet(self, ws, item_name: str) -> tuple:
+        """Find item name in ANY column of a worksheet.
+        Returns (row_index, col_index) 1-based, or (None, None) if not found.
+        Writes price to cell LEFT of the found name cell."""
         try:
-            names = ws.col_values(name_col)
-            for i, val in enumerate(names):
-                if val.strip().lower() == item_name.lower():
-                    ws.update_cell(i + 1, price_col, price)
-                    return True
+            all_vals = ws.get_all_values()
+            for row_idx, row in enumerate(all_vals):
+                for col_idx, val in enumerate(row):
+                    if val.strip().lower() == item_name.lower():
+                        return (row_idx + 1, col_idx + 1)
         except Exception:
             pass
-        return False
+        return (None, None)
 
     @_retry
     def sync_prices_to_sheets(self) -> dict[str, int]:
         """Sync prices from DataBase to 3 external sheets.
+        
+        Searches for item names in ANY column, updates price in cell LEFT of name.
+        Matches by both item_name AND category.
         
         Returns:
             dict with counts: resource, skup_boost, boost
@@ -448,7 +458,9 @@ class SheetsRepository:
         if ws_skup:
             for it in items:
                 if it["category"] == "resource" and it.get("price_buy") is not None:
-                    if self._update_price_in_sheet(ws_skup, it["name"], it["price_buy"]):
+                    row_i, col_i = self._find_item_cell_in_sheet(ws_skup, it["name"])
+                    if row_i is not None and col_i > 1:
+                        ws_skup.update_cell(row_i, col_i - 1, it["price_buy"])
                         result["resource"] += 1
 
         # 2) Resource items → Скуп бустов
@@ -456,7 +468,9 @@ class SheetsRepository:
         if ws_skup_boost:
             for it in items:
                 if it["category"] == "resource" and it.get("price_buy") is not None:
-                    if self._update_price_in_sheet(ws_skup_boost, it["name"], it["price_buy"]):
+                    row_i, col_i = self._find_item_cell_in_sheet(ws_skup_boost, it["name"])
+                    if row_i is not None and col_i > 1:
+                        ws_skup_boost.update_cell(row_i, col_i - 1, it["price_buy"])
                         result["skup_boost"] += 1
 
         # 3) Boost items → Продажа бустов (только верхняя таблица до "Себестоимость")
@@ -465,18 +479,16 @@ class SheetsRepository:
             try:
                 all_vals = ws_boost_sale.get_all_values()
                 limit_row = len(all_vals)
-                # Find "Себестоимость" row to stop updating before it
                 for i, row in enumerate(all_vals):
                     if row and "Себестоимость" in str(row[0]):
                         limit_row = i
                         break
                 for it in items:
                     if it["category"] == "boost" and it.get("price_sell") is not None:
-                        for i in range(min(limit_row, len(all_vals))):
-                            if all_vals[i] and all_vals[i][0].strip().lower() == it["name"].lower():
-                                ws_boost_sale.update_cell(i + 1, 2, it["price_sell"])
-                                result["boost"] += 1
-                                break
+                        row_i, col_i = self._find_item_cell_in_sheet(ws_boost_sale, it["name"])
+                        if row_i is not None and col_i > 1 and row_i <= limit_row:
+                            ws_boost_sale.update_cell(row_i, col_i - 1, it["price_sell"])
+                            result["boost"] += 1
             except Exception:
                 pass
 

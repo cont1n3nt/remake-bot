@@ -168,7 +168,7 @@ class TransactionsCog(commands.Cog):
                 role_mention = _role_mention(new_rank, RANK_ROLES)
                 msg = (
                     f"🎉 **Выдача ранговой роли!**\n\n"
-                    f"1️⃣ Пользователь: пользователь сервера\n"
+                    f"1️⃣ Пользователь: {interaction.user.mention}\n"
                     f"2️⃣ Игровой никнейм: `{nickname}`\n"
                     f"3️⃣ Полученная роль: {role_mention}\n\n"
                     f"Поздравляем с получением новой роли! 🌟"
@@ -179,7 +179,7 @@ class TransactionsCog(commands.Cog):
                 role_mention = _role_mention(new_referral_role, REFERRAL_ROLES)
                 msg = (
                     f"🎉 **Выдача реферальной роли!**\n\n"
-                    f"1️⃣ Пользователь: пользователь сервера\n"
+                    f"1️⃣ Пользователь: {interaction.user.mention}\n"
                     f"2️⃣ Игровой никнейм: `{referrer}`\n"
                     f"3️⃣ Полученная роль: {role_mention}\n\n"
                     f"Поздравляем с получением новой роли! 🌟"

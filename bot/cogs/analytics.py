@@ -86,36 +86,38 @@ class AnalyticsCog(commands.Cog):
 
     def _build_analytics_embed(self, txs: list[dict], title: str) -> discord.Embed:
         players = {}
-        total_prodazha = 0.0
-        total_pokupka = 0.0
+        total_bot_buy = 0.0
+        total_bot_sell = 0.0
         for tx in txs:
             nick = tx["nickname"]
             if nick not in players:
-                players[nick] = {"prodazha": 0.0, "pokupka": 0.0}
+                players[nick] = {"bot_buy": 0.0, "bot_sell": 0.0}
             if tx["is_buy_checkbox"]:
-                players[nick]["prodazha"] += tx["amount"]
-                total_prodazha += tx["amount"]
+                players[nick]["bot_buy"] += tx["amount"]
+                total_bot_buy += tx["amount"]
             if tx["is_sell_checkbox"]:
-                players[nick]["pokupka"] += tx["amount"]
-                total_pokupka += tx["amount"]
+                players[nick]["bot_sell"] += tx["amount"]
+                total_bot_sell += tx["amount"]
         embed = discord.Embed(title=title, colour=discord.Colour.blue())
         lines = []
-        for nick, data in sorted(players.items(), key=lambda x: x[1]["prodazha"] + x[1]["pokupka"], reverse=True):
-            total = data["prodazha"] + data["pokupka"]
-            lines.append(
-                f"• {nick}: Продажа {_fmt(data['prodazha'])}₽ | "
-                f"Покупка {_fmt(data['pokupka'])}₽ | "
-                f"Оборот {_fmt(total)}₽"
-            )
+        for nick, data in sorted(players.items(), key=lambda x: x[1]["bot_buy"] + x[1]["bot_sell"], reverse=True):
+            total = data["bot_buy"] + data["bot_sell"]
+            parts = [f"• {nick}"]
+            if data["bot_buy"] > 0:
+                parts.append(f"Продажа {_fmt(data['bot_buy'])}₽")
+            if data["bot_sell"] > 0:
+                parts.append(f"Покупка {_fmt(data['bot_sell'])}₽")
+            parts.append(f"Оборот {_fmt(total)}₽")
+            lines.append(" | ".join(parts))
         if lines:
             embed.description = "```\n" + "\n".join(lines[:30]) + "```"
             if len(lines) > 30:
                 embed.set_footer(text=f"… и ещё {len(lines) - 30} игроков")
         else:
             embed.description = "Нет сделок за выбранный период."
-        profit = total_prodazha - total_pokupka
-        embed.add_field(name="Общий оборот продаж", value=f"{_fmt(total_prodazha)} ₽")
-        embed.add_field(name="Общий оборот покупок", value=f"{_fmt(total_pokupka)} ₽")
+        profit = total_bot_sell - total_bot_buy
+        embed.add_field(name="Общий оборот продаж", value=f"{_fmt(total_bot_sell)} ₽")
+        embed.add_field(name="Общий оборот покупок", value=f"{_fmt(total_bot_buy)} ₽")
         embed.add_field(
             name="Чистая прибыль",
             value=f"{_fmt(profit)} ₽" if profit >= 0 else f"-{_fmt(abs(profit))} ₽",

@@ -159,6 +159,12 @@ class RoleService:
         """Синхронизировать роли участника: снять все старые, надеть целевую."""
         target_id = role_map.get(target_name) if target_name else None
 
+        # Если роль не найдена в таблице — ищем по названию на сервере
+        if target_name and target_id is None:
+            role_obj = discord.utils.get(member.guild.roles, name=target_name)
+            if role_obj:
+                target_id = role_obj.id
+
         # Определяем, какая роль из группы уже надета
         current_role = self._get_current_from_map(member, role_map)
 
@@ -176,11 +182,13 @@ class RoleService:
                     pass
 
         # Надеваем новую роль (если есть)
-        if target_id:
-            role_obj = member.guild.get_role(target_id)
-            if role_obj is None:
-                logger.warning("Роль ID %s (group=%s) не найдена на сервере", target_id, group_label)
-                return None
+        role_obj = member.guild.get_role(target_id) if target_id else None
+        if role_obj is None and target_name:
+            role_obj = discord.utils.get(member.guild.roles, name=target_name)
+        if role_obj is None and target_name:
+            logger.warning("Роль '%s' (group=%s) не найдена на сервере", target_name, group_label)
+            return None
+        if role_obj:
             try:
                 await member.add_roles(role_obj, reason=f"Auto {group_label}")
             except discord.Forbidden:

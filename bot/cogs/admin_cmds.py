@@ -259,7 +259,9 @@ class AdminCmdsCog(commands.Cog):
             else:
                 reader = csv.DictReader(io.StringIO(content))
 
-            old_items = {it["name"]: it for it in await asyncio.to_thread(self._repo.get_all_items)}
+            all_items = await asyncio.to_thread(self._repo.get_all_items)
+            old_items = {it["name"]: it for it in all_items}
+            old_items_by_name_cat = {(it["name"].lower(), it["category"].lower()): it for it in all_items}
             guild = interaction.guild
 
             count = 0
@@ -276,11 +278,14 @@ class AdminCmdsCog(commands.Cog):
                 pb = float(pb_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if pb_raw else None
                 ps = float(ps_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if ps_raw else None
                 emoji = row.get("Эмодзи", "").strip()
-                old = old_items.get(name)
+                old = old_items_by_name_cat.get((name.lower(), cat.lower()))
+                if old is None:
+                    old = old_items.get(name)
                 old_pb = old.get("price_buy") if old else None
                 old_ps = old.get("price_sell") if old else None
+                existing_cat = old["category"] if old else cat
                 await asyncio.to_thread(
-                    self._repo.upsert_item, name, cat,
+                    self._repo.upsert_item, name, existing_cat,
                     price_buy=pb, price_sell=ps, emoji=emoji,
                 )
                 count += 1
@@ -299,24 +304,27 @@ class AdminCmdsCog(commands.Cog):
                         has_change = True
                     if has_change:
                         change_str = " | ".join(line_parts)
-                        if cat == "resource":
+                        if existing_cat == "resource":
                             changes_resources.append(f"• {change_str}")
-                        elif cat == "boost":
+                        elif existing_cat == "boost":
                             changes_boosts.append(f"• {change_str}")
                         else:
                             changes_skup_boost.append(f"• {change_str}")
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
             msg = f"✅ Импортировано {count} позиций."
             all_changes = []
+            cat_sections = []
             if changes_resources:
-                all_changes.append("🛒 **Изменение цен на ресурсы:**")
-                all_changes.extend(changes_resources)
+                cat_sections.append(("🛒 **Изменение цен на ресурсы:**", changes_resources))
             if changes_boosts:
-                all_changes.append("🍔 **Изменение цен на бусты:**")
-                all_changes.extend(changes_boosts)
+                cat_sections.append(("🍔 **Изменение цен на бусты:**", changes_boosts))
             if changes_skup_boost:
-                all_changes.append("🍾 **Изменение цен на скуп бустов:**")
-                all_changes.extend(changes_skup_boost)
+                cat_sections.append(("🍾 **Изменение цен на скуп бустов:**", changes_skup_boost))
+            for idx, (header, items_list) in enumerate(cat_sections):
+                if idx > 0:
+                    all_changes.append("")
+                all_changes.append(header)
+                all_changes.extend(items_list)
             if all_changes:
                 all_text = "\n".join(all_changes)
                 if len(all_text) <= 1900:

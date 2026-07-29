@@ -83,7 +83,7 @@ class AuditLogger:
         self,
         interaction: discord.Interaction,
     ) -> None:
-        """Глобальное логирование вызова любой слэш-команды."""
+        """Глобальное логирование вызова любой слэш-команды (только Embed)."""
         channel = self._bot.get_channel(self._channel_id)
         if channel is None:
             return
@@ -98,12 +98,20 @@ class AuditLogger:
                 if "value" in opt:
                     params.append(f"{opt['name']}={opt['value']}")
 
-        params_str = f" [{', '.join(params)}]" if params else ""
+        params_str = ", ".join(params) if params else ""
         role_label = "Админ" if isinstance(user, discord.Member) and user.guild_permissions.administrator else "Игрок"
 
         try:
-            await channel.send(
-                f"`[{now}]` {role_label} {user.mention} использовал команду `{command_name}`{params_str}"
+            embed = Embed(
+                title="Вызов команды",
+                colour=Colour.blurple(),
+                timestamp=discord.utils.utcnow(),
             )
+            embed.add_field(name="Пользователь", value=f"{user.mention} (`{user.id}`)")
+            embed.add_field(name="Команда", value=f"`{command_name}`")
+            if params_str:
+                embed.add_field(name="Параметры", value=params_str, inline=False)
+            embed.set_footer(text=f"{role_label} • {now}")
+            await channel.send(embed=embed)
         except Exception as e:
             logger.warning("command usage log failed: %s", e)
