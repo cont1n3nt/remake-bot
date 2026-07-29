@@ -31,6 +31,13 @@ COMMAND_LABELS = {
 
 class AuditLogger:
 
+    # Команды, которые сами вызывают log() с уже читаемыми деталями сделанных
+    # изменений — для них log_command_usage() не должен слать второй, менее
+    # информативный embed с сырыми параметрами по той же команде.
+    _SELF_LOGGED_COMMANDS = {
+        "setprice", "setboost", "sync_prices", "set_rank", "set_referral", "add", "new_price",
+    }
+
     def __init__(self, bot: discord.Client, channel_id: int) -> None:
         self._bot = bot
         self._channel_id = channel_id
@@ -96,36 +103,20 @@ class AuditLogger:
         self,
         interaction: discord.Interaction,
     ) -> None:
-        channel = self._bot.get_channel(self._channel_id)
-        if channel is None:
+        """Универсальный лог для команд, которые не логируют себя сами (см.
+        _SELF_LOGGED_COMMANDS) — переиспользует единственный формат log(),
+        чтобы в аудит-канале не было двух разных по виду записей на одну команду."""
+        if interaction.command is None:
+            return
+        command_key = interaction.command.name
+        if command_key in self._SELF_LOGGED_COMMANDS:
             return
 
-        command_name = f"/{interaction.command.name}" if interaction.command else "/unknown"
-        user = interaction.user
+        command_name = f"/{command_key}"
+        details: dict[str, str] = {}
+        if interaction.data and "options" in interaction.data:
+            for opt in interaction.data["options"]:
+                if "value" in opt:
+                    details[opt["name"]] = opt["value"]
 
-        try:
-            embed = Embed(
-                title=command_name,
-                colour=Colour.blurple(),
-            )
-            embed.add_field(name="👤 Пользователь", value=f"@{user.name} ({user.id})", inline=False)
-            embed.add_field(name="⚙ Команда", value=command_name, inline=False)
-
-            if interaction.data and "options" in interaction.data:
-                param_parts = []
-                for opt in interaction.data["options"]:
-                    if "value" in opt:
-                        val = opt["value"]
-                        param_parts.append(f"{opt['name']}: {val}")
-                if param_parts:
-                    embed.add_field(
-                        name="📄 Параметры",
-                        value="\n".join(param_parts),
-                        inline=False,
-                    )
-
-            embed.add_field(name="🕒 Время", value=self._now_str(), inline=False)
-            embed.set_footer(text="Связной | Логи")
-            await channel.send(embed=embed)
-        except Exception as e:
-            logger.warning("command usage log failed: %s", e)
+        await self.log(interaction.user, command_name, details or None)

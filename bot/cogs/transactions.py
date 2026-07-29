@@ -102,6 +102,18 @@ class TransactionsCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("Сумма должна быть больше 0"), ephemeral=True)
             return
 
+        await self.record_transaction(interaction, тип, nickname, amount, referrer)
+
+    async def record_transaction(
+        self,
+        interaction: discord.Interaction,
+        tx_type: str,
+        nickname: str,
+        amount: float,
+        referrer: str | None = None,
+    ) -> None:
+        """Единая логика фиксации сделки: используется и командой /add, и кнопкой
+        «✅ Подтвердить» под заявкой в тикете — чтобы поведение никогда не расходилось."""
         old_rank = ""
         old_referral_role = ""
 
@@ -128,9 +140,9 @@ class TransactionsCog(commands.Cog):
             pass
 
         try:
-            await asyncio.to_thread(self._sheets_service.save_transaction, nickname, тип, amount, referrer)
+            await asyncio.to_thread(self._sheets_service.save_transaction, nickname, tx_type, amount, referrer)
         except Exception as e:
-            logger.error("add save error by %s: %s", interaction.user, e)
+            logger.error("record_transaction save error by %s: %s", interaction.user, e)
             await interaction.followup.send(embed=error_embed(f"Ошибка при сохранении: {e}"), ephemeral=True)
             return
 
@@ -155,7 +167,7 @@ class TransactionsCog(commands.Cog):
             colour=discord.Colour.green(),
         )
         embed.add_field(name="Ник", value=nickname)
-        embed.add_field(name="Тип", value="Покупка" if тип == "buy" else "Продажа")
+        embed.add_field(name="Тип", value="Покупка" if tx_type == "buy" else "Продажа")
         embed.add_field(name="Сумма", value=_amount_str(amount))
         if referrer:
             embed.add_field(name="Ник пригласившего", value=referrer)
@@ -193,6 +205,19 @@ class TransactionsCog(commands.Cog):
                 await interaction.channel.send(msg)
         except Exception as e:
             logger.warning("rank/referral check failed: %s", e)
+
+        try:
+            audit = interaction.client.audit_logger
+            details = {
+                "Ник": nickname,
+                "Тип": "Покупка" if tx_type == "buy" else "Продажа",
+                "Сумма": f"{_amount_str(amount)} ₽",
+            }
+            if referrer:
+                details["Пригласил"] = referrer
+            await audit.log(interaction.user, "/add", details)
+        except Exception:
+            pass
 
     @add.error
     async def add_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:

@@ -40,16 +40,14 @@ class AnalyticsCog(commands.Cog):
         self._repo = repo
 
     def _get_transactions_for_period(self, start: date, end: date) -> list[dict]:
+        # Каждая строка уже уникальна по своей позиции в таблице — дедуп по
+        # содержимому (tuple(row)) раньше мог по ошибке отбросить честную
+        # сделку, если у двух разных строк случайно совпали все колонки.
         vals = self._repo.get_transactions()
         txs = []
-        seen_rows = set()
         for row in vals:
             if len(row) < 5:
                 continue
-            row_key = tuple(row)
-            if row_key in seen_rows:
-                continue
-            seen_rows.add(row_key)
             try:
                 raw_date = str(row[0]).strip() if row[0] else ""
                 if not raw_date:

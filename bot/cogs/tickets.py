@@ -90,6 +90,22 @@ def _load_request_meta(message_id: int) -> Optional[dict]:
         return None
 
 
+def _load_request_meta_by_channel(channel_id: int) -> Optional[tuple[int, dict]]:
+    """Find the published request card for a ticket channel (most recently saved one)."""
+    try:
+        with open(REQUESTS_FILE, encoding="utf-8") as f:
+            meta = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    match_id, match_data = None, None
+    for message_id_str, data in meta.items():
+        if data.get("channel_id") == channel_id:
+            match_id, match_data = message_id_str, data
+    if match_id is None:
+        return None
+    return int(match_id), match_data
+
+
 async def _delete_request_meta(message_id: int) -> None:
     def _sync():
         try:
@@ -101,6 +117,82 @@ async def _delete_request_meta(message_id: int) -> None:
         except Exception:
             pass
     await asyncio.to_thread(_sync)
+
+
+# ------------------------------------------------------------------ #
+#  Единая точка построения карточки заявки (продажа / заказ бустов)  #
+#  Используется при первой публикации, после изменения количества    #
+#  бустов и после редактирования заявки — чтобы оформление никогда   #
+#  не расходилось между тремя местами вызова.                        #
+# ------------------------------------------------------------------ #
+
+def _build_request_card_embed(
+    interaction: discord.Interaction,
+    text_data: dict,
+    delivery: str,
+    boosts: list[dict],
+    total_price: float,
+    category: str,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"📋 Новая заявка — {category}",
+        colour=discord.Colour.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+
+    nick = text_data.get("game_nick", "").strip()
+    if nick:
+        embed.add_field(name="Ник в игре", value=nick)
+
+    if delivery:
+        embed.add_field(name="Способ", value=f"📮 {delivery}" if delivery == "Почта" else f"🤝 {delivery}")
+
+    deadline = text_data.get("deadline", "").strip()
+    if deadline:
+        embed.add_field(name="До даты и времени", value=deadline)
+
+    ref_game = text_data.get("referrer_game", "").strip()
+    if ref_game:
+        embed.add_field(name="Кто пригласил (игра)", value=ref_game)
+
+    ref_discord = text_data.get("referrer_discord", "").strip()
+    if ref_discord:
+        embed.add_field(name="Кто пригласил (Discord)", value=ref_discord)
+
+    if boosts:
+        items_map = {}
+        try:
+            all_items = interaction.client.repo.get_all_items()
+            for it in all_items:
+                if it.get("category") == "boost":
+                    items_map[it["name"].lower()] = it
+        except Exception:
+            pass
+        boost_lines = []
+        for b in boosts:
+            it = items_map.get(b["name"].lower())
+            e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
+            emoji_str = e + " " if e else ""
+            qty = b.get("quantity", 1)
+            boost_lines.append(f"{emoji_str}{b['name']} | x{qty}")
+        embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
+        embed.add_field(name="Общая стоимость", value=f"{_fmt(total_price)} ₽", inline=False)
+
+    # Отдельный блок для почты — без скобок, отдельно от способа получения
+    if delivery == "Почта":
+        sep = "━" * 24
+        if "Заказ" in category:
+            mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте деньги сразу на указанную почту.\n{sep}"
+        else:
+            mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте ресурсы сразу на указанную почту.\n{sep}"
+        if embed.description:
+            embed.description += f"\n\n{mail_text}"
+        else:
+            embed.description = mail_text
+
+    embed.set_footer(text="Клондайк Шёпота")
+    return embed
 
 
 # ------------------------------------------------------------------ #
@@ -201,7 +293,7 @@ class BaseOrderModal(discord.ui.Modal):
         boosts = store.get("selected_boosts", [])
         total_price = store.get("total_price", 0.0)
 
-        embed = self._build_request_embed(interaction, text_data, delivery, boosts, total_price)
+        embed = _build_request_card_embed(interaction, text_data, delivery, boosts, total_price, store.get("category", ""))
 
         msg = await interaction.channel.send(embed=embed, view=EditRequestView())
         message_id = msg.id
@@ -257,73 +349,6 @@ class BaseOrderModal(discord.ui.Modal):
         )
 
         form_store.clear(interaction.user.id)
-
-    def _build_request_embed(
-        self, interaction: discord.Interaction,
-        text_data: dict, delivery: str, boosts: list[dict],
-        total_price: float,
-    ) -> discord.Embed:
-        category = form_store.get(interaction.user.id).get("category", "")
-        embed = discord.Embed(
-            title=f"📋 Новая заявка — {category}",
-            colour=discord.Colour.green(),
-            timestamp=discord.utils.utcnow(),
-        )
-        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-
-        nick = text_data.get("game_nick", "").strip()
-        if nick:
-            embed.add_field(name="Ник в игре", value=nick)
-
-        if delivery:
-            embed.add_field(name="Способ", value=f"📮 {delivery}" if delivery == "Почта" else f"🤝 {delivery}")
-
-        deadline = text_data.get("deadline", "").strip()
-        if deadline:
-            embed.add_field(name="До даты и времени", value=deadline)
-
-        ref_game = text_data.get("referrer_game", "").strip()
-        if ref_game:
-            embed.add_field(name="Кто пригласил (игра)", value=ref_game)
-
-        ref_discord = text_data.get("referrer_discord", "").strip()
-        if ref_discord:
-            embed.add_field(name="Кто пригласил (Discord)", value=ref_discord)
-
-        if boosts:
-            items_map = {}
-            all_items = []
-            try:
-                all_items = interaction.client.repo.get_all_items()
-                for it in all_items:
-                    items_map[it["name"].lower()] = it
-            except Exception:
-                pass
-            boost_lines = []
-            for b in boosts:
-                it = items_map.get(b["name"].lower())
-                e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
-                emoji_str = e + " " if e else ""
-                qty = b.get("quantity", 1)
-                boost_lines.append(f"{emoji_str}{b['name']} | x{qty}")
-            embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
-            embed.add_field(name="Общая стоимость", value=f"{_fmt(total_price)} ₽", inline=False)
-
-        # Отдельный блок для почты
-        if delivery == "Почта":
-            sep = "\u2501" * 24
-            if "Заказ" in category:
-                mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте деньги сразу на указанную почту.\n{sep}"
-            else:
-                mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте ресурсы сразу на указанную почту.\n{sep}"
-            if embed.description:
-                embed.description += f"\n\n{mail_text}"
-            else:
-                embed.description = mail_text
-
-        embed.set_footer(text="Клондайк Шёпота")
-        return embed
-
 
 class BoostOrderModal(BaseOrderModal):
 
@@ -665,56 +690,7 @@ class BoostQuantityView(discord.ui.View):
             delivery = edit_request_data.get("delivery_method", "")
             category = edit_request_data.get("category", "Заказ бустов")
 
-            embed = discord.Embed(
-                title=f"📋 Новая заявка — {category}",
-                colour=discord.Colour.green(),
-                timestamp=discord.utils.utcnow(),
-            )
-            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-
-            nick = text_data.get("game_nick", "").strip()
-            if nick:
-                embed.add_field(name="Ник в игре", value=nick)
-
-            if delivery:
-                embed.add_field(name="Способ", value=f"📮 {delivery}" if delivery == "Почта" else f"🤝 {delivery}")
-
-            deadline = text_data.get("deadline", "").strip()
-            if deadline:
-                embed.add_field(name="До даты и времени", value=deadline)
-
-            ref_game = text_data.get("referrer_game", "").strip()
-            if ref_game:
-                embed.add_field(name="Кто пригласил (игра)", value=ref_game)
-
-            ref_discord = text_data.get("referrer_discord", "").strip()
-            if ref_discord:
-                embed.add_field(name="Кто пригласил (Discord)", value=ref_discord)
-
-            if enriched:
-                boost_lines = []
-                for b in enriched:
-                    it = items_map.get(b["name"].lower())
-                    e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
-                    emoji_str = e + " " if e else ""
-                    qty = b.get("quantity", 1)
-                    boost_lines.append(f"{emoji_str}{b['name']} | x{qty}")
-                embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
-                embed.add_field(name="Общая стоимость", value=f"{_fmt(total)} ₽", inline=False)
-
-            # Почта блок
-            if delivery == "Почта":
-                sep = "\u2501" * 24
-                if "Заказ" in category:
-                    mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте деньги сразу на указанную почту.\n{sep}"
-                else:
-                    mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте ресурсы сразу на указанную почту.\n{sep}"
-                if embed.description:
-                    embed.description += f"\n\n{mail_text}"
-                else:
-                    embed.description = mail_text
-
-            embed.set_footer(text="Клондайк Шёпота")
+            embed = _build_request_card_embed(interaction, text_data, delivery, enriched, total, category)
 
             await _save_request_meta(interaction.channel_id, edit_message_id, interaction.user.id, edit_request_data)
 
@@ -931,7 +907,7 @@ class EditRequestModal(discord.ui.Modal):
         total_price = self.request_data.get("total_price", 0.0)
         category = self.request_data.get("category", "")
 
-        embed = self._build_edit_embed(interaction, text_data, delivery, boosts, total_price, category)
+        embed = _build_request_card_embed(interaction, text_data, delivery, boosts, total_price, category)
 
         await _save_request_meta(interaction.channel_id, self.message_id, interaction.user.id, self.request_data)
 
@@ -962,70 +938,6 @@ class EditRequestModal(discord.ui.Modal):
             })
         except Exception:
             pass
-
-    def _build_edit_embed(
-        self, interaction: discord.Interaction,
-        text_data: dict, delivery: str, boosts: list[dict],
-        total_price: float, category: str,
-    ) -> discord.Embed:
-        embed = discord.Embed(
-            title=f"📋 Новая заявка — {category}",
-            colour=discord.Colour.green(),
-            timestamp=discord.utils.utcnow(),
-        )
-        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-
-        nick = text_data.get("game_nick", "").strip()
-        if nick:
-            embed.add_field(name="Ник в игре", value=nick)
-
-        if delivery:
-            embed.add_field(name="Способ", value=f"📮 {delivery}" if delivery == "Почта" else f"🤝 {delivery}")
-
-        deadline = text_data.get("deadline", "").strip()
-        if deadline:
-            embed.add_field(name="До даты и времени", value=deadline)
-
-        ref_game = text_data.get("referrer_game", "").strip()
-        if ref_game:
-            embed.add_field(name="Кто пригласил (игра)", value=ref_game)
-
-        ref_discord = text_data.get("referrer_discord", "").strip()
-        if ref_discord:
-            embed.add_field(name="Кто пригласил (Discord)", value=ref_discord)
-
-        if boosts:
-            items_map = {}
-            try:
-                all_items = interaction.client.repo.get_all_items()
-                for it in all_items:
-                    items_map[it["name"].lower()] = it
-            except Exception:
-                pass
-            boost_lines = []
-            for b in boosts:
-                it = items_map.get(b["name"].lower())
-                e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
-                emoji_str = e + " " if e else ""
-                qty = b.get("quantity", 1)
-                boost_lines.append(f"{emoji_str}{b['name']} | x{qty}")
-            embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
-            embed.add_field(name="Общая стоимость", value=f"{_fmt(total_price)} ₽", inline=False)
-
-        # Почта блок
-        if delivery == "Почта":
-            sep = "\u2501" * 24
-            if "Заказ" in category:
-                mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте деньги сразу на указанную почту.\n{sep}"
-            else:
-                mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте ресурсы сразу на указанную почту.\n{sep}"
-            if embed.description:
-                embed.description += f"\n\n{mail_text}"
-            else:
-                embed.description = mail_text
-
-        embed.set_footer(text="Клондайк Шёпота")
-        return embed
 
 
 class EditRequestView(discord.ui.View):
@@ -1106,56 +1018,23 @@ class ConfirmModal(discord.ui.Modal):
         category = self.request_data.get("category", "")
         nick = text_data.get("game_nick", "").strip().lower()
         referrer_game = text_data.get("referrer_game", "").strip().lower()
-        referrer_discord = text_data.get("referrer_discord", "").strip().lower()
 
         if not nick:
             await interaction.followup.send("В заявке не указан игровой ник.", ephemeral=True)
             return
 
-        # Определяем тип сделки
-        if "Заказ" in category:
-            tx_type = "buy"
-        elif "Продажа" in category:
-            tx_type = "sell"
-        else:
-            tx_type = "sell"
+        # Игрок продаёт боту (категория "Продажа ...") -> бот покупает -> tx_type="buy"
+        # Игрок заказывает/покупает у бота (категория "Заказ ...") -> бот продаёт -> tx_type="sell"
+        tx_type = "buy" if "Продажа" in category else "sell"
 
-        # Сохраняем сделку
-        try:
-            await asyncio.to_thread(
-                interaction.client.sheets_service.save_transaction,
-                nick, tx_type, amount, referrer_game or None,
-            )
-        except Exception as e:
-            await interaction.followup.send(f"Ошибка при сохранении: {e}", ephemeral=True)
+        transactions_cog = interaction.client.get_cog("TransactionsCog")
+        if transactions_cog is None:
+            await interaction.followup.send("⚠️ Модуль сделок недоступен.", ephemeral=True)
             return
 
-        await interaction.followup.send("✅ Сделка подтверждена и сохранена.", ephemeral=True)
-
-        try:
-            embed = discord.Embed(
-                title="Сделка зафиксирована",
-                colour=discord.Colour.green(),
-            )
-            embed.add_field(name="Ник", value=nick)
-            embed.add_field(name="Тип", value="Покупка" if tx_type == "buy" else "Продажа")
-            embed.add_field(name="Сумма", value=_fmt(amount))
-            if referrer_game:
-                embed.add_field(name="Ник пригласившего", value=referrer_game)
-            await interaction.channel.send(embed=embed)
-        except Exception:
-            pass
-
-        try:
-            audit = interaction.client.audit_logger
-            await audit.log(interaction.user, "/confirm_deal", {
-                "Ник": nick,
-                "Сумма": f"{_fmt(amount)} ₽",
-                "Категория": category,
-                "Пригласил": referrer_game or "—",
-            })
-        except Exception:
-            pass
+        # Полностью переиспользуем логику /add (ensure_user, ранги, реферальные роли,
+        # сообщение с просьбой оставить отзыв, единый аудит-лог) — без дублирования кода.
+        await transactions_cog.record_transaction(interaction, tx_type, nick, amount, referrer_game or None)
 
 
 # ------------------------------------------------------------------ #
@@ -1225,45 +1104,6 @@ class TicketCog(commands.Cog):
         bot.add_view(self._edit_view)
         self._sending_locks: set[int] = set()
 
-    async def cog_load(self) -> None:
-        for category, channel_id in CATEGORY_CHANNELS.items():
-            await self._ensure_form_message(channel_id, category)
-
-    async def _find_existing_form_message(self, channel) -> Optional[discord.Message]:
-        try:
-            async for msg in channel.history(limit=50):
-                if msg.author == self.bot.user and msg.components:
-                    for comp in msg.components:
-                        for child in comp.children:
-                            if child.custom_id == "ticket_form:open":
-                                return msg
-        except Exception:
-            pass
-        return None
-
-    async def _ensure_form_message(self, channel_id: int, category: str) -> None:
-        channel = self.bot.get_channel(channel_id)
-        if channel is None:
-            logger.warning("Канал %s (ID %s) не найден", category, channel_id)
-            return
-        if isinstance(channel, discord.CategoryChannel):
-            text_ch = next((c for c in channel.text_channels), None)
-            if text_ch is None:
-                logger.warning("В категории %s нет текстовых каналов", category)
-                return
-            channel = text_ch
-
-        existing = await self._find_existing_form_message(channel)
-        if existing is not None:
-            embed = self._build_form_embed(category)
-            try:
-                await existing.edit(embed=embed)
-            except Exception:
-                pass
-            return
-
-        await self._send_form_to_channel(channel, category)
-
     @commands.Cog.listener()
     async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
         if not isinstance(channel, discord.TextChannel):
@@ -1328,6 +1168,20 @@ class TicketCog(commands.Cog):
             colour=discord.Colour.blurple(),
         )
 
+    async def _find_existing_form_message(self, channel) -> Optional[discord.Message]:
+        """Guard against a duplicate form send if this channel already got one
+        (e.g. a redelivered gateway event for the same ticket channel)."""
+        try:
+            async for msg in channel.history(limit=50):
+                if msg.author == self.bot.user and msg.components:
+                    for comp in msg.components:
+                        for child in comp.children:
+                            if child.custom_id == "ticket_form:open":
+                                return msg
+        except Exception:
+            pass
+        return None
+
     async def _send_form_to_channel(self, channel, category: str) -> None:
         ch_id = channel.id
         if ch_id in self._sending_locks:
@@ -1335,11 +1189,11 @@ class TicketCog(commands.Cog):
             return
         self._sending_locks.add(ch_id)
         try:
-            embed = self._build_form_embed(category)
             existing = await self._find_existing_form_message(channel)
             if existing is not None:
-                await existing.edit(embed=embed)
+                logger.debug("Form already present in channel %s, skipping duplicate send", ch_id)
                 return
+            embed = self._build_form_embed(category)
             await channel.send(embed=embed, view=self._view)
         except Exception as e:
             logger.warning("Не удалось отправить форму в %s: %s", channel.id, e)
@@ -1350,7 +1204,8 @@ class TicketCog(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
-        is_ticket = message.channel.id in CATEGORY_CHANNELS.values()
+        category_id = getattr(message.channel, "category_id", None)
+        is_ticket = category_id is not None and category_id in CATEGORY_CHANNELS.values()
         is_monitored = message.channel.id in MONITORED_CHANNELS
         if not is_ticket and not is_monitored:
             return
@@ -1360,8 +1215,34 @@ class TicketCog(commands.Cog):
         await message.add_reaction("⏳")
         for attachment in images:
             await self._process_image(message, attachment)
+        if is_ticket:
+            await self._attach_screenshot_to_request(message, images[0])
         await message.remove_reaction("⏳", self.bot.user)
         await message.add_reaction("✅")
+
+    async def _attach_screenshot_to_request(self, message: discord.Message, attachment: discord.Attachment) -> None:
+        """Если в этом канале уже опубликована заявка — встраиваем скриншот в её
+        Embed через set_image (attachment), а не оставляем отдельным вложением."""
+        meta = await asyncio.to_thread(_load_request_meta_by_channel, message.channel.id)
+        if meta is None:
+            return
+        request_message_id, _data = meta
+        try:
+            request_msg = await message.channel.fetch_message(request_message_id)
+        except (discord.NotFound, discord.HTTPException):
+            return
+        if not request_msg.embeds:
+            return
+        embed = request_msg.embeds[0]
+        try:
+            fp = await attachment.to_file()
+        except Exception:
+            return
+        embed.set_image(url=f"attachment://{fp.filename}")
+        try:
+            await request_msg.edit(embed=embed, attachments=[fp])
+        except (discord.HTTPException, discord.Forbidden) as e:
+            logger.warning("Не удалось прикрепить скриншот к заявке %s: %s", request_message_id, e)
 
     async def _process_image(self, message: discord.Message, attachment: discord.Attachment) -> None:
         try:

@@ -4,6 +4,7 @@ import discord
 from discord import Embed, Colour
 
 from bot.models.user import User
+from bot.services.ocr_service import _fmt as _fmt_plain
 
 
 _EMOJI_RE = re.compile(r"<a?:\w+:\d+>")
@@ -24,6 +25,20 @@ def resolve_emoji(emoji_str: str, guild: discord.Guild | None = None) -> str:
         if e.name == name:
             return str(e)
     return ""
+
+
+def format_price_change(
+    it: dict,
+    old_price: float | None,
+    new_price: float,
+    guild: discord.Guild | None = None,
+) -> str:
+    """Единый формат строки изменения цены для /setprice, /setboost, /new_price
+    и соответствующих аудит-логов: "• emoji Название | old ₽ → new ₽"."""
+    e = resolve_emoji(it.get("emoji", ""), guild)
+    emoji_str = e + " " if e else ""
+    old_str = _fmt_plain(old_price) if old_price is not None else "—"
+    return f"• {emoji_str}{it['name']} | {old_str} ₽ → {_fmt_plain(new_price)} ₽"
 
 
 def _fmt(n: float | int) -> str:

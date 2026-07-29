@@ -1,7 +1,6 @@
 import asyncio
 import csv
 import io
-import json
 import logging
 import math
 import os
@@ -13,11 +12,11 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.repositories.sheets_repository import SheetsRepository
-from bot.utils.embeds import error_embed, resolve_emoji
+from bot.utils.embeds import error_embed, resolve_emoji, format_price_change
+from bot.cogs.items import _sync_prices_from_db
 
 logger = logging.getLogger("bot")
 
-PRICES_FILE = "prices.json"
 DATA_START_ROW = 3
 
 
@@ -141,15 +140,10 @@ class AdminCmdsCog(commands.Cog):
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
             return
         lines = []
-        seen = set()
         day_counters = {}
         for row in reversed(vals):
             if len(row) < 5:
                 continue
-            key = tuple(row)
-            if key in seen:
-                continue
-            seen.add(key)
             raw_date = str(row[0]).strip() if row[0] else ""
             if not raw_date:
                 continue
@@ -301,11 +295,9 @@ class AdminCmdsCog(commands.Cog):
                 )
                 count += 1
                 if old and (old_pb != pb or old_ps != ps):
-                    e = resolve_emoji(old.get("emoji", ""), guild)
-                    emoji_str = e + " " if e else ""
+                    item_for_line = {"name": name, "emoji": old.get("emoji", "")}
                     if old_pb != pb and pb is not None and pb != 0:
-                        old_str = _fmt(old_pb) if old_pb is not None else "—"
-                        line = f"• {emoji_str}{name} | {old_str} ₽ → {_fmt(pb)} ₽"
+                        line = format_price_change(item_for_line, old_pb, pb, guild=guild)
                         if existing_cat == "resource":
                             changes_resources.append(line)
                         elif existing_cat == "boost":
@@ -313,8 +305,7 @@ class AdminCmdsCog(commands.Cog):
                         else:
                             changes_skup_boost.append(line)
                     if old_ps != ps and ps is not None and ps != 0:
-                        old_str = _fmt(old_ps) if old_ps is not None else "—"
-                        line = f"• {emoji_str}{name} | {old_str} ₽ → {_fmt(ps)} ₽"
+                        line = format_price_change(item_for_line, old_ps, ps, guild=guild)
                         if existing_cat == "resource":
                             changes_resources.append(line)
                         elif existing_cat == "boost":
@@ -367,19 +358,6 @@ class AdminCmdsCog(commands.Cog):
         if isinstance(e, app_commands.MissingPermissions):
             try: await i.response.send_message("Недостаточно прав.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав.", ephemeral=True)
-
-
-def _sync_prices_from_db(repo: SheetsRepository) -> dict[str, float]:
-    items = repo.get_all_items()
-    prices = {}
-    for it in items:
-        if it.get("price_buy") is not None:
-            prices[it["name"]] = it["price_buy"]
-        if it.get("price_sell") is not None:
-            prices[f"{it['name']} (boost)"] = it["price_sell"]
-    with open(PRICES_FILE, "w", encoding="utf-8") as f:
-        json.dump(prices, f, ensure_ascii=False, indent=2)
-    return prices
 
 
 async def setup(bot: commands.Bot) -> None:

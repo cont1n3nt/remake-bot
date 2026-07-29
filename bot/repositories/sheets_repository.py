@@ -491,43 +491,61 @@ class SheetsRepository:
             elif it["category"] == "boost" and it.get("price_sell") is not None:
                 boost_by_name[name_lower] = it
 
+        errors: list[str] = []
+
         def _sync_sheet(ws, column_pairs, max_rows, lookup, price_key):
             if ws is None:
                 return 0
-            count = 0
+            cells = []
             for name_col, price_col in column_pairs:
                 try:
                     vals = ws.col_values(name_col)
-                    for row_idx, val in enumerate(vals):
-                        if row_idx >= max_rows:
-                            break
-                        name = val.strip().lower()
-                        if name in lookup:
-                            price = lookup[name].get(price_key)
-                            if price is not None:
-                                ws.update_cell(row_idx + 1, price_col, price)
-                                count += 1
-                except Exception:
-                    pass
-            return count
+                except APIError as e:
+                    errors.append(f"{ws.title}: не удалось прочитать колонку {name_col}: {e}")
+                    continue
+                for row_idx, val in enumerate(vals):
+                    if row_idx >= max_rows:
+                        break
+                    name = val.strip().lower()
+                    if name in lookup:
+                        price = lookup[name].get(price_key)
+                        if price is not None:
+                            cells.append(gspread.Cell(row_idx + 1, price_col, price))
+            if not cells:
+                return 0
+            # Один батч-запрос на весь лист вместо одной ячейки за раз —
+            # иначе при большом числе совпадений упираемся в квоту Google Sheets API
+            # (ошибки раньше молча проглатывались, из-за чего часть цен не обновлялась).
+            try:
+                ws.update_cells(cells, value_input_option="USER_ENTERED")
+            except APIError as e:
+                errors.append(f"{ws.title}: ошибка записи {len(cells)} ячеек: {e}")
+                return 0
+            return len(cells)
 
-        result = {"resource": 0, "skup_boost": 0, "boost": 0, "not_found": []}
+        result = {"resource": 0, "skup_boost": 0, "boost": 0, "not_found": [], "errors": errors}
 
         # Собираем все названия из листов для отчёта
         all_sheet_names = set()
 
         # 1) Мейн скуп → resource items, max 31 rows, full column pairs
         ws_skup = self._get_worksheet(SYNC_SHEET_SKUP)
+        if ws_skup is None:
+            errors.append(f"Лист «{SYNC_SHEET_SKUP}» не найден")
         result["resource"] = _sync_sheet(ws_skup, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_SKUP, resource_by_name, "price_buy")
         all_sheet_names |= self._collect_sheet_names(ws_skup, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_SKUP)
 
         # 2) Скуп бустов → resource items, max 9 rows, half column pairs
         ws_skup_boost = self._get_worksheet(SYNC_SHEET_SKUP_BOOST)
+        if ws_skup_boost is None:
+            errors.append(f"Лист «{SYNC_SHEET_SKUP_BOOST}» не найден")
         result["skup_boost"] = _sync_sheet(ws_skup_boost, SYNC_COLUMN_PAIRS_HALF, SYNC_MAX_ROWS_SKUP_BOOST, resource_by_name, "price_buy")
         all_sheet_names |= self._collect_sheet_names(ws_skup_boost, SYNC_COLUMN_PAIRS_HALF, SYNC_MAX_ROWS_SKUP_BOOST)
 
         # 3) БУСТЫ → boost items, max 9 rows, full column pairs
         ws_boost_sale = self._get_worksheet(SYNC_SHEET_BOOST_SALE)
+        if ws_boost_sale is None:
+            errors.append(f"Лист «{SYNC_SHEET_BOOST_SALE}» не найден")
         result["boost"] = _sync_sheet(ws_boost_sale, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_BOOST, boost_by_name, "price_sell")
         all_sheet_names |= self._collect_sheet_names(ws_boost_sale, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_BOOST)
 

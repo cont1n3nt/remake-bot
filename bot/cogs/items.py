@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from bot.repositories.sheets_repository import SheetsRepository
 from bot.utils.calculator import safe_calc
-from bot.utils.embeds import error_embed, resolve_emoji
+from bot.utils.embeds import error_embed, resolve_emoji, format_price_change
 
 logger = logging.getLogger("bot")
 
@@ -60,12 +60,6 @@ class ItemsCog(commands.Cog):
             for it in matches[:25]
         ]
 
-    def _format_price_change(self, it: dict, old_price: Optional[float], new_price: float, guild: Optional[discord.Guild] = None) -> str:
-        e = resolve_emoji(it.get("emoji", ""), guild)
-        emoji_str = e + " " if e else ""
-        old_str = _fmt(old_price) if old_price is not None else "—"
-        return f"• {emoji_str}{it['name']} | {old_str} ₽ → {_fmt(new_price)} ₽"
-
     async def _send_price_change_embed(self, interaction: discord.Interaction, cat_label: str, cat_emoji: str, changes: list[str]):
         if not changes:
             return
@@ -95,7 +89,7 @@ class ItemsCog(commands.Cog):
             old_price = it.get("price_buy")
             await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_buy=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
-            change = self._format_price_change(it, old_price, amount, guild=interaction.guild)
+            change = format_price_change(it, old_price, amount, guild=interaction.guild)
             await self._send_price_change_embed(interaction, "ресурсов", "📦", [change])
             try:
                 audit = interaction.client.audit_logger
@@ -130,7 +124,7 @@ class ItemsCog(commands.Cog):
             old_price = it.get("price_sell")
             await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_sell=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
-            change = self._format_price_change(it, old_price, amount, guild=interaction.guild)
+            change = format_price_change(it, old_price, amount, guild=interaction.guild)
             await self._send_price_change_embed(interaction, "бустов", "🚀", [change])
             try:
                 audit = interaction.client.audit_logger
@@ -223,7 +217,26 @@ class ItemsCog(commands.Cog):
                 msg += f"\n⚠️ Не найдены в листах ({len(not_found)}): {', '.join(not_found[:20])}"
                 if len(not_found) > 20:
                     msg += f" и ещё {len(not_found) - 20}"
+            errors = result.get("errors", [])
+            if errors:
+                msg += f"\n❌ Ошибки при записи ({len(errors)}): " + "; ".join(errors[:10])
+                if len(errors) > 10:
+                    msg += f" и ещё {len(errors) - 10}"
             await interaction.followup.send(msg, ephemeral=True)
+            try:
+                audit = interaction.client.audit_logger
+                audit_lines = [
+                    f"Мейн скуп: {result.get('resource', 0)} обновлено",
+                    f"Скуп бустов: {result.get('skup_boost', 0)} обновлено",
+                    f"БУСТЫ: {result.get('boost', 0)} обновлено",
+                ]
+                if not_found:
+                    audit_lines.append(f"Не найдено: {len(not_found)}")
+                if errors:
+                    audit_lines.append(f"Ошибки: {len(errors)}")
+                await audit.log(interaction.user, "/sync_prices", audit_lines)
+            except Exception:
+                pass
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 
@@ -232,12 +245,6 @@ class ItemsCog(commands.Cog):
         if isinstance(e, app_commands.MissingPermissions):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
-
-
-def _fmt(n: float) -> str:
-    if n == int(n):
-        return str(int(n))
-    return f"{n:.2f}".rstrip("0").rstrip(".")
 
 
 def _db_prices_dict(repo: SheetsRepository) -> dict[str, float]:
