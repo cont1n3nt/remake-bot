@@ -7,7 +7,6 @@ logger = logging.getLogger("bot")
 
 
 def _fmt_mention(user: discord.User | discord.Member) -> str:
-    """Формат: @Username (ID)"""
     return f"{user.mention} ({user.id})"
 
 
@@ -40,6 +39,9 @@ class AuditLogger:
         self._bot = bot
         self._channel_id = channel_id
 
+    def _now_str(self) -> str:
+        return discord.utils.utcnow().strftime("%d.%m.%Y • %H:%M")
+
     async def log(
         self,
         user: discord.User | discord.Member,
@@ -56,28 +58,30 @@ class AuditLogger:
             embed = Embed(
                 title=title,
                 colour=Colour.green() if success else Colour.red(),
-                timestamp=discord.utils.utcnow(),
             )
-            embed.add_field(name="Администратор", value=_fmt_mention(user))
+            embed.add_field(name="\U0001f464 Пользователь", value=_fmt_mention(user), inline=False)
+            embed.add_field(name="\u2699\ufe0f Команда", value=command, inline=False)
 
             if details:
                 if isinstance(details, dict):
                     clean_lines = []
                     for k, v in details.items():
                         if v is not None and v != "":
-                            clean_lines.append(f"**{k}:** {v}")
+                            clean_lines.append(f"{k}: {v}")
                     embed.add_field(
-                        name="📝 Детали",
+                        name="\U0001f4c4 Параметры",
                         value="\n".join(clean_lines),
                         inline=False,
                     )
                 else:
                     embed.add_field(
-                        name="📝 Детали",
+                        name="\U0001f4c4 Параметры",
                         value=str(details),
                         inline=False,
                     )
 
+            embed.add_field(name="\U0001f552 Время", value=self._now_str(), inline=False)
+            embed.add_field(name="\U0001f46e Администратор", value=_fmt_mention(user), inline=False)
             embed.set_footer(text="Связной | Логи")
 
             await channel.send(embed=embed)
@@ -88,7 +92,6 @@ class AuditLogger:
         self,
         interaction: discord.Interaction,
     ) -> None:
-        """Глобальное логирование вызова любой слэш-команды (только Embed)."""
         channel = self._bot.get_channel(self._channel_id)
         if channel is None:
             return
@@ -98,22 +101,27 @@ class AuditLogger:
 
         try:
             embed = Embed(
-                title="Вызов команды",
+                title=command_name,
                 colour=Colour.blurple(),
-                timestamp=discord.utils.utcnow(),
             )
-            embed.add_field(name="👤 Пользователь", value=_fmt_mention(user))
-            embed.add_field(name="💻 Команда", value=f"`{command_name}`")
+            embed.add_field(name="\U0001f464 Пользователь", value=_fmt_mention(user), inline=False)
+            embed.add_field(name="\u2699\ufe0f Команда", value=command_name, inline=False)
 
             if interaction.data and "options" in interaction.data:
                 param_parts = []
                 for opt in interaction.data["options"]:
                     if "value" in opt:
                         val = opt["value"]
-                        param_parts.append(f"**{opt['name']}:** {val}")
+                        param_parts.append(f"{opt['name']}: {val}")
                 if param_parts:
-                    embed.add_field(name="⚙️ Параметры", value="\n".join(param_parts), inline=False)
+                    embed.add_field(
+                        name="\U0001f4c4 Параметры",
+                        value="\n".join(param_parts),
+                        inline=False,
+                    )
 
+            embed.add_field(name="\U0001f552 Время", value=self._now_str(), inline=False)
+            embed.add_field(name="\U0001f46e Администратор", value=_fmt_mention(user), inline=False)
             embed.set_footer(text="Связной | Логи")
             await channel.send(embed=embed)
         except Exception as e:

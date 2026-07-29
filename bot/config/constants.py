@@ -41,9 +41,9 @@ RETRY_MIN_WAIT: Final[float] = 1.0
 RETRY_MAX_WAIT: Final[float] = 10.0
 
 # Имена листов для синхронизации цен (/sync_prices)
-SYNC_SHEET_SKUP: Final[str] = "СКУП ПРЕДМЕТОВ"
+SYNC_SHEET_SKUP: Final[str] = "Мейн скуп"
 SYNC_SHEET_SKUP_BOOST: Final[str] = "Скуп бустов"
-SYNC_SHEET_BOOST_SALE: Final[str] = "Продажа бустов"
+SYNC_SHEET_BOOST_SALE: Final[str] = "БУСТЫ"
 
 # Пары столбцов (колонка названия, колонка цены) для синхронизации
 # Формат: (name_col, price_col) — 1-based

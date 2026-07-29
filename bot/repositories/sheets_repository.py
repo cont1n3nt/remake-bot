@@ -453,11 +453,11 @@ class SheetsRepository:
         """Sync prices from DataBase to 3 external sheets using fixed column pairs.
 
         Rules per sheet:
-          1. СКУП ПРЕДМЕТОВ (Мейн скуп) → resource items, max 31 rows
+          1. Мейн скуп → resource items, max 31 rows
              name cols: C,J,Q,X,AE,AL,AS → price cols: D,K,R,Y,AF,AM,AT
           2. Скуп бустов → resource items, max 9 rows
              name cols: C,J,Q,X → price cols: D,K,R,Y
-          3. Продажа бустов → boost items, max 9 rows
+          3. БУСТЫ → boost items, max 9 rows
              name cols: C,J,Q,X,AE,AL,AS → price cols: D,K,R,Y,AF,AM,AT
 
         Returns dict with counts: resource, skup_boost, boost.
@@ -495,7 +495,7 @@ class SheetsRepository:
 
         result = {"resource": 0, "skup_boost": 0, "boost": 0}
 
-        # 1) СКУП ПРЕДМЕТОВ → resource items, max 31 rows, full column pairs
+        # 1) Мейн скуп → resource items, max 31 rows, full column pairs
         ws_skup = self._get_worksheet(SYNC_SHEET_SKUP)
         result["resource"] = _sync_sheet(ws_skup, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_SKUP, resource_by_name, "price_buy")
 
@@ -503,7 +503,7 @@ class SheetsRepository:
         ws_skup_boost = self._get_worksheet(SYNC_SHEET_SKUP_BOOST)
         result["skup_boost"] = _sync_sheet(ws_skup_boost, SYNC_COLUMN_PAIRS_HALF, SYNC_MAX_ROWS_SKUP_BOOST, resource_by_name, "price_buy")
 
-        # 3) Продажа бустов → boost items, max 9 rows, full column pairs
+        # 3) БУСТЫ → boost items, max 9 rows, full column pairs
         ws_boost_sale = self._get_worksheet(SYNC_SHEET_BOOST_SALE)
         result["boost"] = _sync_sheet(ws_boost_sale, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_BOOST, boost_by_name, "price_sell")
 

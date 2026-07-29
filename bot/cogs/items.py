@@ -211,7 +211,7 @@ class ItemsCog(commands.Cog):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
-    @app_commands.command(name="sync_prices", description="🔄 (Админ) Синхронизировать цены из базы в листы Мейн скуп, Скуп бустов, Продажа бустов")
+    @app_commands.command(name="sync_prices", description="🔄 (Админ) Синхронизировать цены из базы в листы Мейн скуп, Скуп бустов, БУСТЫ")
     @app_commands.checks.has_permissions(administrator=True)
     async def sync_prices(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

@@ -392,7 +392,16 @@ class BoostSelectionView(discord.ui.View):
         if not self._selected:
             await interaction.response.send_message("Выберите хотя бы один буст.", ephemeral=True)
             return
-        form_store.set(interaction.user.id, "selected_boosts", [{"name": n, "quantity": 1} for n in self._selected])
+        edit_request_data = form_store.get(interaction.user.id).get("edit_request_data")
+        existing_quantities = {}
+        if edit_request_data:
+            for b in edit_request_data.get("selected_boosts", []):
+                existing_quantities[b["name"].lower()] = b.get("quantity", 1)
+        boosts = []
+        for n in self._selected:
+            qty = existing_quantities.get(n.lower(), 1)
+            boosts.append({"name": n, "quantity": qty})
+        form_store.set(interaction.user.id, "selected_boosts", boosts)
         view = await BoostQuantityView.create(interaction)
         await interaction.response.edit_message(content="**Настройте количество каждого буста:**", view=view)
 
@@ -610,13 +619,85 @@ class BoostQuantityView(discord.ui.View):
         form_store.set(interaction.user.id, "total_price", total)
 
         store = form_store.get(interaction.user.id)
-        text_data = store.get("text_data", {})
-        delivery = store.get("delivery_method", "")
-        category = store.get("category", "Заказ бустов")
+        edit_message_id = store.get("edit_message_id")
+        edit_request_data = store.get("edit_request_data")
 
-        modal = BoostOrderModal(category)
-        await interaction.response.defer(ephemeral=True)
-        await modal._publish(interaction)
+        if edit_message_id and edit_request_data:
+            edit_request_data["selected_boosts"] = enriched
+            edit_request_data["total_price"] = total
+
+            text_data = edit_request_data.get("text_data", {})
+            delivery = edit_request_data.get("delivery_method", "")
+            category = edit_request_data.get("category", "Заказ бустов")
+
+            embed = discord.Embed(
+                title=f"📋 Новая заявка — {category}",
+                colour=discord.Colour.green(),
+                timestamp=discord.utils.utcnow(),
+            )
+            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+
+            nick = text_data.get("game_nick", "").strip()
+            if nick:
+                embed.add_field(name="Ник в игре", value=nick)
+
+            if delivery:
+                embed.add_field(name="Способ", value=f"📮 {delivery}" if delivery == "Почта" else f"🤝 {delivery}")
+
+            deadline = text_data.get("deadline", "").strip()
+            if deadline:
+                embed.add_field(name="До даты и времени", value=deadline)
+
+            ref_game = text_data.get("referrer_game", "").strip()
+            if ref_game:
+                embed.add_field(name="Кто пригласил (игра)", value=ref_game)
+
+            ref_discord = text_data.get("referrer_discord", "").strip()
+            if ref_discord:
+                embed.add_field(name="Кто пригласил (Discord)", value=ref_discord)
+
+            if enriched:
+                boost_lines = []
+                for b in enriched:
+                    it = items_map.get(b["name"].lower())
+                    e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
+                    emoji_str = e + " " if e else ""
+                    qty = b.get("quantity", 1)
+                    line_price = b.get("line_total", 0)
+                    boost_lines.append(f"• {emoji_str}{b['name']} — {qty} шт. ({_fmt(line_price)} ₽)")
+                embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
+                embed.add_field(name="Общая стоимость", value=f"{_fmt(total)} ₽", inline=False)
+
+            embed.set_footer(text="Клондайк Шёпота")
+
+            _save_request_meta(interaction.channel_id, edit_message_id, interaction.user.id, edit_request_data)
+
+            try:
+                msg = await interaction.channel.fetch_message(edit_message_id)
+                files = []
+                for a in msg.attachments:
+                    if a.content_type and a.content_type.startswith("image/"):
+                        fp = await a.to_file()
+                        files.append(fp)
+                kwargs = {"embed": embed, "view": EditRequestView()}
+                if files:
+                    kwargs["attachments"] = files[:1]
+                await msg.edit(**kwargs)
+
+                await interaction.response.edit_message(content="✅ Заявка обновлена.", embed=None, view=None)
+            except (discord.NotFound, discord.HTTPException) as e:
+                await interaction.followup.send("⚠️ Не удалось найти заявку для редактирования.", ephemeral=True)
+                logger.warning("Edit failed: message %s not found: %s", edit_message_id, e)
+
+            form_store.clear(interaction.user.id)
+        else:
+            text_data = store.get("text_data", {})
+            delivery = store.get("delivery_method", "")
+            category = store.get("category", "Заказ бустов")
+
+            modal = BoostOrderModal(category)
+            await interaction.response.defer(ephemeral=True)
+            await modal._publish(interaction)
 
 
 # ------------------------------------------------------------------ #
@@ -721,6 +802,16 @@ class EditRequestModal(discord.ui.Modal):
         self.request_data = request_data
         text_data = request_data.get("text_data", {})
 
+        delivery_current = request_data.get("delivery_method", "Почта")
+        self.add_item(discord.ui.TextInput(
+            label="Способ получения",
+            custom_id="delivery_method",
+            required=True,
+            style=discord.TextStyle.short,
+            placeholder="Почта или Трейд",
+            default=delivery_current,
+        ))
+
         self.add_item(discord.ui.TextInput(
             label="Игровой ник",
             custom_id="game_nick",
@@ -757,29 +848,80 @@ class EditRequestModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+
         text_data = {}
+        delivery_method = ""
         for child in self.children:
             if isinstance(child, discord.ui.TextInput):
-                text_data[child.custom_id] = child.value
+                if child.custom_id == "delivery_method":
+                    delivery_method = child.value.strip()
+                else:
+                    text_data[child.custom_id] = child.value
 
         self.request_data["text_data"] = text_data
-        boosts = self.request_data.get("selected_boosts", [])
-        delivery = self.request_data.get("delivery_method", "")
-
-        all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
-        item_map = {it["name"].lower(): it for it in all_items}
-
-        total_price = 0.0
-        for b in boosts:
-            it = item_map.get(b["name"].lower())
-            price = it.get("price_sell") if it else None
-            qty = b.get("quantity", 1)
-            line_total = (price or 0) * qty
-            b["line_total"] = line_total
-            total_price += line_total
-        self.request_data["total_price"] = total_price
+        self.request_data["delivery_method"] = delivery_method
 
         category = self.request_data.get("category", "")
+
+        if "Заказ" in category:
+            form_store.set(interaction.user.id, "edit_message_id", self.message_id)
+            form_store.set(interaction.user.id, "edit_request_data", self.request_data)
+            form_store.set(interaction.user.id, "text_data", text_data)
+            form_store.set(interaction.user.id, "delivery_method", delivery_method)
+            form_store.set(interaction.user.id, "category", category)
+            boosts = self.request_data.get("selected_boosts", [])
+            form_store.set(interaction.user.id, "selected_boosts", boosts)
+
+            selected = [b["name"] for b in boosts]
+            view = await BoostSelectionView.create(interaction, selected)
+            await interaction.followup.send("**Выберите нужные бусты:**", view=view, ephemeral=True)
+        else:
+            await self._update_embed(interaction)
+
+    async def _update_embed(self, interaction: discord.Interaction):
+        text_data = self.request_data.get("text_data", {})
+        delivery = self.request_data.get("delivery_method", "")
+        boosts = self.request_data.get("selected_boosts", [])
+        total_price = self.request_data.get("total_price", 0.0)
+        category = self.request_data.get("category", "")
+
+        embed = self._build_edit_embed(interaction, text_data, delivery, boosts, total_price, category)
+
+        _save_request_meta(interaction.channel_id, self.message_id, interaction.user.id, self.request_data)
+
+        try:
+            msg = await interaction.channel.fetch_message(self.message_id)
+            files = []
+            for a in msg.attachments:
+                if a.content_type and a.content_type.startswith("image/"):
+                    fp = await a.to_file()
+                    files.append(fp)
+            kwargs = {"embed": embed, "view": EditRequestView()}
+            if files:
+                kwargs["attachments"] = files[:1]
+            await msg.edit(**kwargs)
+        except (discord.NotFound, discord.HTTPException) as e:
+            await interaction.followup.send("⚠️ Не удалось найти заявку для редактирования.", ephemeral=True)
+            logger.warning("Edit failed: message %s not found: %s", self.message_id, e)
+            return
+
+        await interaction.followup.send("✅ Заявка обновлена.", ephemeral=True)
+
+        try:
+            audit = interaction.client.audit_logger
+            await audit.log(interaction.user, "/edit_request", {
+                "Категория": category,
+                "Ник в игре": text_data.get("game_nick", "") or "—",
+                "Способ": delivery or "—",
+            })
+        except Exception:
+            pass
+
+    def _build_edit_embed(
+        self, interaction: discord.Interaction,
+        text_data: dict, delivery: str, boosts: list[dict],
+        total_price: float, category: str,
+    ) -> discord.Embed:
         embed = discord.Embed(
             title=f"📋 Новая заявка — {category}",
             colour=discord.Colour.green(),
@@ -807,9 +949,16 @@ class EditRequestModal(discord.ui.Modal):
             embed.add_field(name="Кто пригласил (Discord)", value=ref_discord)
 
         if boosts:
+            items_map = {}
+            try:
+                all_items = interaction.client.repo.get_all_items()
+                for it in all_items:
+                    items_map[it["name"].lower()] = it
+            except Exception:
+                pass
             boost_lines = []
             for b in boosts:
-                it = item_map.get(b["name"].lower())
+                it = items_map.get(b["name"].lower())
                 e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
                 emoji_str = e + " " if e else ""
                 qty = b.get("quantity", 1)
@@ -819,28 +968,7 @@ class EditRequestModal(discord.ui.Modal):
             embed.add_field(name="Общая стоимость", value=f"{_fmt(total_price)} ₽", inline=False)
 
         embed.set_footer(text="Клондайк Шёпота")
-
-        _save_request_meta(interaction.channel_id, self.message_id, interaction.user.id, self.request_data)
-
-        try:
-            msg = await interaction.channel.fetch_message(self.message_id)
-            await msg.edit(embed=embed, view=EditRequestView())
-        except (discord.NotFound, discord.HTTPException) as e:
-            await interaction.followup.send("⚠️ Не удалось найти заявку для редактирования.", ephemeral=True)
-            logger.warning("Edit failed: message %s not found: %s", self.message_id, e)
-            return
-
-        await interaction.followup.send("✅ Заявка обновлена.", ephemeral=True)
-
-        try:
-            audit = interaction.client.audit_logger
-            await audit.log(interaction.user, "/edit_request", {
-                "Категория": category,
-                "Ник в игре": nick or "—",
-                "Способ": delivery or "—",
-            })
-        except Exception:
-            pass
+        return embed
 
 
 class EditRequestView(discord.ui.View):

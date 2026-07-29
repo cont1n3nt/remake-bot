@@ -473,7 +473,7 @@ def _sync_prices_from_db() -> dict[str, float]:
     return prices
 
 def _sync_prices_to_sheets() -> None:
-    """Sync prices from DB to external sheets (Мейн скуп, Скуп бустов, Продажа бустов)."""
+    """Sync prices from DB to external sheets (Мейн скуп, Скуп бустов, БУСТЫ)."""
     try:
         import gspread
         from google.oauth2.service_account import Credentials
@@ -502,9 +502,9 @@ def _sync_prices_to_sheets() -> None:
                                 ws.update_cell(row_idx + 1, price_col, price)
             except Exception:
                 pass
-        _sync_ws("СКУП ПРЕДМЕТОВ", full_pairs, 31, resource_by_name, "price_buy")
+        _sync_ws("Мейн скуп", full_pairs, 31, resource_by_name, "price_buy")
         _sync_ws("Скуп бустов", half_pairs, 9, resource_by_name, "price_buy")
-        _sync_ws("Продажа бустов", full_pairs, 9, boost_by_name, "price_sell")
+        _sync_ws("БУСТЫ", full_pairs, 9, boost_by_name, "price_sell")
     except Exception:
         pass
 
