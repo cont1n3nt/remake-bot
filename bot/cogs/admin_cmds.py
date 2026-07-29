@@ -101,6 +101,34 @@ class AdminCmdsCog(commands.Cog):
         self._repo = repo
 
     # ------------------------------------------------------------------
+    #  LogsView — пагинация для /logs
+    # ------------------------------------------------------------------
+
+    class LogsView(discord.ui.View):
+        def __init__(self, lines: list[str], per_page: int = 20):
+            super().__init__(timeout=180)
+            self.lines = lines
+            self.per_page = per_page
+            self.page = 0
+            self.total_pages = max(1, (len(lines) + per_page - 1) // per_page)
+
+        def _build_text(self) -> str:
+            start = self.page * self.per_page
+            chunk = self.lines[start:start + self.per_page]
+            text = "```\n" + "\n".join(chunk) + "```"
+            return text
+
+        @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary, custom_id="logs_prev")
+        async def prev(self, i: discord.Interaction, _b: discord.ui.Button):
+            self.page = (self.page - 1) % self.total_pages
+            await i.response.edit_message(content=self._build_text(), view=self)
+
+        @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary, custom_id="logs_next")
+        async def nxt(self, i: discord.Interaction, _b: discord.ui.Button):
+            self.page = (self.page + 1) % self.total_pages
+            await i.response.edit_message(content=self._build_text(), view=self)
+
+    # ------------------------------------------------------------------
     #  /logs
     # ------------------------------------------------------------------
     @app_commands.command(name="logs", description="📜 (Админ) Вывести полные логи всех совершенных сделок от новых к старым")
@@ -142,15 +170,12 @@ class AdminCmdsCog(commands.Cog):
             if ref:
                 line += f" | Реферер: {ref}"
             lines.append(line)
-            if len(lines) >= 50:
-                break
         if not lines:
             await interaction.followup.send("Нет записей.", ephemeral=True)
             return
-        text = "```\n" + "\n".join(lines) + "```"
-        if len(text) > 1900:
-            text = "```\n" + "\n".join(lines[:30]) + f"\n… и ещё {len(lines) - 30} записей" + "```"
-        await interaction.followup.send(text, ephemeral=True)
+        view = self.LogsView(lines)
+        text = view._build_text()
+        await interaction.followup.send(text, view=view, ephemeral=True)
 
     @logs.error
     async def logs_error(self, i: discord.Interaction, e: app_commands.AppCommandError):
