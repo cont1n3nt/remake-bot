@@ -56,8 +56,9 @@ class AuditLogger:
             embed = Embed(
                 title=title,
                 colour=Colour.green() if success else Colour.red(),
+                timestamp=discord.utils.utcnow(),
             )
-            embed.add_field(name="👤 Пользователь", value=_fmt_mention(user))
+            embed.add_field(name="Администратор", value=_fmt_mention(user))
 
             if details:
                 if isinstance(details, dict):

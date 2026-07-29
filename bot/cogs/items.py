@@ -90,12 +90,14 @@ class ItemsCog(commands.Cog):
             await interaction.followup.send(change, ephemeral=True)
             try:
                 audit = interaction.client.audit_logger
-                details = {
-                    "Предмет": f"{it['name']} (resource)",
-                    "Цена была": f"{_fmt(old_price) if old_price is not None else '—'} ₽",
-                    "Цена стала": f"{_fmt(amount)} ₽",
-                }
-                await audit.log(interaction.user, "/setprice", details)
+                old_str = f"{_fmt(old_price)} ₽" if old_price is not None else "—"
+                new_str = f"{_fmt(amount)} ₽"
+                await audit.log(interaction.user, "/setprice", {
+                    "Название": it['name'],
+                    "Категория": "resource",
+                    "Цена была": old_str,
+                    "Цена стала": new_str,
+                })
             except Exception:
                 pass
         except Exception as e:
@@ -130,12 +132,14 @@ class ItemsCog(commands.Cog):
             await interaction.followup.send(change, ephemeral=True)
             try:
                 audit = interaction.client.audit_logger
-                details = {
-                    "Предмет": f"{it['name']} (boost)",
-                    "Цена была": f"{_fmt(old_price) if old_price is not None else '—'} ₽",
-                    "Цена стала": f"{_fmt(amount)} ₽",
-                }
-                await audit.log(interaction.user, "/setboost", details)
+                old_str = f"{_fmt(old_price)} ₽" if old_price is not None else "—"
+                new_str = f"{_fmt(amount)} ₽"
+                await audit.log(interaction.user, "/setboost", {
+                    "Название": it['name'],
+                    "Категория": "boost",
+                    "Цена была": old_str,
+                    "Цена стала": new_str,
+                })
             except Exception:
                 pass
         except Exception as e:

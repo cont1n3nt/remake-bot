@@ -261,6 +261,11 @@ class AdminCmdsCog(commands.Cog):
 
             all_items = await asyncio.to_thread(self._repo.get_all_items)
             old_items_by_name_cat = {(it["name"].lower(), it["category"].lower()): it for it in all_items}
+            old_items_by_name = {}
+            for it in all_items:
+                key = it["name"].lower()
+                if key not in old_items_by_name:
+                    old_items_by_name[key] = it
             guild = interaction.guild
 
             count = 0
@@ -278,6 +283,15 @@ class AdminCmdsCog(commands.Cog):
                 ps = float(ps_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if ps_raw else None
                 emoji = row.get("Эмодзи", "").strip()
                 old = old_items_by_name_cat.get((name.lower(), cat.lower()))
+                if old is None:
+                    old_by_name = old_items_by_name.get(name.lower())
+                    if old_by_name is not None and old_by_name["category"].lower() != cat.lower():
+                        await interaction.followup.send(
+                            f"⚠️ Пропущен «{name}»: указана категория «{cat}», "
+                            f"но в базе категория «{old_by_name['category']}». Категорию менять запрещено.",
+                            ephemeral=True,
+                        )
+                        continue
                 old_pb = old.get("price_buy") if old else None
                 old_ps = old.get("price_sell") if old else None
                 existing_cat = old["category"] if old else cat

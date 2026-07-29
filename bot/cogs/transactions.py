@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.services.sheets_service import SheetsService
-from bot.utils.embeds import transaction_confirmation_embed, error_embed
+from bot.utils.embeds import error_embed
 from bot.utils.calculator import safe_calc
 
 logger = logging.getLogger("bot")
@@ -150,17 +150,23 @@ class TransactionsCog(commands.Cog):
             if attempt < 4:
                 await asyncio.sleep(1)
 
-        await interaction.followup.send(
-            embed=transaction_confirmation_embed(nickname, тип, amount, referrer),
-            ephemeral=True,
+        embed = discord.Embed(
+            title="Сделка зафиксирована",
+            colour=discord.Colour.green(),
         )
+        embed.add_field(name="Ник", value=nickname)
+        embed.add_field(name="Тип", value="Покупка" if тип == "buy" else "Продажа")
+        embed.add_field(name="Сумма", value=_amount_str(amount))
+        if referrer:
+            embed.add_field(name="Ник пригласившего", value=referrer)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
         await interaction.channel.send(
             "> 🤝 Сделка успешно завершена!\n"
             "> Спасибо, что выбираете «Клондайк Шёпота». Пожалуйста, уделите пару секунд "
             "и оставьте свой честный отзыв в канале <#1490342809075716237>.\n"
             "> \n"
-            "> Ваш отзыв — это лучшая поддержка для развития нашего проекта и будущего бота! 💚"
+            "> Ваш отзыв — это лучшая поддержка для развития нашего проекта и будущего бота!"
         )
 
         try:
@@ -187,20 +193,6 @@ class TransactionsCog(commands.Cog):
                 await interaction.channel.send(msg)
         except Exception as e:
             logger.warning("rank/referral check failed: %s", e)
-
-        try:
-            audit = interaction.client.audit_logger
-            tx_label = "Покупка" if тип == "buy" else "Продажа"
-            details = {
-                "Никнейм": nickname,
-                "Тип сделки": tx_label,
-                "Сумма": _amount_str(amount),
-            }
-            if referrer:
-                details["Реферер"] = referrer
-            await audit.log(interaction.user, "/add", details)
-        except Exception:
-            pass
 
     @add.error
     async def add_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:

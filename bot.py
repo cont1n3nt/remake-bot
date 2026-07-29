@@ -398,18 +398,16 @@ def _db_upsert(name: str, category: str, price_buy: Optional[float] = None,
     ws = _gs()
     now = (datetime.now(timezone_utc()) + timedelta(hours=3)).strftime("%d.%m.%Y %H:%M")
     all_items = _db_get_all()
-    existing = next((it for it in all_items if it.name.lower() == name.lower()), None)
+    existing = next((it for it in all_items if it.name.lower() == name.lower() and it.category.lower() == category.lower()), None)
     if existing:
         row_num = DATA_START_ROW + all_items.index(existing)
         updates = {}
-        if category: updates[COL_DB_CATEGORY] = category
         if price_buy is not None: updates[COL_DB_PRICE_BUY] = price_buy
         if price_sell is not None: updates[COL_DB_PRICE_SELL] = price_sell
         if emoji: updates[COL_DB_EMOJI] = emoji
         updates[COL_DB_UPDATED] = now
         for col, val in updates.items():
             ws.update_cell(row_num, col, val)
-        existing.category = category or existing.category
         existing.price_buy = price_buy if price_buy is not None else existing.price_buy
         existing.price_sell = price_sell if price_sell is not None else existing.price_sell
         existing.emoji = emoji or existing.emoji; existing.updated_at = now
@@ -473,6 +471,42 @@ def _sync_prices_from_db() -> dict[str, float]:
     prices = _db_prices_dict()
     _save_prices(prices)
     return prices
+
+def _sync_prices_to_sheets() -> None:
+    """Sync prices from DB to external sheets (Мейн скуп, Скуп бустов, Продажа бустов)."""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        creds = Credentials.from_service_account_file(
+            GOOGLE_SHEETS_CREDS,
+            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"],
+        )
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_url(GOOGLE_SHEETS_URL)
+        items = _db_get_all()
+        resource_by_name = {it.name.lower(): it for it in items if it.category == "resource" and it.price_buy is not None}
+        boost_by_name = {it.name.lower(): it for it in items if it.category == "boost" and it.price_sell is not None}
+        full_pairs = [(3,4), (10,11), (17,18), (24,25), (31,32), (38,39), (45,46)]
+        half_pairs = [(3,4), (10,11), (17,18), (24,25)]
+        def _sync_ws(ws_name, column_pairs, max_rows, lookup, price_key):
+            try:
+                ws = sh.worksheet(ws_name)
+                for name_col, price_col in column_pairs:
+                    vals = ws.col_values(name_col)
+                    for row_idx, val in enumerate(vals):
+                        if row_idx >= max_rows: break
+                        name = val.strip().lower()
+                        if name in lookup:
+                            price = getattr(lookup[name], price_key, None)
+                            if price is not None:
+                                ws.update_cell(row_idx + 1, price_col, price)
+            except Exception:
+                pass
+        _sync_ws("СКУП ПРЕДМЕТОВ", full_pairs, 31, resource_by_name, "price_buy")
+        _sync_ws("Скуп бустов", half_pairs, 9, resource_by_name, "price_buy")
+        _sync_ws("Продажа бустов", full_pairs, 9, boost_by_name, "price_sell")
+    except Exception:
+        pass
 
 # ------------------------------------------------------------------ #
 #  ЭМБЕДЫ                                                            #
@@ -1114,19 +1148,32 @@ async def setup_commands(bot: commands.Bot) -> None:
         except Exception:
             await interaction.followup.send(embed=_error_embed("Некорректная цена."), ephemeral=True); return
         try:
-            it = _db_get_items().get(item.lower())
+            items = _db_get_all()
+            it = next((i for i in items if i.name.lower() == item.lower() and i.category == "resource"), None)
             if it is None:
-                await interaction.followup.send(embed=_error_embed("Предмет не найден в базе."), ephemeral=True); return
+                await interaction.followup.send(embed=_error_embed("Предмет не найден в категории resource."), ephemeral=True); return
+            old_price = it.price_buy
             _db_upsert(it.name, it.category, price_buy=amount)
             _sync_prices_from_db()
             e = _resolve_emoji(it.emoji, interaction.guild)
             emoji = e + " " if e else ""
             await interaction.followup.send(
                 f"✅ {emoji}{it.name}: цена скупки изменена на {_fmt(amount)} ₽", ephemeral=True)
+            try:
+                old_str = f"{_fmt(old_price)} ₽" if old_price is not None else "—"
+                new_str = f"{_fmt(amount)} ₽"
+                embed = discord.Embed(title="[ /setprice ] 🏷 Цена ресурса", colour=discord.Colour.green(), timestamp=discord.utils.utcnow())
+                embed.add_field(name="Администратор", value=f"{interaction.user.mention} (`{interaction.user.id}`)")
+                embed.add_field(name="Название", value=it.name)
+                embed.add_field(name="Категория", value="resource")
+                embed.add_field(name="Цена была", value=old_str)
+                embed.add_field(name="Цена стала", value=new_str)
+                embed.set_footer(text="Связной | Логи")
+                ch = bot.get_channel(AUDIT_CHANNEL_ID)
+                if ch: await ch.send(embed=embed)
+            except: pass
         except Exception as e:
             await interaction.followup.send(embed=_error_embed(f"Ошибка: {e}"), ephemeral=True)
-        try: await _audit_log(interaction.client, interaction.user, "/setprice", {"Предмет": item, "Цена": _fmt(amount)})
-        except: pass
 
     @setprice.error
     async def setprice_error(i: discord.Interaction, e: app_commands.AppCommandError):
@@ -1147,19 +1194,32 @@ async def setup_commands(bot: commands.Bot) -> None:
         except Exception:
             await interaction.followup.send(embed=_error_embed("Некорректная цена."), ephemeral=True); return
         try:
-            it = _db_get_items().get(item.lower())
+            items = _db_get_all()
+            it = next((i for i in items if i.name.lower() == item.lower() and i.category == "boost"), None)
             if it is None:
-                await interaction.followup.send(embed=_error_embed("Буст не найден в базе."), ephemeral=True); return
+                await interaction.followup.send(embed=_error_embed("Буст не найден в категории boost."), ephemeral=True); return
+            old_price = it.price_sell
             _db_upsert(it.name, it.category, price_sell=amount)
             _sync_prices_from_db()
             e = _resolve_emoji(it.emoji, interaction.guild)
             emoji = e + " " if e else ""
             await interaction.followup.send(
                 f"✅ {emoji}{it.name}: цена продажи изменена на {_fmt(amount)} ₽", ephemeral=True)
+            try:
+                old_str = f"{_fmt(old_price)} ₽" if old_price is not None else "—"
+                new_str = f"{_fmt(amount)} ₽"
+                embed = discord.Embed(title="[ /setboost ] 🍔 Цена буста", colour=discord.Colour.green(), timestamp=discord.utils.utcnow())
+                embed.add_field(name="Администратор", value=f"{interaction.user.mention} (`{interaction.user.id}`)")
+                embed.add_field(name="Название", value=it.name)
+                embed.add_field(name="Категория", value="boost")
+                embed.add_field(name="Цена была", value=old_str)
+                embed.add_field(name="Цена стала", value=new_str)
+                embed.set_footer(text="Связной | Логи")
+                ch = bot.get_channel(AUDIT_CHANNEL_ID)
+                if ch: await ch.send(embed=embed)
+            except: pass
         except Exception as e:
             await interaction.followup.send(embed=_error_embed(f"Ошибка: {e}"), ephemeral=True)
-        try: await _audit_log(interaction.client, interaction.user, "/setboost", {"Предмет": item, "Цена": _fmt(amount)})
-        except: pass
 
     @setboost.error
     async def setboost_error(i: discord.Interaction, e: app_commands.AppCommandError):
@@ -1240,6 +1300,7 @@ async def setup_commands(bot: commands.Bot) -> None:
         await _safe_defer(interaction)
         try:
             cnt = _sync_prices_from_db()
+            _sync_prices_to_sheets()
             await interaction.followup.send(f"✅ Синхронизация завершена. Выгружено {len(cnt)} цен.", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=_error_embed(f"Ошибка: {e}"), ephemeral=True)
@@ -1350,7 +1411,8 @@ async def setup_commands(bot: commands.Bot) -> None:
         try:
             content = (await file.read()).decode("utf-8-sig")
             reader = csv.DictReader(io.StringIO(content))
-            old_items = {it.name.lower(): it for it in _db_get_all()}
+            all_items = _db_get_all()
+            old_items = {it.name.lower(): it for it in all_items}
             count = 0
             changes = []
             for row in reader:
@@ -1360,7 +1422,15 @@ async def setup_commands(bot: commands.Bot) -> None:
                 ps = _gs_parse_float(row.get("Цена продажи", "")) if row.get("Цена продажи", "").strip() else None
                 emoji = row.get("Эмодзи", "").strip()
                 if name and cat:
-                    old = old_items.get(name.lower())
+                    old = next((it for it in all_items if it.name.lower() == name.lower() and it.category.lower() == cat.lower()), None)
+                    old_items_by_name = old_items.get(name.lower())
+                    if old is None and old_items_by_name is not None and old_items_by_name.category.lower() != cat.lower():
+                        await interaction.followup.send(
+                            f"⚠️ Пропущен «{name}»: указана категория «{cat}», "
+                            f"но в базе категория «{old_items_by_name.category}». Категорию менять запрещено.",
+                            ephemeral=True,
+                        )
+                        continue
                     old_pb = old.price_buy if old else None
                     old_ps = old.price_sell if old else None
                     _db_upsert(name, cat, price_buy=pb, price_sell=ps, emoji=emoji)

@@ -236,7 +236,6 @@ class SheetsRepository:
         cell = self._find_cell_icase(nickname, COL_NICKNAME)
         return cell is not None
 
-    @_retry
     def append_transaction(
         self, nickname: str, tx_type: str, amount: float,
         referrer: str | None = None,
@@ -255,15 +254,21 @@ class SheetsRepository:
         row = [now, nickname, True, False, amount, "", "", referrer or ""]
 
         if tx_type == "buy":
-            self._sheet.insert_row(row, index)
+            self._insert_row_retry(row, index)
         else:
             row[2], row[3] = False, True
-            self._sheet.insert_row(row, index)
+            self._insert_row_retry(row, index)
 
         self._copy_formulas_to_new_row(index)
         self._ensure_jrow(nickname)
         if referrer:
             self._ensure_jrow(referrer)
+
+    @_retry
+    def _insert_row_retry(self, row: list, index: int) -> None:
+        """Insert a single row with retry. Separate method so @_retry
+        only wraps the insert, not the entire transaction flow."""
+        self._sheet.insert_row(row, index)
 
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:

@@ -1,4 +1,4 @@
-"""Ког для автоматизации тикетов: многошаговая форма (Select → Modal → бусты), OCR, /tag."""
+"""Ког для автоматизации тикетов: пошаговый Wizard UI, скриншоты через attachment, редактирование заявок."""
 
 import asyncio
 import json
@@ -38,29 +38,75 @@ class FormDataStore:
 
 form_store = FormDataStore()
 
+
 # ------------------------------------------------------------------ #
-#  View: выбор способа продажи/покупки (Почта / Трейд)               #
+#  Хранилище опубликованных заявок (для редактирования)              #
+# ------------------------------------------------------------------ #
+
+REQUESTS_FILE = "published_requests.json"
+
+
+def _save_request_meta_sync(channel_id: int, message_id: int, user_id: int, data: dict) -> None:
+    try:
+        with open(REQUESTS_FILE, encoding="utf-8") as f:
+            meta = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        meta = {}
+    meta[str(message_id)] = {
+        "channel_id": channel_id,
+        "user_id": user_id,
+        "data": data,
+    }
+    with open(REQUESTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+async def _save_request_meta(channel_id: int, message_id: int, user_id: int, data: dict) -> None:
+    await asyncio.to_thread(_save_request_meta_sync, channel_id, message_id, user_id, data)
+
+
+def _load_request_meta(message_id: int) -> Optional[dict]:
+    try:
+        with open(REQUESTS_FILE, encoding="utf-8") as f:
+            meta = json.load(f)
+        return meta.get(str(message_id))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+async def _delete_request_meta(message_id: int) -> None:
+    def _sync():
+        try:
+            with open(REQUESTS_FILE, encoding="utf-8") as f:
+                meta = json.load(f)
+            meta.pop(str(message_id), None)
+            with open(REQUESTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    await asyncio.to_thread(_sync)
+
+
+# ------------------------------------------------------------------ #
+#  Шаг 1: Выбор способа получения (Почта / Трейд)                    #
 # ------------------------------------------------------------------ #
 
 class DeliveryMethodSelect(discord.ui.Select):
 
     def __init__(self, category: str):
         options = [
-            discord.SelectOption(label="Почта", emoji="📮"),
-            discord.SelectOption(label="Трейд", emoji="🤝"),
+            discord.SelectOption(label="Почта", emoji="📮", value="Почта"),
+            discord.SelectOption(label="Трейд", emoji="🤝", value="Трейд"),
         ]
-        placeholder = "Выберите способ продажи" if "Продажа" in category else "Выберите способ покупки"
-        super().__init__(placeholder=placeholder, options=options, custom_id=f"delivery_{category[:4]}")
+        super().__init__(placeholder="Выберите способ получения", options=options, custom_id="delivery_method")
         self.category = category
 
     async def callback(self, interaction: discord.Interaction):
         form_store.set(interaction.user.id, "delivery_method", self.values[0])
-        if self.values[0] == "Почта":
-            if "Продажа" in self.category:
-                form_store.set(interaction.user.id, "delivery_text", "Ник: Scaryyyyy")
-            else:
-                form_store.set(interaction.user.id, "delivery_text", "нужно сразу скинуть деньги на ник Scaryyyyy")
-        modal = TicketFormModal(self.category)
+        if "Заказ" in self.category:
+            modal = BoostOrderModal(self.category)
+        else:
+            modal = SaleModal(self.category)
         await interaction.response.send_modal(modal)
 
 
@@ -71,51 +117,41 @@ class DeliveryMethodView(discord.ui.View):
 
 
 # ------------------------------------------------------------------ #
-#  Модальное окно с текстовыми полями                                #
+#  Шаг 2: Modal (разный для заказа бустов и продажи)                #
 # ------------------------------------------------------------------ #
 
-class TicketFormModal(discord.ui.Modal):
+class BaseOrderModal(discord.ui.Modal):
 
-    def __init__(self, category: str):
-        title = "Форма — Продажа" if "Продажа" in category else "Форма — Заказ бустов"
-        super().__init__(title=title, timeout=300)
+    def __init__(self, category: str, title_text: str):
+        super().__init__(title=title_text, timeout=300)
         self.category = category
 
         self.add_item(discord.ui.TextInput(
-            label="Ваш ник в игре",
+            label="Игровой ник",
             custom_id="game_nick",
             required=True,
             style=discord.TextStyle.short,
             placeholder="Введите ваш игровой никнейм",
         ))
 
-        if "Заказ" in category:
+        if "Заказ" in self.category:
             self.add_item(discord.ui.TextInput(
-                label="До какой даты и времени нужно сделать",
+                label="До какой даты выполнить",
                 custom_id="deadline",
                 required=True,
                 style=discord.TextStyle.short,
                 placeholder="ДД.ММ.ГГГГ ЧЧ:ММ",
             ))
 
-        if "Продажа" in category:
-            self.add_item(discord.ui.TextInput(
-                label="Ссылка на скриншот (необязательно)",
-                custom_id="screenshot_url",
-                required=False,
-                style=discord.TextStyle.short,
-                placeholder="https://i.imgur.com/ваш_скриншот.png",
-            ))
-
         self.add_item(discord.ui.TextInput(
-            label="Кто вас пригласил (Ник в игре)",
+            label="Кто пригласил (игра)",
             custom_id="referrer_game",
             required=False,
             style=discord.TextStyle.short,
         ))
 
         self.add_item(discord.ui.TextInput(
-            label="Кто вас пригласил (Ник в Discord)",
+            label="Кто пригласил (Discord)",
             custom_id="referrer_discord",
             required=False,
             style=discord.TextStyle.short,
@@ -130,184 +166,705 @@ class TicketFormModal(discord.ui.Modal):
         form_store.set(interaction.user.id, "text_data", data)
         form_store.set(interaction.user.id, "category", self.category)
 
+        selected = form_store.get(interaction.user.id).get("selected_boosts", [])
         if "Заказ" in self.category:
-            view = await BoostSelectView.create(interaction)
-            content = "Выберите нужные бусты, затем нажмите ✅ **Подтвердить**."
+            view = await BoostSelectionView.create(interaction, selected)
+            content = "**Выберите нужные бусты:**"
             await interaction.followup.send(content, view=view, ephemeral=True)
         else:
-            await self._finalize(interaction)
+            boosts = []
+            total_price = 0.0
+            form_store.set(interaction.user.id, "selected_boosts", boosts)
+            form_store.set(interaction.user.id, "total_price", total_price)
+            await self._publish(interaction)
 
-    async def _finalize(self, interaction: discord.Interaction):
+    async def _publish(self, interaction: discord.Interaction):
         store = form_store.get(interaction.user.id)
         text_data = store.get("text_data", {})
         delivery = store.get("delivery_method", "")
-        delivery_text = store.get("delivery_text", "")
-        category = store.get("category", "")
         boosts = store.get("selected_boosts", [])
+        total_price = store.get("total_price", 0.0)
 
+        embed = self._build_request_embed(interaction, text_data, delivery, boosts, total_price)
+
+        msg = await interaction.channel.send(embed=embed, view=EditRequestView())
+        message_id = msg.id
+
+        request_data = {
+            "text_data": text_data,
+            "delivery_method": delivery,
+            "selected_boosts": boosts,
+            "total_price": total_price,
+            "category": store.get("category", ""),
+        }
+        _save_request_meta(interaction.channel_id, message_id, interaction.user.id, request_data)
+
+        entry = {
+            "type": "form",
+            "timestamp": discord.utils.utcnow().isoformat(),
+            "user_id": interaction.user.id,
+            "user_name": str(interaction.user),
+            "category": store.get("category", ""),
+            "data": {k: v for k, v in text_data.items() if v},
+            "delivery_method": delivery,
+            "selected_boosts": boosts,
+            "message_id": message_id,
+        }
+        await _save_deal_report(interaction.channel_id, entry)
+
+        try:
+            audit = interaction.client.audit_logger
+            audit_details = {
+                "Категория": store.get("category", ""),
+                "Ник в игре": text_data.get("game_nick", ""),
+            }
+            if delivery:
+                audit_details["Способ"] = delivery
+            ref_game = text_data.get("referrer_game", "").strip()
+            ref_discord = text_data.get("referrer_discord", "").strip()
+            if ref_game:
+                audit_details["Пригласил (игра)"] = ref_game
+            if ref_discord:
+                audit_details["Пригласил (Discord)"] = ref_discord
+            if boosts:
+                boost_names = [b["name"] for b in boosts]
+                audit_details["Бусты"] = ", ".join(boost_names)
+            await audit.log(interaction.user, f"/ticket_form [{store.get('category', '')}]", audit_details)
+        except Exception:
+            pass
+
+        screenshot_view = ScreenshotPromptView(interaction.user.id, msg, embed)
+        await interaction.followup.send(
+            "📷 **Прикрепите изображение следующим сообщением.**",
+            view=screenshot_view,
+            ephemeral=True,
+        )
+
+        form_store.clear(interaction.user.id)
+
+    def _build_request_embed(
+        self, interaction: discord.Interaction,
+        text_data: dict, delivery: str, boosts: list[dict],
+        total_price: float,
+    ) -> discord.Embed:
+        category = form_store.get(interaction.user.id).get("category", "")
         embed = discord.Embed(
             title=f"📋 Новая заявка — {category}",
             colour=discord.Colour.green(),
             timestamp=discord.utils.utcnow(),
         )
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="👤 Создатель", value=interaction.user.mention)
-        embed.add_field(name="🎮 Ник в игре", value=text_data.get("game_nick", "—"))
+
+        nick = text_data.get("game_nick", "").strip()
+        if nick:
+            embed.add_field(name="Ник в игре", value=nick)
 
         if delivery:
-            method_str = f"📮 Почта ({delivery_text})" if delivery == "Почта" else "🤝 Трейд"
-            embed.add_field(name="Способ", value=method_str)
+            embed.add_field(name="Способ", value=f"📮 {delivery}" if delivery == "Почта" else f"🤝 {delivery}")
 
-        if text_data.get("deadline", ""):
-            embed.add_field(name="⏰ До даты и времени", value=text_data["deadline"])
+        deadline = text_data.get("deadline", "").strip()
+        if deadline:
+            embed.add_field(name="До даты и времени", value=deadline)
 
         ref_game = text_data.get("referrer_game", "").strip()
-        ref_discord = text_data.get("referrer_discord", "").strip()
         if ref_game:
-            embed.add_field(name="👤 Пригласил (Ник в игре)", value=ref_game)
+            embed.add_field(name="Кто пригласил (игра)", value=ref_game)
+
+        ref_discord = text_data.get("referrer_discord", "").strip()
         if ref_discord:
-            embed.add_field(name="👤 Пригласил (Ник в Discord)", value=ref_discord)
+            embed.add_field(name="Кто пригласил (Discord)", value=ref_discord)
+
         if boosts:
-            items = await asyncio.to_thread(interaction.client.repo.get_all_items)
-            item_map = {it["name"].lower(): it for it in items}
+            items_map = {}
+            all_items = []
+            try:
+                all_items = interaction.client.repo.get_all_items()
+                for it in all_items:
+                    items_map[it["name"].lower()] = it
+            except Exception:
+                pass
             boost_lines = []
             for b in boosts:
-                it = item_map.get(b.lower())
+                it = items_map.get(b["name"].lower())
                 e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
                 emoji_str = e + " " if e else ""
-                boost_lines.append(f"• {emoji_str}{b}")
-            embed.add_field(name="📦 Выбранные бусты", value="\n".join(boost_lines), inline=False)
-
-        # Screenshot from modal URL
-        screenshot_url = text_data.get("screenshot_url", "").strip()
-        if screenshot_url:
-            embed.set_image(url=screenshot_url)
+                qty = b.get("quantity", 1)
+                line_price = b.get("line_total", 0)
+                boost_lines.append(f"• {emoji_str}{b['name']} — {qty} шт. ({_fmt(line_price)} ₽)")
+            embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
+            embed.add_field(name="Общая стоимость", value=f"{_fmt(total_price)} ₽", inline=False)
 
         embed.set_footer(text="Клондайк Шёпота")
+        return embed
 
-        await interaction.channel.send(content=interaction.user.mention, embed=embed)
 
-        await self._duplicate_to_audit(interaction, embed, category, text_data, delivery, boosts, screenshot_url)
+class BoostOrderModal(BaseOrderModal):
 
-        entry = {
-            "type": "form", "timestamp": discord.utils.utcnow().isoformat(),
-            "user_id": interaction.user.id, "user_name": str(interaction.user),
-            "category": category,
-            "data": {k: v for k, v in text_data.items() if v},
-            "delivery_method": delivery, "selected_boosts": boosts,
-        }
-        await _save_deal_report(interaction.channel_id, entry)
+    def __init__(self, category: str):
+        super().__init__(category, title="Форма — Заказ бустов")
 
-        # Fallback: allow screenshot as attachment within 60s (only if no URL provided)
-        if not screenshot_url:
-            prompt = await interaction.channel.send(
-                "📸 Если хотите прикрепить скриншот, отправьте изображение в этот канал в течение **60 секунд**."
-            )
 
-            def check(m):
-                return (m.author == interaction.user and m.channel == interaction.channel
-                        and m.attachments and m.attachments[0].content_type
-                        and m.attachments[0].content_type.startswith("image/"))
+class SaleModal(BaseOrderModal):
 
-            try:
-                wait_msg = await interaction.client.wait_for("message", timeout=60.0, check=check)
-                att = wait_msg.attachments[0]
-                fp = await att.to_file()
-                embed.set_image(url="attachment://screenshot.png")
-                await interaction.channel.send(content=interaction.user.mention, embed=embed, file=fp)
-                await self._duplicate_to_audit_with_attachment(interaction, embed, fp)
-                await prompt.delete()
-            except asyncio.TimeoutError:
-                pass
-
-        form_store.clear(interaction.user.id)
-
-    async def _duplicate_to_audit(self, interaction, embed, category, text_data, delivery, boosts, screenshot_url=""):
-        try:
-            audit = interaction.client.audit_logger
-            details = {
-                "Категория": category,
-                "Ник в игре": text_data.get("game_nick", ""),
-            }
-            if delivery:
-                details["Способ"] = delivery
-            ref_game = text_data.get("referrer_game", "").strip()
-            ref_discord = text_data.get("referrer_discord", "").strip()
-            if ref_game:
-                details["Пригласил (игра)"] = ref_game
-            if ref_discord:
-                details["Пригласил (Discord)"] = ref_discord
-            if boosts:
-                details["Бусты"] = ", ".join(boosts)
-            if screenshot_url:
-                details["Скриншот"] = screenshot_url
-            await audit.log(interaction.user, f"/ticket_form [{category}]", details)
-        except Exception:
-            pass
-
-    async def _duplicate_to_audit_with_attachment(self, interaction, embed, file):
-        try:
-            channel = interaction.client.audit_logger._bot.get_channel(interaction.client.audit_logger._channel_id)
-            if channel:
-                await channel.send(embed=embed, file=file)
-        except Exception:
-            pass
+    def __init__(self, category: str):
+        title_text = "Форма — Продажа" if "Продажа" in category else "Форма — Заказ"
+        super().__init__(category, title=title_text)
 
 
 # ------------------------------------------------------------------ #
-#  View: выбор бустов (для «Заказ бустов»)                           #
+#  Шаг 3: Multi Select для выбора бустов                              #
 # ------------------------------------------------------------------ #
 
-class BoostSelectView(discord.ui.View):
+class BoostSelectionView(discord.ui.View):
 
-    def __init__(self, boost_items: list[dict]):
+    def __init__(self, boost_items: list[dict], selected: list[str]):
         super().__init__(timeout=180)
         self.boost_items = boost_items
+        self._selected = selected
+
         options = []
         for it in boost_items[:25]:
             label = it["name"][:100]
-            options.append(discord.SelectOption(label=label, value=it["name"]))
+            is_default = it["name"] in selected
+            options.append(discord.SelectOption(
+                label=label, value=it["name"], default=is_default,
+            ))
         if not options:
-            options.append(discord.SelectOption(label="Нет доступных бустов", value=""))
+            options.append(discord.SelectOption(label="Нет доступных бустов", value="", default=False))
+
         self._boost_select = discord.ui.Select(
             placeholder="Выберите бусты...",
-            custom_id="boost_multi",
+            custom_id="boost_multi_select",
             options=options,
-            min_values=1, max_values=min(len(options), 10),
+            min_values=0,
+            max_values=min(len(options), 25),
         )
-        self._boost_select.callback = self._on_boost_select
+        self._boost_select.callback = self._on_select
         self.add_item(self._boost_select)
 
-        self._confirm_btn = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.success, custom_id="boost_confirm")
-        self._confirm_btn.callback = self._on_confirm
-        self.add_item(self._confirm_btn)
-
-        self._add_btn = discord.ui.Button(label="➕ Добавить ещё", style=discord.ButtonStyle.secondary, custom_id="boost_add")
-        self._add_btn.callback = self._on_add_more
+        self._add_btn = discord.ui.Button(label="➕ Добавить", style=discord.ButtonStyle.success, custom_id="boost_add")
+        self._add_btn.callback = self._on_add
         self.add_item(self._add_btn)
+
+        self._clear_btn = discord.ui.Button(label="🗑 Очистить", style=discord.ButtonStyle.danger, custom_id="boost_clear")
+        self._clear_btn.callback = self._on_clear
+        self.add_item(self._clear_btn)
+
+        self._next_btn = discord.ui.Button(label="✅ Далее", style=discord.ButtonStyle.primary, custom_id="boost_next")
+        self._next_btn.callback = self._on_next
+        self.add_item(self._next_btn)
+
+    @classmethod
+    async def create(cls, interaction: discord.Interaction, selected: list[str] = None):
+        items = await asyncio.to_thread(interaction.client.repo.get_all_items)
+        boost_items = [it for it in items if it.get("category") == "boost"]
+        return cls(boost_items, selected or [])
+
+    def _get_selected_names(self) -> list[str]:
+        return [it["name"] for it in self.boost_items if it["name"] in self._selected]
+
+    async def _update_message(self, interaction: discord.Interaction):
+        selected_names = self._get_selected_names()
+        if selected_names:
+            lines = "\n".join(f"• {n}" for n in selected_names)
+            content = f"**Выбранные бусты:**\n{lines}\n\n**Добавьте ещё или нажмите ✅ Далее**"
+        else:
+            content = "**Выберите нужные бусты:**"
+        await interaction.response.edit_message(content=content, view=self)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+    async def _on_add(self, interaction: discord.Interaction):
+        selected_in_menu = self._boost_select.values
+        for s in selected_in_menu:
+            if s not in self._selected:
+                self._selected.append(s)
+        form_store.set(interaction.user.id, "selected_boosts", [{"name": n, "quantity": 1} for n in self._selected])
+        await self._update_message(interaction)
+
+    async def _on_clear(self, interaction: discord.Interaction):
+        self._selected = []
+        form_store.set(interaction.user.id, "selected_boosts", [])
+        await self._update_message(interaction)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        if not self._selected:
+            await interaction.response.send_message("Выберите хотя бы один буст.", ephemeral=True)
+            return
+        form_store.set(interaction.user.id, "selected_boosts", [{"name": n, "quantity": 1} for n in self._selected])
+        view = await BoostQuantityView.create(interaction)
+        await interaction.response.edit_message(content="**Настройте количество каждого буста:**", view=view)
+
+
+# ------------------------------------------------------------------ #
+#  Шаг 4: Количество бустов (➕/➖/✏️)                                #
+# ------------------------------------------------------------------ #
+
+class QuantityEditModal(discord.ui.Modal):
+
+    def __init__(self, boost_index: int, current_qty: int, boost_name: str):
+        super().__init__(title=f"Изменить количество — {boost_name}", timeout=120)
+        self.boost_index = boost_index
+        self.add_item(discord.ui.TextInput(
+            label="Количество",
+            custom_id="new_qty",
+            required=True,
+            style=discord.TextStyle.short,
+            placeholder="Введите любое положительное число",
+            default=str(current_qty),
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.children[0].value if self.children else ""
+        try:
+            qty = int(raw.strip())
+            if qty < 1:
+                raise ValueError
+        except (ValueError, AttributeError):
+            await interaction.response.send_message("Введите положительное целое число.", ephemeral=True)
+            return
+        boosts = form_store.get(interaction.user.id).get("selected_boosts", [])
+        if 0 <= self.boost_index < len(boosts):
+            boosts[self.boost_index]["quantity"] = qty
+            form_store.set(interaction.user.id, "selected_boosts", boosts)
+        view = await BoostQuantityView.create(interaction)
+        await interaction.response.edit_message(content="**Настройте количество каждого буста:**", embed=None, view=view)
+
+
+class BoostQuantityView(discord.ui.View):
+
+    def __init__(self, boosts_with_qty: list[dict], page: int = 0, per_page: int = 4):
+        super().__init__(timeout=300)
+        self.boosts = boosts_with_qty
+        self.page = page
+        self.per_page = per_page
+        self.total_pages = max(1, (len(boosts_with_qty) + per_page - 1) // per_page)
 
     @classmethod
     async def create(cls, interaction: discord.Interaction):
-        items = await asyncio.to_thread(interaction.client.repo.get_all_items)
-        boost_items = [it for it in items if it.get("category") == "boost"]
-        return cls(boost_items)
+        boosts = form_store.get(interaction.user.id).get("selected_boosts", [])
+        return cls(boosts)
 
-    async def _on_boost_select(self, interaction: discord.Interaction):
-        selected = self._boost_select.values
-        current = form_store.get(interaction.user.id).get("selected_boosts", [])
-        for s in selected:
-            if s not in current:
-                current.append(s)
-        form_store.set(interaction.user.id, "selected_boosts", current)
-        await interaction.response.defer(ephemeral=True)
+    def _build_controls(self, all_items_map: dict):
+        self.clear_items()
+        start = self.page * self.per_page
+        chunk = self.boosts[start:start + self.per_page]
+
+        for idx, b in enumerate(chunk):
+            global_idx = start + idx
+            minus_btn = discord.ui.Button(
+                label="➖",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"qty_minus_{global_idx}",
+                row=idx,
+            )
+            minus_btn.callback = lambda i, gi=global_idx: self._on_minus(i, gi)
+            self.add_item(minus_btn)
+
+            qty_btn = discord.ui.Button(
+                label=f"{b['quantity']} ✏️",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"qty_show_{global_idx}",
+                row=idx,
+            )
+            qty_btn.callback = lambda i, gi=global_idx: self._on_edit(i, gi)
+            self.add_item(qty_btn)
+
+            plus_btn = discord.ui.Button(
+                label="➕",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"qty_plus_{global_idx}",
+                row=idx,
+            )
+            plus_btn.callback = lambda i, gi=global_idx: self._on_plus(i, gi)
+            self.add_item(plus_btn)
+
+        nav_row = min(len(chunk), 4)
+        if self.total_pages > 1:
+            prev_btn = discord.ui.Button(
+                label="◀",
+                style=discord.ButtonStyle.secondary,
+                custom_id="qty_prev",
+                row=nav_row,
+            )
+            prev_btn.callback = self._on_prev
+            self.add_item(prev_btn)
+
+        confirm_btn = discord.ui.Button(
+            label="✅ Подтвердить и отправить",
+            style=discord.ButtonStyle.success,
+            custom_id="qty_confirm",
+            row=nav_row,
+        )
+        confirm_btn.callback = self._on_confirm
+        self.add_item(confirm_btn)
+
+        if self.total_pages > 1:
+            next_btn = discord.ui.Button(
+                label="▶",
+                style=discord.ButtonStyle.secondary,
+                custom_id="qty_next",
+                row=nav_row,
+            )
+            next_btn.callback = self._on_next
+            self.add_item(next_btn)
+
+    async def _refresh(self, interaction: discord.Interaction):
+        items_map = {}
+        all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
+        for it in all_items:
+            items_map[it["name"].lower()] = it
+        self._build_controls(items_map)
+        embed = self._build_embed(interaction, items_map)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    def _build_embed(self, interaction: discord.Interaction, items_map: dict = None) -> discord.Embed:
+        if items_map is None:
+            items_map = {}
+        embed = discord.Embed(
+            title="Настройка количества бустов",
+            colour=discord.Colour.blurple(),
+        )
+
+        for b in self.boosts:
+            it = items_map.get(b["name"].lower())
+            e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
+            emoji_str = e + " " if e else ""
+            price = it.get("price_sell") if it else 0
+            line_total = (price or 0) * b["quantity"]
+            embed.add_field(
+                name=f"{emoji_str}{b['name']}",
+                value=f"➖ {b['quantity']} ➕\n✏️ Изменить количество\n({_fmt(line_total)} ₽)",
+                inline=False,
+            )
+
+        total = sum(
+            (items_map.get(b["name"].lower(), {}).get("price_sell", 0) or 0) * b["quantity"]
+            for b in self.boosts
+        )
+        embed.add_field(name="Общая стоимость", value=f"{_fmt(total)} ₽", inline=False)
+
+        if self.total_pages > 1:
+            embed.set_footer(text=f"Страница {self.page + 1} / {self.total_pages}")
+        else:
+            embed.set_footer(text="Нажмите ✏️ чтобы изменить количество вручную")
+
+        form_store.set(interaction.user.id, "total_price", total)
+        return embed
+
+    async def _on_minus(self, interaction: discord.Interaction, index: int):
+        if 0 <= index < len(self.boosts) and self.boosts[index]["quantity"] > 1:
+            self.boosts[index]["quantity"] -= 1
+            form_store.set(interaction.user.id, "selected_boosts", self.boosts)
+        await self._refresh(interaction)
+
+    async def _on_plus(self, interaction: discord.Interaction, index: int):
+        if 0 <= index < len(self.boosts):
+            self.boosts[index]["quantity"] += 1
+            form_store.set(interaction.user.id, "selected_boosts", self.boosts)
+        await self._refresh(interaction)
+
+    async def _on_edit(self, interaction: discord.Interaction, index: int):
+        if 0 <= index < len(self.boosts):
+            current_qty = self.boosts[index]["quantity"]
+            boost_name = self.boosts[index]["name"]
+            await interaction.response.send_modal(QuantityEditModal(index, current_qty, boost_name))
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = (self.page - 1) % self.total_pages
+        items_map = {}
+        all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
+        for it in all_items:
+            items_map[it["name"].lower()] = it
+        self._build_controls(items_map)
+        embed = self._build_embed(interaction, items_map)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page = (self.page + 1) % self.total_pages
+        items_map = {}
+        all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
+        for it in all_items:
+            items_map[it["name"].lower()] = it
+        self._build_controls(items_map)
+        embed = self._build_embed(interaction, items_map)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_confirm(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        modal_obj = TicketFormModal(form_store.get(interaction.user.id).get("category", "Заказ бустов"))
-        await modal_obj._finalize(interaction)
+        items_map = {}
+        all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
+        for it in all_items:
+            items_map[it["name"].lower()] = it
+        total = sum(
+            (items_map.get(b["name"].lower(), {}).get("price_sell", 0) or 0) * b["quantity"]
+            for b in self.boosts
+        )
+        enriched = []
+        for b in self.boosts:
+            it = items_map.get(b["name"].lower())
+            price = it.get("price_sell") if it else None
+            qty = b.get("quantity", 1)
+            enriched.append({"name": b["name"], "quantity": qty, "price": price, "line_total": (price or 0) * qty})
+        form_store.set(interaction.user.id, "selected_boosts", enriched)
+        form_store.set(interaction.user.id, "total_price", total)
 
-    async def _on_add_more(self, interaction: discord.Interaction):
+        store = form_store.get(interaction.user.id)
+        text_data = store.get("text_data", {})
+        delivery = store.get("delivery_method", "")
+        category = store.get("category", "Заказ бустов")
+
+        modal = BoostOrderModal(category)
         await interaction.response.defer(ephemeral=True)
+        await modal._publish(interaction)
+
+
+# ------------------------------------------------------------------ #
+#  Screenshot Prompt                                                 #
+# ------------------------------------------------------------------ #
+
+class ScreenshotPromptView(discord.ui.View):
+
+    def __init__(self, user_id: int, target_message: discord.Message, original_embed: discord.Embed):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.target_message = target_message
+        self.original_embed = original_embed
+
+    @discord.ui.button(label="📎 Жду скриншот", style=discord.ButtonStyle.primary, custom_id="screenshot_wait")
+    async def wait_screenshot(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Это не ваша заявка.", ephemeral=True)
+            return
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content="📷 **Отправьте изображение в этот чат.** После получения скриншот будет добавлен к заявке.",
+            view=self,
+        )
+
+        def check(m: discord.Message) -> bool:
+            return m.author.id == self.user_id and m.channel.id == interaction.channel_id
+
+        try:
+            msg = await interaction.client.wait_for("message", timeout=120.0, check=check)
+        except asyncio.TimeoutError:
+            try:
+                await interaction.edit_original_response(content="⏱ Время ожидания скриншота истекло.")
+            except Exception:
+                pass
+            return
+
+        image_files = []
+        for att in msg.attachments:
+            if att.content_type and att.content_type.startswith("image/"):
+                fp = await att.to_file()
+                image_files.append(fp)
+
+        if not image_files:
+            try:
+                await msg.reply("❌ Пожалуйста, прикрепите файл с изображением.", delete_after=10)
+            except Exception:
+                pass
+            for child in self.children:
+                child.disabled = False
+            try:
+                await interaction.edit_original_response(
+                    content="📷 **Прикрепите изображение следующим сообщением.**",
+                    view=self,
+                )
+            except Exception:
+                pass
+            return
+
+        self.original_embed.set_image(url=f"attachment://{image_files[0].filename}")
+        try:
+            await self.target_message.edit(embed=self.original_embed, attachments=image_files[:1])
+            if len(image_files) > 1:
+                await self.target_message.reply(
+                    f"📎 **Дополнительные скриншоты:** прикреплено ещё {len(image_files) - 1} файл(ов).",
+                )
+        except (discord.HTTPException, discord.Forbidden) as e:
+            logger.warning("Failed to attach screenshot: %s", e)
+            try:
+                await interaction.followup.send("⚠️ Не удалось прикрепить скриншот.", ephemeral=True)
+            except Exception:
+                pass
+
+        try:
+            await interaction.edit_original_response(content="✅ Скриншот прикреплён.", view=None)
+        except Exception:
+            pass
+
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+    @discord.ui.button(label="⏭ Пропустить", style=discord.ButtonStyle.secondary, custom_id="screenshot_skip")
+    async def skip_screenshot(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Это не ваша заявка.", ephemeral=True)
+            return
+        await interaction.response.edit_message(content="✅ Заявка опубликована без скриншота.", view=None)
+
+
+# ------------------------------------------------------------------ #
+#  Кнопка изменения заявки                                           #
+# ------------------------------------------------------------------ #
+
+class EditRequestModal(discord.ui.Modal):
+
+    def __init__(self, message_id: int, request_data: dict):
+        super().__init__(title="✏️ Изменить заявку", timeout=300)
+        self.message_id = message_id
+        self.request_data = request_data
+        text_data = request_data.get("text_data", {})
+
+        self.add_item(discord.ui.TextInput(
+            label="Игровой ник",
+            custom_id="game_nick",
+            required=True,
+            style=discord.TextStyle.short,
+            default=text_data.get("game_nick", ""),
+        ))
+
+        if "Заказ" in request_data.get("category", ""):
+            self.add_item(discord.ui.TextInput(
+                label="До какой даты выполнить",
+                custom_id="deadline",
+                required=True,
+                style=discord.TextStyle.short,
+                placeholder="ДД.ММ.ГГГГ ЧЧ:ММ",
+                default=text_data.get("deadline", ""),
+            ))
+
+        self.add_item(discord.ui.TextInput(
+            label="Кто пригласил (игра)",
+            custom_id="referrer_game",
+            required=False,
+            style=discord.TextStyle.short,
+            default=text_data.get("referrer_game", ""),
+        ))
+
+        self.add_item(discord.ui.TextInput(
+            label="Кто пригласил (Discord)",
+            custom_id="referrer_discord",
+            required=False,
+            style=discord.TextStyle.short,
+            default=text_data.get("referrer_discord", ""),
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        text_data = {}
+        for child in self.children:
+            if isinstance(child, discord.ui.TextInput):
+                text_data[child.custom_id] = child.value
+
+        self.request_data["text_data"] = text_data
+        boosts = self.request_data.get("selected_boosts", [])
+        delivery = self.request_data.get("delivery_method", "")
+
+        all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
+        item_map = {it["name"].lower(): it for it in all_items}
+
+        total_price = 0.0
+        for b in boosts:
+            it = item_map.get(b["name"].lower())
+            price = it.get("price_sell") if it else None
+            qty = b.get("quantity", 1)
+            line_total = (price or 0) * qty
+            b["line_total"] = line_total
+            total_price += line_total
+        self.request_data["total_price"] = total_price
+
+        category = self.request_data.get("category", "")
+        embed = discord.Embed(
+            title=f"📋 Новая заявка — {category}",
+            colour=discord.Colour.green(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+
+        nick = text_data.get("game_nick", "").strip()
+        if nick:
+            embed.add_field(name="Ник в игре", value=nick)
+
+        if delivery:
+            embed.add_field(name="Способ", value=f"📮 {delivery}" if delivery == "Почта" else f"🤝 {delivery}")
+
+        deadline = text_data.get("deadline", "").strip()
+        if deadline:
+            embed.add_field(name="До даты и времени", value=deadline)
+
+        ref_game = text_data.get("referrer_game", "").strip()
+        if ref_game:
+            embed.add_field(name="Кто пригласил (игра)", value=ref_game)
+
+        ref_discord = text_data.get("referrer_discord", "").strip()
+        if ref_discord:
+            embed.add_field(name="Кто пригласил (Discord)", value=ref_discord)
+
+        if boosts:
+            boost_lines = []
+            for b in boosts:
+                it = item_map.get(b["name"].lower())
+                e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
+                emoji_str = e + " " if e else ""
+                qty = b.get("quantity", 1)
+                line_price = b.get("line_total", 0)
+                boost_lines.append(f"• {emoji_str}{b['name']} — {qty} шт. ({_fmt(line_price)} ₽)")
+            embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
+            embed.add_field(name="Общая стоимость", value=f"{_fmt(total_price)} ₽", inline=False)
+
+        embed.set_footer(text="Клондайк Шёпота")
+
+        _save_request_meta(interaction.channel_id, self.message_id, interaction.user.id, self.request_data)
+
+        try:
+            msg = await interaction.channel.fetch_message(self.message_id)
+            await msg.edit(embed=embed, view=EditRequestView())
+        except (discord.NotFound, discord.HTTPException) as e:
+            await interaction.followup.send("⚠️ Не удалось найти заявку для редактирования.", ephemeral=True)
+            logger.warning("Edit failed: message %s not found: %s", self.message_id, e)
+            return
+
+        await interaction.followup.send("✅ Заявка обновлена.", ephemeral=True)
+
+        try:
+            audit = interaction.client.audit_logger
+            await audit.log(interaction.user, "/edit_request", {
+                "Категория": category,
+                "Ник в игре": nick or "—",
+                "Способ": delivery or "—",
+            })
+        except Exception:
+            pass
+
+
+class EditRequestView(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="✏️ Изменить заявку", style=discord.ButtonStyle.secondary, custom_id="edit_request")
+    async def edit_callback(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if not interaction.message:
+            await interaction.response.send_message("Не удалось определить заявку.", ephemeral=True)
+            return
+        message_id = interaction.message.id
+        meta = _load_request_meta(message_id)
+        if meta is None:
+            await interaction.response.send_message(
+                "Не удалось загрузить данные заявки. Возможно, она была создана до перезапуска бота.",
+                ephemeral=True,
+            )
+            return
+        if meta.get("user_id") != interaction.user.id:
+            await interaction.response.send_message("Это не ваша заявка.", ephemeral=True)
+            return
+        await interaction.response.send_modal(EditRequestModal(message_id, meta["data"]))
 
 
 # ------------------------------------------------------------------ #
@@ -325,14 +882,22 @@ class TicketFormView(discord.ui.View):
         if category is None:
             await interaction.response.send_message("Этот канал не является каналом тикета.", ephemeral=True)
             return
+
+        if "Заказ" in category:
+            tip = (
+                "**📌 Для заказа бустов:**\n"
+                "• После оформления заявки с вами свяжется администратор\n"
+                "• Бусты выполняются в порядке очереди"
+            )
+        else:
+            tip = (
+                "**📌 Для продажи:**\n"
+                "• Деньги отправляются **только после подтверждения сделки**\n"
+                "• Приложите скриншот для подтверждения"
+            )
+
         view = DeliveryMethodView(category)
-        tip = (
-            "**📌 Важная информация:**\n"
-            "• Ник для отправки: **Scaryyyyy**\n"
-            "• Деньги и ресурсы отправляются **только после подтверждения заказа**\n"
-            "• Не забудьте приложить скриншот в форме, если требуется"
-        )
-        await interaction.response.send_message(f"{tip}\n\n**Выберите способ:**", view=view, ephemeral=True)
+        await interaction.response.send_message(f"{tip}\n\n**Выберите способ получения:**", view=view, ephemeral=True)
 
     @staticmethod
     def _get_category(interaction: discord.Interaction) -> Optional[str]:
@@ -354,11 +919,25 @@ class TicketCog(commands.Cog):
         self.ocr = ocr_service
         self.audit_logger = audit_logger
         self._view = TicketFormView()
+        self._edit_view = EditRequestView()
         bot.add_view(self._view)
+        bot.add_view(self._edit_view)
 
     async def cog_load(self) -> None:
         for category, channel_id in CATEGORY_CHANNELS.items():
             await self._ensure_form_message(channel_id, category)
+
+    async def _find_existing_form_message(self, channel) -> Optional[discord.Message]:
+        try:
+            async for msg in channel.history(limit=50):
+                if msg.author == self.bot.user and msg.components:
+                    for comp in msg.components:
+                        for child in comp.children:
+                            if child.custom_id == "ticket_form:open":
+                                return msg
+        except Exception:
+            pass
+        return None
 
     async def _ensure_form_message(self, channel_id: int, category: str) -> None:
         channel = self.bot.get_channel(channel_id)
@@ -371,12 +950,16 @@ class TicketCog(commands.Cog):
                 logger.warning("В категории %s нет текстовых каналов", category)
                 return
             channel = text_ch
-        try:
-            async for msg in channel.history(limit=30):
-                if msg.author == self.bot.user and msg.components:
-                    return
-        except Exception:
-            pass
+
+        existing = await self._find_existing_form_message(channel)
+        if existing is not None:
+            embed = self._build_form_embed(category)
+            try:
+                await existing.edit(embed=embed)
+            except Exception:
+                pass
+            return
+
         await self._send_form_to_channel(channel, category)
 
     @commands.Cog.listener()
@@ -425,17 +1008,31 @@ class TicketCog(commands.Cog):
 
         await self._send_form_to_channel(thread, category_name)
 
-    async def _send_form_to_channel(self, channel, category: str) -> None:
-        embed = discord.Embed(
-            title=f"📋 {category}",
-            description=(
-                "Для оформления сделки нажмите кнопку ниже и заполните форму.\n"
+    def _build_form_embed(self, category: str) -> discord.Embed:
+        if "Заказ" in category:
+            description = (
+                "Для заказа бустов нажмите кнопку ниже и заполните форму.\n"
+                "Вы сможете выбрать бусты и указать их количество."
+            )
+        else:
+            description = (
+                "Для продажи нажмите кнопку ниже и заполните форму.\n"
                 "Вы также можете прикрепить скриншот — бот автоматически "
                 "распознает предметы и рассчитает сумму."
-            ),
+            )
+        return discord.Embed(
+            title=f"📋 {category}",
+            description=description,
             colour=discord.Colour.blurple(),
         )
+
+    async def _send_form_to_channel(self, channel, category: str) -> None:
+        embed = self._build_form_embed(category)
         try:
+            existing = await self._find_existing_form_message(channel)
+            if existing is not None:
+                await existing.edit(embed=embed)
+                return
             await channel.send(embed=embed, view=self._view)
         except Exception as e:
             logger.warning("Не удалось отправить форму в %s: %s", channel.id, e)
@@ -548,7 +1145,6 @@ async def _save_deal_report(channel_id: int, entry: dict) -> None:
         report.append(entry)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
-
     await asyncio.to_thread(_sync_save)
 
 
