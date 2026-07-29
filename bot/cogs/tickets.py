@@ -12,6 +12,7 @@ from discord.ext import commands
 
 from bot.services.ocr_service import OcrService, _fmt
 from bot.config.constants import MONITORED_CHANNELS, CATEGORY_CHANNELS
+from bot.utils.embeds import resolve_emoji
 
 logger = logging.getLogger("bot")
 
@@ -97,6 +98,15 @@ class TicketFormModal(discord.ui.Modal):
                 placeholder="ДД.ММ.ГГГГ ЧЧ:ММ",
             ))
 
+        if "Продажа" in category:
+            self.add_item(discord.ui.TextInput(
+                label="Ссылка на скриншот (необязательно)",
+                custom_id="screenshot_url",
+                required=False,
+                style=discord.TextStyle.short,
+                placeholder="https://i.imgur.com/ваш_скриншот.png",
+            ))
+
         self.add_item(discord.ui.TextInput(
             label="Кто вас пригласил (Ник в игре)",
             custom_id="referrer_game",
@@ -148,7 +158,7 @@ class TicketFormModal(discord.ui.Modal):
             method_str = f"📮 Почта ({delivery_text})" if delivery == "Почта" else "🤝 Трейд"
             embed.add_field(name="Способ", value=method_str)
 
-        if "deadline" in text_data and text_data["deadline"]:
+        if text_data.get("deadline", ""):
             embed.add_field(name="⏰ До даты и времени", value=text_data["deadline"])
 
         ref_game = text_data.get("referrer_game", "").strip()
@@ -158,52 +168,69 @@ class TicketFormModal(discord.ui.Modal):
         if ref_discord:
             embed.add_field(name="👤 Пригласил (Ник в Discord)", value=ref_discord)
         if boosts:
-            embed.add_field(name="📦 Выбранные бусты", value="\n".join(f"• {b}" for b in boosts), inline=False)
+            items = await asyncio.to_thread(interaction.client.repo.get_all_items)
+            item_map = {it["name"].lower(): it for it in items}
+            boost_lines = []
+            for b in boosts:
+                it = item_map.get(b.lower())
+                e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
+                emoji_str = e + " " if e else ""
+                boost_lines.append(f"• {emoji_str}{b}")
+            embed.add_field(name="📦 Выбранные бусты", value="\n".join(boost_lines), inline=False)
+
+        # Screenshot from modal URL
+        screenshot_url = text_data.get("screenshot_url", "").strip()
+        if screenshot_url:
+            embed.set_image(url=screenshot_url)
 
         embed.set_footer(text="Клондайк Шёпота")
 
         await interaction.channel.send(content=interaction.user.mention, embed=embed)
 
-        await self._duplicate_to_audit(interaction, embed, category, text_data, delivery, boosts)
+        await self._duplicate_to_audit(interaction, embed, category, text_data, delivery, boosts, screenshot_url)
 
         entry = {
             "type": "form", "timestamp": discord.utils.utcnow().isoformat(),
             "user_id": interaction.user.id, "user_name": str(interaction.user),
             "category": category,
-            "data": {**text_data, "delivery_method": delivery, "selected_boosts": boosts},
+            "data": {k: v for k, v in text_data.items() if v},
+            "delivery_method": delivery, "selected_boosts": boosts,
         }
         await _save_deal_report(interaction.channel_id, entry)
 
-        prompt = await interaction.channel.send(
-            "📸 Если хотите прикрепить скриншот, отправьте изображение в этот канал в течение **60 секунд**."
-        )
+        # Fallback: allow screenshot as attachment within 60s (only if no URL provided)
+        if not screenshot_url:
+            prompt = await interaction.channel.send(
+                "📸 Если хотите прикрепить скриншот, отправьте изображение в этот канал в течение **60 секунд**."
+            )
 
-        def check(m):
-            return (m.author == interaction.user and m.channel == interaction.channel
-                    and m.attachments and m.attachments[0].content_type
-                    and m.attachments[0].content_type.startswith("image/"))
+            def check(m):
+                return (m.author == interaction.user and m.channel == interaction.channel
+                        and m.attachments and m.attachments[0].content_type
+                        and m.attachments[0].content_type.startswith("image/"))
 
-        try:
-            wait_msg = await interaction.client.wait_for("message", timeout=60.0, check=check)
-            att = wait_msg.attachments[0]
-            fp = await att.to_file()
-            embed.set_image(url="attachment://screenshot.png")
-            await interaction.channel.send(content=interaction.user.mention, embed=embed, file=fp)
-            await self._duplicate_to_audit_with_attachment(interaction, embed, fp)
-            await prompt.delete()
-        except asyncio.TimeoutError:
-            pass
+            try:
+                wait_msg = await interaction.client.wait_for("message", timeout=60.0, check=check)
+                att = wait_msg.attachments[0]
+                fp = await att.to_file()
+                embed.set_image(url="attachment://screenshot.png")
+                await interaction.channel.send(content=interaction.user.mention, embed=embed, file=fp)
+                await self._duplicate_to_audit_with_attachment(interaction, embed, fp)
+                await prompt.delete()
+            except asyncio.TimeoutError:
+                pass
 
         form_store.clear(interaction.user.id)
 
-    async def _duplicate_to_audit(self, interaction, embed, category, text_data, delivery, boosts):
+    async def _duplicate_to_audit(self, interaction, embed, category, text_data, delivery, boosts, screenshot_url=""):
         try:
             audit = interaction.client.audit_logger
             details = {
                 "Категория": category,
                 "Ник в игре": text_data.get("game_nick", ""),
-                "Способ": delivery or "—",
             }
+            if delivery:
+                details["Способ"] = delivery
             ref_game = text_data.get("referrer_game", "").strip()
             ref_discord = text_data.get("referrer_discord", "").strip()
             if ref_game:
@@ -212,6 +239,8 @@ class TicketFormModal(discord.ui.Modal):
                 details["Пригласил (Discord)"] = ref_discord
             if boosts:
                 details["Бусты"] = ", ".join(boosts)
+            if screenshot_url:
+                details["Скриншот"] = screenshot_url
             await audit.log(interaction.user, f"/ticket_form [{category}]", details)
         except Exception:
             pass
@@ -297,7 +326,13 @@ class TicketFormView(discord.ui.View):
             await interaction.response.send_message("Этот канал не является каналом тикета.", ephemeral=True)
             return
         view = DeliveryMethodView(category)
-        await interaction.response.send_message("Выберите способ:", view=view, ephemeral=True)
+        tip = (
+            "**📌 Важная информация:**\n"
+            "• Ник для отправки: **Scaryyyyy**\n"
+            "• Деньги и ресурсы отправляются **только после подтверждения заказа**\n"
+            "• Не забудьте приложить скриншот в форме, если требуется"
+        )
+        await interaction.response.send_message(f"{tip}\n\n**Выберите способ:**", view=view, ephemeral=True)
 
     @staticmethod
     def _get_category(interaction: discord.Interaction) -> Optional[str]:

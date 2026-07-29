@@ -16,6 +16,8 @@ from bot.config.constants import (
     COL_DB_PRICE_BUY, COL_DB_PRICE_SELL, COL_DB_EMOJI, COL_DB_UPDATED,
     DATA_START_ROW, MAX_RETRIES, RETRY_MIN_WAIT,
     SYNC_SHEET_SKUP, SYNC_SHEET_SKUP_BOOST, SYNC_SHEET_BOOST_SALE,
+    SYNC_COLUMN_PAIRS_FULL, SYNC_COLUMN_PAIRS_HALF,
+    SYNC_MAX_ROWS_SKUP, SYNC_MAX_ROWS_BOOST, SYNC_MAX_ROWS_SKUP_BOOST,
 )
 
 
@@ -364,18 +366,19 @@ class SheetsRepository:
                     price_buy: Optional[float] = None,
                     price_sell: Optional[float] = None,
                     emoji: str = "") -> dict:
-        """Insert or update an item in the DataBase."""
+        """Insert or update an item in the DataBase.
+        Category is NEVER overwritten on existing items — it's read-only.
+        Search is done by (name + category) to avoid conflicts between
+        same-named items in different categories (e.g. boost vs resource)."""
         from datetime import datetime, timezone, timedelta
         now = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%d.%m.%Y %H:%M")
-        existing = self.find_item(name)
+        existing = self.find_item_by_name_and_category(name, category)
         if existing:
             row_num = None
             cell = self._find_cell_icase(name, COL_DB_NAME)
             if cell:
                 row_num = cell.row
             updates = {}
-            if category:
-                updates[COL_DB_CATEGORY] = category
             if price_buy is not None:
                 updates[COL_DB_PRICE_BUY] = price_buy
             if price_sell is not None:
@@ -442,54 +445,61 @@ class SheetsRepository:
 
     @_retry
     def sync_prices_to_sheets(self) -> dict[str, int]:
-        """Sync prices from DataBase to 3 external sheets.
-        
-        Searches for item names in ANY column, updates price in cell LEFT of name.
-        Matches by both item_name AND category.
-        
-        Returns:
-            dict with counts: resource, skup_boost, boost
+        """Sync prices from DataBase to 3 external sheets using fixed column pairs.
+
+        Rules per sheet:
+          1. СКУП ПРЕДМЕТОВ (Мейн скуп) → resource items, max 31 rows
+             name cols: C,J,Q,X,AE,AL,AS → price cols: D,K,R,Y,AF,AM,AT
+          2. Скуп бустов → resource items, max 9 rows
+             name cols: C,J,Q,X → price cols: D,K,R,Y
+          3. Продажа бустов → boost items, max 9 rows
+             name cols: C,J,Q,X,AE,AL,AS → price cols: D,K,R,Y,AF,AM,AT
+
+        Returns dict with counts: resource, skup_boost, boost.
         """
         items = self.get_all_items()
+
+        resource_by_name: dict[str, dict] = {}
+        boost_by_name: dict[str, dict] = {}
+        for it in items:
+            name_lower = it["name"].strip().lower()
+            if it["category"] == "resource" and it.get("price_buy") is not None:
+                resource_by_name[name_lower] = it
+            elif it["category"] == "boost" and it.get("price_sell") is not None:
+                boost_by_name[name_lower] = it
+
+        def _sync_sheet(ws, column_pairs, max_rows, lookup, price_key):
+            if ws is None:
+                return 0
+            count = 0
+            for name_col, price_col in column_pairs:
+                try:
+                    vals = ws.col_values(name_col)
+                    for row_idx, val in enumerate(vals):
+                        if row_idx >= max_rows:
+                            break
+                        name = val.strip().lower()
+                        if name in lookup:
+                            price = lookup[name].get(price_key)
+                            if price is not None:
+                                ws.update_cell(row_idx + 1, price_col, price)
+                                count += 1
+                except Exception:
+                    pass
+            return count
+
         result = {"resource": 0, "skup_boost": 0, "boost": 0}
 
-        # 1) Resource items → СКУП ПРЕДМЕТОВ
+        # 1) СКУП ПРЕДМЕТОВ → resource items, max 31 rows, full column pairs
         ws_skup = self._get_worksheet(SYNC_SHEET_SKUP)
-        if ws_skup:
-            for it in items:
-                if it["category"] == "resource" and it.get("price_buy") is not None:
-                    row_i, col_i = self._find_item_cell_in_sheet(ws_skup, it["name"])
-                    if row_i is not None and col_i > 1:
-                        ws_skup.update_cell(row_i, col_i - 1, it["price_buy"])
-                        result["resource"] += 1
+        result["resource"] = _sync_sheet(ws_skup, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_SKUP, resource_by_name, "price_buy")
 
-        # 2) Resource items → Скуп бустов
+        # 2) Скуп бустов → resource items, max 9 rows, half column pairs
         ws_skup_boost = self._get_worksheet(SYNC_SHEET_SKUP_BOOST)
-        if ws_skup_boost:
-            for it in items:
-                if it["category"] == "resource" and it.get("price_buy") is not None:
-                    row_i, col_i = self._find_item_cell_in_sheet(ws_skup_boost, it["name"])
-                    if row_i is not None and col_i > 1:
-                        ws_skup_boost.update_cell(row_i, col_i - 1, it["price_buy"])
-                        result["skup_boost"] += 1
+        result["skup_boost"] = _sync_sheet(ws_skup_boost, SYNC_COLUMN_PAIRS_HALF, SYNC_MAX_ROWS_SKUP_BOOST, resource_by_name, "price_buy")
 
-        # 3) Boost items → Продажа бустов (только верхняя таблица до "Себестоимость")
+        # 3) Продажа бустов → boost items, max 9 rows, full column pairs
         ws_boost_sale = self._get_worksheet(SYNC_SHEET_BOOST_SALE)
-        if ws_boost_sale:
-            try:
-                all_vals = ws_boost_sale.get_all_values()
-                limit_row = len(all_vals)
-                for i, row in enumerate(all_vals):
-                    if row and "Себестоимость" in str(row[0]):
-                        limit_row = i
-                        break
-                for it in items:
-                    if it["category"] == "boost" and it.get("price_sell") is not None:
-                        row_i, col_i = self._find_item_cell_in_sheet(ws_boost_sale, it["name"])
-                        if row_i is not None and col_i > 1 and row_i <= limit_row:
-                            ws_boost_sale.update_cell(row_i, col_i - 1, it["price_sell"])
-                            result["boost"] += 1
-            except Exception:
-                pass
+        result["boost"] = _sync_sheet(ws_boost_sale, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_BOOST, boost_by_name, "price_sell")
 
         return result

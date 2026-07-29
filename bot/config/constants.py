@@ -45,6 +45,28 @@ SYNC_SHEET_SKUP: Final[str] = "СКУП ПРЕДМЕТОВ"
 SYNC_SHEET_SKUP_BOOST: Final[str] = "Скуп бустов"
 SYNC_SHEET_BOOST_SALE: Final[str] = "Продажа бустов"
 
+# Пары столбцов (колонка названия, колонка цены) для синхронизации
+# Формат: (name_col, price_col) — 1-based
+SYNC_COLUMN_PAIRS_FULL = [
+    (3, 4),   # C → D
+    (10, 11), # J → K
+    (17, 18), # Q → R
+    (24, 25), # X → Y
+    (31, 32), # AE → AF
+    (38, 39), # AL → AM
+    (45, 46), # AS → AT
+]
+SYNC_COLUMN_PAIRS_HALF = [
+    (3, 4),   # C → D
+    (10, 11), # J → K
+    (17, 18), # Q → R
+    (24, 25), # X → Y
+]
+
+SYNC_MAX_ROWS_SKUP: Final[int] = 31       # Мейн скуп
+SYNC_MAX_ROWS_BOOST: Final[int] = 9       # Продажа бустов
+SYNC_MAX_ROWS_SKUP_BOOST: Final[int] = 9   # Скуп бустов
+
 # — Отслеживаемые каналы —
 MONITORED_CHANNELS: Final[list[int]] = [
     1437410969704730746,

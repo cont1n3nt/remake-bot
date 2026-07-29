@@ -89,6 +89,18 @@ class RolesCog(commands.Cog):
 
         await interaction.followup.send(text, ephemeral=True)
 
+        try:
+            audit = interaction.client.audit_logger
+            details = {
+                "Участник": f"{user.mention} ({user.id})",
+                "Ранг": rank,
+            }
+            if nickname:
+                details["Игровой ник"] = nickname
+            await audit.log(interaction.user, "/set_rank", details)
+        except Exception:
+            pass
+
     @set_rank.error
     async def set_rank_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError,
@@ -142,6 +154,18 @@ class RolesCog(commands.Cog):
                 )
 
         await interaction.followup.send(text, ephemeral=True)
+
+        try:
+            audit = interaction.client.audit_logger
+            details = {
+                "Участник": f"{user.mention} ({user.id})",
+                "Реферальная роль": role,
+            }
+            if nickname:
+                details["Игровой ник"] = nickname
+            await audit.log(interaction.user, "/set_referral", details)
+        except Exception:
+            pass
 
     @set_referral.error
     async def set_referral_error(

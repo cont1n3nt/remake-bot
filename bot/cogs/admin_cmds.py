@@ -260,7 +260,6 @@ class AdminCmdsCog(commands.Cog):
                 reader = csv.DictReader(io.StringIO(content))
 
             all_items = await asyncio.to_thread(self._repo.get_all_items)
-            old_items = {it["name"]: it for it in all_items}
             old_items_by_name_cat = {(it["name"].lower(), it["category"].lower()): it for it in all_items}
             guild = interaction.guild
 
@@ -279,8 +278,6 @@ class AdminCmdsCog(commands.Cog):
                 ps = float(ps_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if ps_raw else None
                 emoji = row.get("Эмодзи", "").strip()
                 old = old_items_by_name_cat.get((name.lower(), cat.lower()))
-                if old is None:
-                    old = old_items.get(name)
                 old_pb = old.get("price_buy") if old else None
                 old_ps = old.get("price_sell") if old else None
                 existing_cat = old["category"] if old else cat
@@ -292,24 +289,24 @@ class AdminCmdsCog(commands.Cog):
                 if old and (old_pb != pb or old_ps != ps):
                     e = resolve_emoji(old.get("emoji", ""), guild)
                     emoji_str = e + " " if e else ""
-                    line_parts = [f"{emoji_str}{name}"]
-                    has_change = False
                     if old_pb != pb and pb is not None and pb != 0:
                         old_str = _fmt(old_pb) if old_pb is not None else "—"
-                        line_parts.append(f"{old_str} → {_fmt(pb)}")
-                        has_change = True
+                        line = f"• {emoji_str}{name} | {old_str} ₽ → {_fmt(pb)} ₽"
+                        if existing_cat == "resource":
+                            changes_resources.append(line)
+                        elif existing_cat == "boost":
+                            changes_boosts.append(line)
+                        else:
+                            changes_skup_boost.append(line)
                     if old_ps != ps and ps is not None and ps != 0:
                         old_str = _fmt(old_ps) if old_ps is not None else "—"
-                        line_parts.append(f"{old_str} → {_fmt(ps)}")
-                        has_change = True
-                    if has_change:
-                        change_str = " | ".join(line_parts)
+                        line = f"• {emoji_str}{name} | {old_str} ₽ → {_fmt(ps)} ₽"
                         if existing_cat == "resource":
-                            changes_resources.append(f"• {change_str}")
+                            changes_resources.append(line)
                         elif existing_cat == "boost":
-                            changes_boosts.append(f"• {change_str}")
+                            changes_boosts.append(line)
                         else:
-                            changes_skup_boost.append(f"• {change_str}")
+                            changes_skup_boost.append(line)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
             msg = f"✅ Импортировано {count} позиций."
             all_changes = []
@@ -343,6 +340,24 @@ class AdminCmdsCog(commands.Cog):
                     for c in chunks:
                         await interaction.followup.send(c, ephemeral=True)
             await interaction.followup.send(msg, ephemeral=True)
+            try:
+                audit = interaction.client.audit_logger
+                audit_details = {}
+                if changes_resources:
+                    audit_details["Ресурсы"] = "\n".join(changes_resources[:5])
+                    if len(changes_resources) > 5:
+                        audit_details["Ресурсы"] += f"\n... и ещё {len(changes_resources) - 5}"
+                if changes_boosts:
+                    audit_details["Бусты"] = "\n".join(changes_boosts[:5])
+                    if len(changes_boosts) > 5:
+                        audit_details["Бусты"] += f"\n... и ещё {len(changes_boosts) - 5}"
+                if changes_skup_boost:
+                    audit_details["Скуп бустов"] = "\n".join(changes_skup_boost[:5])
+                    if len(changes_skup_boost) > 5:
+                        audit_details["Скуп бустов"] += f"\n... и ещё {len(changes_skup_boost) - 5}"
+                await audit.log(interaction.user, "/new_price", audit_details)
+            except Exception:
+                pass
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 
