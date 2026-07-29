@@ -43,6 +43,14 @@ def main() -> None:
     async def on_ready() -> None:
         logger.info("Bot logged in as %s", bot.user)
 
+    @bot.event
+    async def on_app_command_completion(interaction: discord.Interaction, command) -> None:
+        """Глобальное логирование всех слэш-команд."""
+        try:
+            await bot.audit_logger.log_command_usage(interaction)
+        except Exception:
+            pass
+
     async def setup_hook() -> None:
         await bot.load_extension("bot.cogs.profile")
         await bot.load_extension("bot.cogs.transactions")

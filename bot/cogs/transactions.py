@@ -74,7 +74,7 @@ class TransactionsCog(commands.Cog):
             except Exception:
                 pass
 
-        nickname = ник.strip()
+        nickname = ник.strip().lower()
         if not nickname:
             await interaction.followup.send(embed=error_embed("Ник не может быть пустым."), ephemeral=True)
             return
@@ -84,9 +84,9 @@ class TransactionsCog(commands.Cog):
             )
             return
 
-        referrer = ник_пригласившего.strip() if ник_пригласившего else None
+        referrer = ник_пригласившего.strip().lower() if ник_пригласившего else None
         if referrer:
-            if referrer.lower() == nickname.lower():
+            if referrer == nickname:
                 await interaction.followup.send(embed=error_embed("Нельзя указывать самого себя."), ephemeral=True)
                 return
 
@@ -165,27 +165,24 @@ class TransactionsCog(commands.Cog):
 
         try:
             if new_rank and new_rank != old_rank:
-                mention = _role_mention(new_rank, RANK_ROLES)
-                if not old_rank:
-                    msg = (
-                        f"🎉 {nickname}, поздравляем! Вы получили свой первый ранг — {mention}! 🌟\n"
-                        "Это отличный старт! Продолжайте копить XP за сделки, совершайте новые операции, и новые вершины не заставят себя ждать! Удачи! 💪\n"
-                        "📈 Отслеживать свой прогресс и статистику вы можете в /profile!"
-                    )
-                else:
-                    msg = (
-                        f"🔥 {nickname}, невероятный прогресс! Вы достигли нового ранга — {mention}! 🏆\n"
-                        "Ваша активность приносит свои плоды. Не останавливайтесь на достигнутом, впереди ещё более крутые награды! Вперёд к новым сделкам! 🚀\n"
-                        "📈 Отслеживать свой прогресс и статистику вы можете в /profile!"
-                    )
+                role_mention = _role_mention(new_rank, RANK_ROLES)
+                msg = (
+                    f"🎉 **Выдача ранговой роли!**\n\n"
+                    f"1️⃣ Пользователь: пользователь сервера\n"
+                    f"2️⃣ Игровой никнейм: `{nickname}`\n"
+                    f"3️⃣ Полученная роль: {role_mention}\n\n"
+                    f"Поздравляем с получением новой роли! 🌟"
+                )
                 await interaction.channel.send(msg)
 
             if referrer and new_referral_role and new_referral_role != old_referral_role:
-                mention = _role_mention(new_referral_role, REFERRAL_ROLES)
+                role_mention = _role_mention(new_referral_role, REFERRAL_ROLES)
                 msg = (
-                    f"👥 Игрок {referrer} получает роль {mention} за приглашение друзей и их активность! 🎉\n"
-                    "Спасибо за расширение нашего комьюнити! Приглашайте больше друзей, помогайте им развиваться и забирайте самые сочные реферальные бонусы! 🧲\n"
-                    "📈 Отслеживать свою реферальную сеть и статистику вы можете в /profile!"
+                    f"🎉 **Выдача реферальной роли!**\n\n"
+                    f"1️⃣ Пользователь: пользователь сервера\n"
+                    f"2️⃣ Игровой никнейм: `{referrer}`\n"
+                    f"3️⃣ Полученная роль: {role_mention}\n\n"
+                    f"Поздравляем с получением новой роли! 🌟"
                 )
                 await interaction.channel.send(msg)
         except Exception as e:

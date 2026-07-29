@@ -26,7 +26,7 @@ def _parse_float(val) -> float:
         return 0.0
     if isinstance(val, (int, float)):
         return float(val)
-    s = str(val).strip().replace(" ", "").replace(",", ".")
+    s = str(val).strip().replace(" ", "").replace(",", ".").replace("₽", "")
     try:
         return float(s)
     except ValueError:
@@ -67,12 +67,16 @@ class AnalyticsCog(commands.Cog):
                     continue
                 nickname = str(row[1]).strip() if len(row) > 1 else ""
                 is_buy = len(row) > 2 and str(row[2]).strip().upper() == "TRUE"
+                is_sell = len(row) > 3 and str(row[3]).strip().upper() == "TRUE"
                 amount = _parse_float(row[4]) if len(row) > 4 else 0.0
+                if amount == 0.0 and not is_buy and not is_sell:
+                    continue
                 referrer = str(row[7]).strip() if len(row) > 7 and row[7] else ""
                 txs.append({
                     "date": raw_date,
                     "nickname": nickname,
-                    "type": "buy" if is_buy else "sell",
+                    "is_buy_checkbox": is_buy,
+                    "is_sell_checkbox": is_sell,
                     "amount": amount,
                     "referrer": referrer,
                 })
@@ -82,25 +86,25 @@ class AnalyticsCog(commands.Cog):
 
     def _build_analytics_embed(self, txs: list[dict], title: str) -> discord.Embed:
         players = {}
-        total_buy = 0.0
-        total_sell = 0.0
+        total_prodazha = 0.0
+        total_pokupka = 0.0
         for tx in txs:
             nick = tx["nickname"]
             if nick not in players:
-                players[nick] = {"buy": 0.0, "sell": 0.0}
-            if tx["type"] == "buy":
-                players[nick]["buy"] += tx["amount"]
-                total_buy += tx["amount"]
-            else:
-                players[nick]["sell"] += tx["amount"]
-                total_sell += tx["amount"]
+                players[nick] = {"prodazha": 0.0, "pokupka": 0.0}
+            if tx["is_buy_checkbox"]:
+                players[nick]["prodazha"] += tx["amount"]
+                total_prodazha += tx["amount"]
+            if tx["is_sell_checkbox"]:
+                players[nick]["pokupka"] += tx["amount"]
+                total_pokupka += tx["amount"]
         embed = discord.Embed(title=title, colour=discord.Colour.blue())
         lines = []
-        for nick, data in sorted(players.items(), key=lambda x: x[1]["buy"] + x[1]["sell"], reverse=True):
-            total = data["buy"] + data["sell"]
+        for nick, data in sorted(players.items(), key=lambda x: x[1]["prodazha"] + x[1]["pokupka"], reverse=True):
+            total = data["prodazha"] + data["pokupka"]
             lines.append(
-                f"• {nick}: Покупка {_fmt(data['buy'])}₽ | "
-                f"Продажа {_fmt(data['sell'])}₽ | "
+                f"• {nick}: Продажа {_fmt(data['prodazha'])}₽ | "
+                f"Покупка {_fmt(data['pokupka'])}₽ | "
                 f"Оборот {_fmt(total)}₽"
             )
         if lines:
@@ -109,18 +113,16 @@ class AnalyticsCog(commands.Cog):
                 embed.set_footer(text=f"… и ещё {len(lines) - 30} игроков")
         else:
             embed.description = "Нет сделок за выбранный период."
-        profit = total_buy - total_sell
-        embed.add_field(name="Общий оборот продаж", value=f"{_fmt(total_buy)} ₽")
-        embed.add_field(name="Общий оборот покупок", value=f"{_fmt(total_sell)} ₽")
+        profit = total_prodazha - total_pokupka
+        embed.add_field(name="Общий оборот продаж", value=f"{_fmt(total_prodazha)} ₽")
+        embed.add_field(name="Общий оборот покупок", value=f"{_fmt(total_pokupka)} ₽")
         embed.add_field(
             name="Чистая прибыль",
             value=f"{_fmt(profit)} ₽" if profit >= 0 else f"-{_fmt(abs(profit))} ₽",
         )
+        embed.add_field(name="Общее количество тикетов", value=str(len(txs)), inline=False)
         return embed
 
-    # ------------------------------------------------------------------
-    #  /day
-    # ------------------------------------------------------------------
     @app_commands.command(name="day", description="📊 (Админ) Показать аналитику и статистику продаж за конкретный день")
     @app_commands.describe(дата="Дата в формате ДД.ММ.ГГГГ (например 26.07.2026)")
     @app_commands.checks.has_permissions(administrator=True)
@@ -145,25 +147,27 @@ class AnalyticsCog(commands.Cog):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    #  /week
-    # ------------------------------------------------------------------
-    @app_commands.command(name="week", description="📈 (Админ) Показать статистику продаж за выбранную неделю")
-    @app_commands.describe(год="Год (например 2026)", неделя="Номер недели (1-53)")
+    @app_commands.command(name="week", description="📈 (Админ) Показать статистику продаж за выбранный период")
+    @app_commands.describe(диапазон="Диапазон дат: ДД.ММ.ГГГГ - ДД.ММ.ГГГГ (например 20.07.2026 - 26.07.2026)")
     @app_commands.checks.has_permissions(administrator=True)
-    async def week(self, interaction: discord.Interaction, год: int, неделя: int):
+    async def week(self, interaction: discord.Interaction, диапазон: str):
         await interaction.response.defer(ephemeral=True)
         try:
-            start = datetime.strptime(f"{год}-W{неделя:02d}-1", "%G-W%V-%u").date()
-            end = start + timedelta(days=6)
-        except ValueError:
-            await interaction.followup.send(embed=error_embed("Неверный номер недели."), ephemeral=True)
+            parts = [p.strip() for p in диапазон.split("-")]
+            if len(parts) != 2:
+                raise ValueError
+            start = datetime.strptime(parts[0], "%d.%m.%Y").date()
+            end = datetime.strptime(parts[1], "%d.%m.%Y").date()
+        except (ValueError, IndexError):
+            await interaction.followup.send(
+                embed=error_embed("Неверный формат. Используйте: ДД.ММ.ГГГГ - ДД.ММ.ГГГГ (например 20.07.2026 - 26.07.2026)"),
+                ephemeral=True)
             return
         try:
             txs = await asyncio.to_thread(self._get_transactions_for_period, start, end)
             embed = self._build_analytics_embed(
                 txs,
-                f"📈 Статистика за {неделя}-ю неделю {год} ({start.strftime('%d.%m')}-{end.strftime('%d.%m')})",
+                f"📈 Статистика за {start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}",
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
@@ -175,9 +179,6 @@ class AnalyticsCog(commands.Cog):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    #  /month
-    # ------------------------------------------------------------------
     @app_commands.command(name="month", description="📉 (Админ) Показать аналитику и статистику продаж за полный месяц")
     @app_commands.describe(месяц="Месяц (1-12)", год="Год (например 2026)")
     @app_commands.checks.has_permissions(administrator=True)

@@ -27,6 +27,18 @@ def _fmt(n: float) -> str:
     return f"{n:.2f}".rstrip("0").rstrip(".")
 
 
+def _parse_amount_logs(val) -> float:
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().replace(" ", "").replace(",", ".").replace("₽", "")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
 # ------------------------------------------------------------------ #
 #  Price List View (с переключением ресурсы/бусты)                   #
 # ------------------------------------------------------------------ #
@@ -102,6 +114,7 @@ class AdminCmdsCog(commands.Cog):
             return
         lines = []
         seen = set()
+        day_counters = {}
         for row in reversed(vals):
             if len(row) < 5:
                 continue
@@ -110,15 +123,22 @@ class AdminCmdsCog(commands.Cog):
                 continue
             seen.add(key)
             raw_date = str(row[0]).strip() if row[0] else ""
+            if not raw_date:
+                continue
             nick = str(row[1]).strip() if len(row) > 1 else ""
-            t = "Покупка" if len(row) > 2 and str(row[2]).strip().upper() == "TRUE" else "Продажа"
-            amt = 0.0
-            try:
-                amt = float(str(row[4]).strip().replace(" ", "").replace(",", ".")) if len(row) > 4 and row[4] else 0.0
-            except ValueError:
-                pass
+            is_buy = len(row) > 2 and str(row[2]).strip().upper() == "TRUE"
+            is_sell = len(row) > 3 and str(row[3]).strip().upper() == "TRUE"
+            if not is_buy and not is_sell:
+                continue
+            t = "Покупка" if is_buy else "Продажа"
+            amt = _parse_amount_logs(row[4]) if len(row) > 4 and row[4] else 0.0
+            if amt == 0.0:
+                continue
             ref = str(row[7]).strip() if len(row) > 7 and row[7] else ""
-            line = f"[{raw_date}] {nick} | {t} | {_fmt(amt)}₽"
+            day_key = raw_date[:10]
+            day_counters[day_key] = day_counters.get(day_key, 0) + 1
+            ticket_num = day_counters[day_key]
+            line = f"№{ticket_num} [{raw_date}] {nick} | {t} | {_fmt(amt)}₽"
             if ref:
                 line += f" | Реферер: {ref}"
             lines.append(line)
@@ -197,65 +217,98 @@ class AdminCmdsCog(commands.Cog):
     # ------------------------------------------------------------------
     #  /new_price
     # ------------------------------------------------------------------
-    @app_commands.command(name="new_price", description="📁 (Админ) Загрузить новый прайс-лист для массового обновления")
-    @app_commands.describe(file="CSV-файл с колонками: Название, Категория, Цена скупки, Цена продажи, Эмодзи")
+    @app_commands.command(name="new_price", description="📁 (Админ) Загрузить новый прайс-лист для массового обновления (.csv/.txt)")
+    @app_commands.describe(file="CSV/TXT-файл с колонками: Название, Категория, Цена скупки, Цена продажи, Эмодзи")
     @app_commands.checks.has_permissions(administrator=True)
     async def new_price(self, interaction: discord.Interaction, file: discord.Attachment):
         await interaction.response.defer(ephemeral=True)
-        if not file.filename.endswith(".csv"):
-            await interaction.followup.send(embed=error_embed("Файл должен быть в формате CSV."), ephemeral=True)
+        if not (file.filename.endswith(".csv") or file.filename.endswith(".txt")):
+            await interaction.followup.send(embed=error_embed("Файл должен быть в формате .csv или .txt."), ephemeral=True)
             return
         try:
             content = (await file.read()).decode("utf-8-sig")
-            reader = csv.DictReader(io.StringIO(content))
+            if file.filename.endswith(".txt"):
+                lines = [l for l in content.split("\n") if l.strip()]
+                fieldnames = ["Название", "Категория", "Цена скупки", "Цена продажи", "Эмодзи"]
+                reader = csv.DictReader(lines, fieldnames=fieldnames)
+            else:
+                reader = csv.DictReader(io.StringIO(content))
 
-            # Collect old prices before import
             old_items = {it["name"]: it for it in await asyncio.to_thread(self._repo.get_all_items)}
             guild = interaction.guild
 
             count = 0
-            changes = []
+            changes_resources = []
+            changes_boosts = []
+            changes_skup_boost = []
             for row in reader:
                 name = row.get("Название", "").strip()
                 cat = row.get("Категория", "").strip()
+                if not name or not cat:
+                    continue
                 pb_raw = row.get("Цена скупки", "").strip()
                 ps_raw = row.get("Цена продажи", "").strip()
-                pb = float(pb_raw.replace(" ", "").replace(",", ".")) if pb_raw else None
-                ps = float(ps_raw.replace(" ", "").replace(",", ".")) if ps_raw else None
+                pb = float(pb_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if pb_raw else None
+                ps = float(ps_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if ps_raw else None
                 emoji = row.get("Эмодзи", "").strip()
-                if name and cat:
-                    old = old_items.get(name)
-                    old_pb = old.get("price_buy") if old else None
-                    old_ps = old.get("price_sell") if old else None
-                    await asyncio.to_thread(
-                        self._repo.upsert_item, name, cat,
-                        price_buy=pb, price_sell=ps, emoji=emoji,
-                    )
-                    count += 1
-                    if old and (old_pb != pb or old_ps != ps):
-                        parts = []
-                        if old_pb != pb:
-                            parts.append(f"Скупка: {_fmt(old_pb) if old_pb is not None else '—'} → {_fmt(pb) if pb is not None else '—'}")
-                        if old_ps != ps:
-                            parts.append(f"Продажа: {_fmt(old_ps) if old_ps is not None else '—'} → {_fmt(ps) if ps is not None else '—'}")
-                        e = resolve_emoji(old.get("emoji", ""), guild)
-                        emoji_str = e + " " if e else ""
-                        changes.append(f"• {emoji_str}{name} | {'; '.join(parts)}")
-            # sync prices
+                old = old_items.get(name)
+                old_pb = old.get("price_buy") if old else None
+                old_ps = old.get("price_sell") if old else None
+                await asyncio.to_thread(
+                    self._repo.upsert_item, name, cat,
+                    price_buy=pb, price_sell=ps, emoji=emoji,
+                )
+                count += 1
+                if old and (old_pb != pb or old_ps != ps):
+                    e = resolve_emoji(old.get("emoji", ""), guild)
+                    emoji_str = e + " " if e else ""
+                    line_parts = [f"{emoji_str}{name}"]
+                    has_change = False
+                    if old_pb != pb and pb is not None and pb != 0:
+                        old_str = _fmt(old_pb) if old_pb is not None else "—"
+                        line_parts.append(f"{old_str} → {_fmt(pb)}")
+                        has_change = True
+                    if old_ps != ps and ps is not None and ps != 0:
+                        old_str = _fmt(old_ps) if old_ps is not None else "—"
+                        line_parts.append(f"{old_str} → {_fmt(ps)}")
+                        has_change = True
+                    if has_change:
+                        change_str = " | ".join(line_parts)
+                        if cat == "resource":
+                            changes_resources.append(f"• {change_str}")
+                        elif cat == "boost":
+                            changes_boosts.append(f"• {change_str}")
+                        else:
+                            changes_skup_boost.append(f"• {change_str}")
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
             msg = f"✅ Импортировано {count} позиций."
-            if changes:
-                chunks = []
-                chunk = "**Изменения цен:**\n"
-                for c in changes:
-                    if len(chunk) + len(c) + 1 > 1900:
+            all_changes = []
+            if changes_resources:
+                all_changes.append("🛒 **Изменение цен на ресурсы:**")
+                all_changes.extend(changes_resources)
+            if changes_boosts:
+                all_changes.append("🍔 **Изменение цен на бусты:**")
+                all_changes.extend(changes_boosts)
+            if changes_skup_boost:
+                all_changes.append("🍾 **Изменение цен на скуп бустов:**")
+                all_changes.extend(changes_skup_boost)
+            if all_changes:
+                all_text = "\n".join(all_changes)
+                if len(all_text) <= 1900:
+                    await interaction.followup.send(all_text, ephemeral=True)
+                else:
+                    chunks = []
+                    chunk = ""
+                    for line in all_changes:
+                        if len(chunk) + len(line) + 1 > 1900:
+                            chunks.append(chunk)
+                            chunk = line + "\n"
+                        else:
+                            chunk += line + "\n"
+                    if chunk:
                         chunks.append(chunk)
-                        chunk = ""
-                    chunk += c + "\n"
-                if chunk:
-                    chunks.append(chunk)
-                for c in chunks:
-                    await interaction.followup.send(c, ephemeral=True)
+                    for c in chunks:
+                        await interaction.followup.send(c, ephemeral=True)
             await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)

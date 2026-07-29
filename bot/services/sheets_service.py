@@ -31,7 +31,7 @@ class SheetsService:
         return self._repo.ensure_user(nickname)
 
     def set_referred_by(self, nickname: str, referrer: str) -> None:
-        self._repo.set_referred_by(nickname, referrer)
+        self._repo.set_referred_by(nickname.lower().strip(), referrer.lower().strip())
 
     def user_has_referral(self, nickname: str) -> bool:
         return self._repo.user_has_referral(nickname)
@@ -40,5 +40,8 @@ class SheetsService:
         self, nickname: str, tx_type: str, amount: float,
         referrer: str | None = None,
     ) -> Transaction:
+        nickname = nickname.lower().strip()
+        if referrer:
+            referrer = referrer.lower().strip()
         self._repo.append_transaction(nickname, tx_type, amount, referrer)
         return Transaction(nickname=nickname, tx_type=tx_type, amount=amount)

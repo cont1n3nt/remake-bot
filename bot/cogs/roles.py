@@ -15,9 +15,30 @@ from bot.services.role_service import (
 
 logger = logging.getLogger("bot")
 
-# ------------------------------------------------------------------ #
-#  Ког                                                               #
-# ------------------------------------------------------------------ #
+
+async def _send_role_notification(
+    channel: discord.TextChannel,
+    member: discord.Member,
+    nickname: str,
+    role_name: str,
+    role_type: str,
+    role_map: dict[str, int],
+) -> None:
+    mention = member.mention
+    role_id = role_map.get(role_name, 0)
+    role_mention = f"<@&{role_id}>" if role_id else role_name
+    msg = (
+        f"🎉 **Выдача {role_type} роли!**\n\n"
+        f"1️⃣ Пользователь: {mention}\n"
+        f"2️⃣ Игровой никнейм: `{nickname}`\n"
+        f"3️⃣ Полученная роль: {role_mention}\n\n"
+        f"Поздравляем с получением новой роли! 🌟"
+    )
+    try:
+        await channel.send(msg)
+    except Exception as e:
+        logger.warning("role notification failed: %s", e)
+
 
 class RolesCog(commands.Cog):
     """Автоматическое и ручное назначение ранговых / реферальных ролей."""
@@ -27,12 +48,8 @@ class RolesCog(commands.Cog):
         self.role_service = role_service
         self.role_service.set_bot(bot)
 
-    # ------------------------------------------------------------------
-    #  /set_rank — ручная установка ранговой роли
-    # ------------------------------------------------------------------
-
-    @app_commands.command(name="set_rank")
-    @app_commands.describe(user="Вручную установить ранговую роль участнику")
+    @app_commands.command(name="set_rank", description="🏅 (Админ) Ручное назначение игрового ранга/роли пользователю сервера")
+    @app_commands.describe(user="Участник сервера", rank="Название ранга", nickname="Игровой никнейм (для уведомления)")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.choices(rank=[
         app_commands.Choice(name="Standard", value="Standard"),
@@ -46,6 +63,7 @@ class RolesCog(commands.Cog):
         interaction: discord.Interaction,
         user: discord.Member,
         rank: str,
+        nickname: str = "",
     ) -> None:
         await interaction.response.defer(ephemeral=True)
 
@@ -57,7 +75,6 @@ class RolesCog(commands.Cog):
         )
 
         if result is None:
-            # Проверяем, может быть роль уже была назначена
             current = self.role_service._get_current_from_map(user, RANK_ROLES)
             if current and current.id == RANK_ROLES.get(rank):
                 text = f"Роль `{rank}` уже назначена пользователю {user.mention}."
@@ -65,6 +82,10 @@ class RolesCog(commands.Cog):
                 text = "Не удалось назначить роль. Проверьте права бота."
         else:
             text = f"Роль `{result}` назначена пользователю {user.mention}."
+            if interaction.guild and nickname:
+                await _send_role_notification(
+                    interaction.channel, user, nickname, rank, "ранговая", RANK_ROLES,
+                )
 
         await interaction.followup.send(text, ephemeral=True)
 
@@ -81,12 +102,8 @@ class RolesCog(commands.Cog):
         except discord.errors.InteractionResponded:
             await interaction.followup.send(text, ephemeral=True)
 
-    # ------------------------------------------------------------------
-    #  /set_referral — ручная установка реферальной роли
-    # ------------------------------------------------------------------
-
-    @app_commands.command(name="set_referral")
-    @app_commands.describe(user="Вручную установить реферальную роль участнику")
+    @app_commands.command(name="set_referral", description="🔗 (Админ) Ручная привязка реферальной роли пользователю на сервере")
+    @app_commands.describe(user="Участник сервера", role="Название реферальной роли", nickname="Игровой никнейм (для уведомления)")
     @app_commands.checks.has_permissions(administrator=True)
     @app_commands.choices(role=[
         app_commands.Choice(name="Скаут", value="Скаут"),
@@ -100,6 +117,7 @@ class RolesCog(commands.Cog):
         interaction: discord.Interaction,
         user: discord.Member,
         role: str,
+        nickname: str = "",
     ) -> None:
         await interaction.response.defer(ephemeral=True)
 
@@ -118,6 +136,10 @@ class RolesCog(commands.Cog):
                 text = "Не удалось назначить роль. Проверьте права бота."
         else:
             text = f"Роль `{result}` назначена пользователю {user.mention}."
+            if interaction.guild and nickname:
+                await _send_role_notification(
+                    interaction.channel, user, nickname, role, "реферальная", REFERRAL_ROLES,
+                )
 
         await interaction.followup.send(text, ephemeral=True)
 

@@ -15,6 +15,7 @@ from bot.config.constants import (
     COL_DB_ID, COL_DB_NAME, COL_DB_CATEGORY,
     COL_DB_PRICE_BUY, COL_DB_PRICE_SELL, COL_DB_EMOJI, COL_DB_UPDATED,
     DATA_START_ROW, MAX_RETRIES, RETRY_MIN_WAIT,
+    SYNC_SHEET_SKUP, SYNC_SHEET_SKUP_BOOST, SYNC_SHEET_BOOST_SALE,
 )
 
 
@@ -75,12 +76,41 @@ class SheetsRepository:
         except ValueError:
             return 0
 
+    def _find_cell_icase(self, value: str, column: int) -> Optional[dict]:
+        """Find cell by value case-insensitively in a given column.
+        Returns gspread Cell object or None."""
+        try:
+            vals = self._sheet.col_values(column)
+            for i, v in enumerate(vals):
+                if v.strip().lower() == value.lower():
+                    class FakeCell:
+                        row = i + 1
+                    return FakeCell()
+        except Exception:
+            pass
+        return None
+
+    def _find_all_icase(self, value: str, column: int) -> list:
+        """Find all cells matching value case-insensitively in a column."""
+        result = []
+        try:
+            vals = self._sheet.col_values(column)
+            for i, v in enumerate(vals):
+                if v.strip().lower() == value.lower():
+                    class FakeCell:
+                        row = i + 1
+                    result.append(FakeCell())
+        except Exception:
+            pass
+        return result
+
     @_retry
     def find_user(self, nickname: str) -> Optional[dict]:
         """Return user stats by nickname from the user database (J-S columns).
         Finds the user in column J (Уникальный ник) and reads data
-        from J-S columns of that same row."""
-        cell = self._sheet.find(nickname, in_column=COL_UNIQUE_NICK)
+        from J-S columns of that same row. Case-insensitive."""
+        nickname_lower = nickname.lower()
+        cell = self._find_cell_icase(nickname_lower, COL_UNIQUE_NICK)
         if cell is None:
             return None
 
@@ -89,7 +119,7 @@ class SheetsRepository:
 
         # Read referred_by from ticket rows (column H)
         referred_by = None
-        ticket_cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
+        ticket_cells = self._find_all_icase(nickname_lower, COL_NICKNAME)
         if ticket_cells:
             h_val = self._sheet.cell(ticket_cells[0].row, COL_REFERRED_BY).value
             if h_val and h_val.strip():
@@ -154,16 +184,17 @@ class SheetsRepository:
         })
 
     def _ensure_jrow(self, nickname: str) -> None:
-        """Copy K-U formulas to the UNIQUE row for this nickname if empty."""
+        """Copy K-U formulas to the UNIQUE row for this nickname if empty.
+        Case-insensitive."""
         try:
-            cell = self._sheet.find(nickname, in_column=COL_UNIQUE_NICK)
+            cell = self._find_cell_icase(nickname, COL_UNIQUE_NICK)
             if cell is None:
                 return
             k_raw = self._sheet.cell(cell.row, COL_TOTAL_COINS).value
             if k_raw and str(k_raw).strip():
                 return
             src_row = None
-            for b_cell in self._sheet.findall(nickname, in_column=COL_NICKNAME):
+            for b_cell in self._find_all_icase(nickname, COL_NICKNAME):
                 br = self._sheet.row_values(b_cell.row)
                 if len(br) >= COL_TOTAL_COINS and br[COL_TOTAL_COINS - 1].strip():
                     src_row = b_cell.row
@@ -197,25 +228,27 @@ class SheetsRepository:
 
     @_retry
     def ensure_user(self, nickname: str) -> bool:
-        """Check if nickname exists in column B (ticket section). Return True if created."""
-        cell = self._sheet.find(nickname, in_column=COL_NICKNAME)
-        if cell is not None:
-            return False
-
-        index = self._last_row() + 1
-        self._sheet.insert_row(["", nickname], index)
-        self._copy_formulas_to_new_row(index)
-        self._ensure_jrow(nickname)
-        return True
+        """Check if nickname exists in column B (ticket section).
+        Does NOT create intermediate rows — only checks existence.
+        Case-insensitive."""
+        cell = self._find_cell_icase(nickname, COL_NICKNAME)
+        return cell is not None
 
     @_retry
     def append_transaction(
         self, nickname: str, tx_type: str, amount: float,
         referrer: str | None = None,
     ) -> None:
-        """Append a transaction row, copying formulas from the row above."""
+        """Append a transaction row atomically — only when all data is known.
+
+        Validates that amount > 0 before writing.
+        Nickname is stored lowercase for case-insensitive matching.
+        """
+        if amount <= 0:
+            return
         from datetime import datetime, timezone, timedelta
         now = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%d.%m.%y %H:%M")
+        nickname = nickname.lower().strip()
         index = self._last_row() + 1
         row = [now, nickname, True, False, amount, "", "", referrer or ""]
 
@@ -232,21 +265,24 @@ class SheetsRepository:
 
     @_retry
     def set_referred_by(self, nickname: str, referrer: str) -> None:
-        """Update column H (Пришел от) for every transaction row of this user."""
-        cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
+        """Update column H (Пришел от) for every transaction row of this user.
+        Case-insensitive."""
+        cells = self._find_all_icase(nickname, COL_NICKNAME)
         for cell in cells:
             self._sheet.update_cell(cell.row, COL_REFERRED_BY, referrer)
 
     @_retry
     def find_referrals(self, nickname: str) -> list[dict]:
-        """Find all users who have this nickname in column H (Пришел от)."""
-        cells = self._sheet.findall(nickname, in_column=COL_REFERRED_BY)
+        """Find all users who have this nickname in column H (Пришел от).
+        Case-insensitive."""
+        cells = self._find_all_icase(nickname, COL_REFERRED_BY)
 
         result = []
         for cell in cells:
+            nick_raw = self._sheet.cell(cell.row, COL_NICKNAME).value
             result.append({
                 "row": cell.row,
-                "nickname": self._sheet.cell(cell.row, COL_NICKNAME).value,
+                "nickname": nick_raw.strip() if nick_raw else "",
             })
         return result
 
@@ -257,8 +293,9 @@ class SheetsRepository:
 
     @_retry
     def user_has_referral(self, nickname: str) -> bool:
-        """Check if user already has a referrer set in column H."""
-        cells = self._sheet.findall(nickname, in_column=COL_NICKNAME)
+        """Check if user already has a referrer set in column H.
+        Case-insensitive."""
+        cells = self._find_all_icase(nickname, COL_NICKNAME)
         for cell in cells:
             h_value = self._sheet.cell(cell.row, COL_REFERRED_BY).value
             if h_value and h_value.strip():
@@ -293,8 +330,8 @@ class SheetsRepository:
 
     @_retry
     def find_item(self, name: str) -> Optional[dict]:
-        """Find item by name in the DataBase (column AB)."""
-        cell = self._sheet.find(name, in_column=COL_DB_NAME)
+        """Find item by name in the DataBase (column AB). Case-insensitive."""
+        cell = self._find_cell_icase(name, COL_DB_NAME)
         if cell is None:
             return None
         row = self._sheet.row_values(cell.row)
@@ -324,7 +361,7 @@ class SheetsRepository:
         existing = self.find_item(name)
         if existing:
             row_num = None
-            cell = self._sheet.find(name, in_column=COL_DB_NAME)
+            cell = self._find_cell_icase(name, COL_DB_NAME)
             if cell:
                 row_num = cell.row
             updates = {}
@@ -360,8 +397,8 @@ class SheetsRepository:
 
     @_retry
     def delete_item(self, name: str) -> bool:
-        """Delete item by name from the DataBase."""
-        cell = self._sheet.find(name, in_column=COL_DB_NAME)
+        """Delete item by name from the DataBase. Case-insensitive."""
+        cell = self._find_cell_icase(name, COL_DB_NAME)
         if cell is None:
             return False
         self._sheet.delete_rows(cell.row)
@@ -371,3 +408,76 @@ class SheetsRepository:
     def get_transactions(self, start_row: int = DATA_START_ROW, end_row: int = 2000) -> list[list]:
         """Get all transaction rows (A:H columns)."""
         return self._sheet.get(f"A{start_row}:H{end_row}")
+
+    def _get_worksheet(self, name: str):
+        """Get a worksheet by name from the spreadsheet."""
+        try:
+            return self._spreadsheet.worksheet(name)
+        except Exception:
+            return None
+
+    @_retry
+    def _update_price_in_sheet(self, ws, item_name: str, price: float, name_col: int = 1, price_col: int = 2) -> bool:
+        """Find item by name in a worksheet and update its price.
+        
+        Scans column A for item name, updates price in column B.
+        Returns True if found and updated.
+        """
+        try:
+            names = ws.col_values(name_col)
+            for i, val in enumerate(names):
+                if val.strip().lower() == item_name.lower():
+                    ws.update_cell(i + 1, price_col, price)
+                    return True
+        except Exception:
+            pass
+        return False
+
+    @_retry
+    def sync_prices_to_sheets(self) -> dict[str, int]:
+        """Sync prices from DataBase to 3 external sheets.
+        
+        Returns:
+            dict with counts: resource, skup_boost, boost
+        """
+        items = self.get_all_items()
+        result = {"resource": 0, "skup_boost": 0, "boost": 0}
+
+        # 1) Resource items → СКУП ПРЕДМЕТОВ
+        ws_skup = self._get_worksheet(SYNC_SHEET_SKUP)
+        if ws_skup:
+            for it in items:
+                if it["category"] == "resource" and it.get("price_buy") is not None:
+                    if self._update_price_in_sheet(ws_skup, it["name"], it["price_buy"]):
+                        result["resource"] += 1
+
+        # 2) Resource items → Скуп бустов
+        ws_skup_boost = self._get_worksheet(SYNC_SHEET_SKUP_BOOST)
+        if ws_skup_boost:
+            for it in items:
+                if it["category"] == "resource" and it.get("price_buy") is not None:
+                    if self._update_price_in_sheet(ws_skup_boost, it["name"], it["price_buy"]):
+                        result["skup_boost"] += 1
+
+        # 3) Boost items → Продажа бустов (только верхняя таблица до "Себестоимость")
+        ws_boost_sale = self._get_worksheet(SYNC_SHEET_BOOST_SALE)
+        if ws_boost_sale:
+            try:
+                all_vals = ws_boost_sale.get_all_values()
+                limit_row = len(all_vals)
+                # Find "Себестоимость" row to stop updating before it
+                for i, row in enumerate(all_vals):
+                    if row and "Себестоимость" in str(row[0]):
+                        limit_row = i
+                        break
+                for it in items:
+                    if it["category"] == "boost" and it.get("price_sell") is not None:
+                        for i in range(min(limit_row, len(all_vals))):
+                            if all_vals[i] and all_vals[i][0].strip().lower() == it["name"].lower():
+                                ws_boost_sale.update_cell(i + 1, 2, it["price_sell"])
+                                result["boost"] += 1
+                                break
+            except Exception:
+                pass
+
+        return result

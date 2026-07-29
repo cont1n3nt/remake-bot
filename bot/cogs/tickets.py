@@ -167,6 +167,46 @@ class TicketCog(commands.Cog):
         except Exception:
             pass
 
+        await self._send_form_to_channel(channel, category)
+
+    # ------------------------------------------------------------------
+    #  Отправка формы при создании нового тикет-канала
+    # ------------------------------------------------------------------
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
+        """При создании нового канала в категории тикетов отправляет форму."""
+        if not isinstance(channel, discord.TextChannel):
+            return
+        if channel.category_id not in CATEGORY_CHANNELS.values():
+            return
+        category_name = next((n for n, cid in CATEGORY_CHANNELS.items() if cid == channel.category_id), None)
+        if category_name is None:
+            return
+        await self._send_form_to_channel(channel, category_name)
+
+    @commands.Cog.listener()
+    async def on_thread_create(self, thread: discord.Thread) -> None:
+        """При создании нового треда отправляет форму."""
+        parent = thread.parent
+        if parent is None:
+            return
+        if isinstance(parent, discord.ForumChannel):
+            category_name = next((n for n, cid in CATEGORY_CHANNELS.items() if cid == parent.id), None)
+            if category_name:
+                await self._send_form_to_channel(thread, category_name)
+            return
+        if parent.category_id is None:
+            return
+        if parent.category_id not in CATEGORY_CHANNELS.values():
+            return
+        category_name = next((n for n, cid in CATEGORY_CHANNELS.items() if cid == parent.category_id), None)
+        if category_name is None:
+            return
+        await self._send_form_to_channel(thread, category_name)
+
+    async def _send_form_to_channel(self, channel, category: str) -> None:
+        """Отправляет приветственное сообщение с формой в указанный канал."""
         embed = discord.Embed(
             title=f"📋 {category}",
             description=(
@@ -176,7 +216,10 @@ class TicketCog(commands.Cog):
             ),
             colour=discord.Colour.blurple(),
         )
-        await channel.send(embed=embed, view=self._view)
+        try:
+            await channel.send(embed=embed, view=self._view)
+        except Exception as e:
+            logger.warning("Не удалось отправить форму в %s: %s", channel.id, e)
 
     # ------------------------------------------------------------------
     #  OCR на вложенных изображениях

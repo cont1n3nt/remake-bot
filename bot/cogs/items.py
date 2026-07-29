@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from typing import Optional
 
 import discord
@@ -23,10 +22,6 @@ class ItemsCog(commands.Cog):
     def __init__(self, bot: commands.Bot, repo: SheetsRepository) -> None:
         self.bot = bot
         self._repo = repo
-
-    # ------------------------------------------------------------------
-    #  Автодополнения
-    # ------------------------------------------------------------------
 
     async def _autocomplete_items(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
         items = await asyncio.to_thread(self._repo.get_all_items)
@@ -69,11 +64,8 @@ class ItemsCog(commands.Cog):
         emoji_str = e + " " if e else ""
         label = "Скупка" if is_buy else "Продажа"
         old_str = _fmt(old_price) if old_price is not None else "—"
-        return f"{emoji_str}{it['name']} ({label}): `{old_str} ₽` → `{_fmt(new_price)} ₽`"
+        return f"{emoji_str}{it['name']} | {label}: `{old_str} ₽` → `{_fmt(new_price)} ₽`"
 
-    # ------------------------------------------------------------------
-    #  /setprice
-    # ------------------------------------------------------------------
     @app_commands.command(name="setprice", description="🏷️ (Админ) Изменить цену ресурса или скупки буста в базе данных и таблице")
     @app_commands.describe(item="Название предмета", price="Новая цена скупки (поддерживает выражения)")
     @app_commands.autocomplete(item=_autocomplete_resources)
@@ -94,7 +86,7 @@ class ItemsCog(commands.Cog):
             await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_buy=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
             change = self._format_price_change(it, old_price, amount, is_buy=True, guild=interaction.guild)
-            await interaction.followup.send(f"✅ {change}", ephemeral=True)
+            await interaction.followup.send(change, ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 
@@ -104,9 +96,6 @@ class ItemsCog(commands.Cog):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    #  /setboost
-    # ------------------------------------------------------------------
     @app_commands.command(name="setboost", description="🍔 (Админ) Изменить цену продажи буста игрокам")
     @app_commands.describe(item="Название буста", price="Новая цена продажи (поддерживает выражения)")
     @app_commands.autocomplete(item=_autocomplete_boosts)
@@ -123,11 +112,14 @@ class ItemsCog(commands.Cog):
             if it is None:
                 await interaction.followup.send(embed=error_embed("Буст не найден в базе."), ephemeral=True)
                 return
+            if it.get("category") != "boost":
+                await interaction.followup.send(embed=error_embed("Этот предмет не является бустом. Используйте /setprice для ресурсов."), ephemeral=True)
+                return
             old_price = it.get("price_sell")
             await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_sell=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
             change = self._format_price_change(it, old_price, amount, is_buy=False, guild=interaction.guild)
-            await interaction.followup.send(f"✅ {change}", ephemeral=True)
+            await interaction.followup.send(change, ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 
@@ -137,9 +129,6 @@ class ItemsCog(commands.Cog):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    #  /item_add
-    # ------------------------------------------------------------------
     @app_commands.command(name="item_add", description="➕ (Админ) Добавить новый предмет или буст в общую базу данных")
     @app_commands.describe(
         name="Название предмета/буста",
@@ -179,9 +168,6 @@ class ItemsCog(commands.Cog):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    #  /del_item
-    # ------------------------------------------------------------------
     @app_commands.command(name="del_item", description="🗑️ (Админ) Удалить выбранный предмет из базы данных")
     @app_commands.describe(item="Название предмета для удаления")
     @app_commands.autocomplete(item=_autocomplete_items)
@@ -203,16 +189,17 @@ class ItemsCog(commands.Cog):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    #  /sync_prices
-    # ------------------------------------------------------------------
-    @app_commands.command(name="sync_prices", description="🔄 (Админ) Принудительно выгрузить и обновить актуальные цены в основную таблицу")
+    @app_commands.command(name="sync_prices", description="🔄 (Админ) Синхронизировать цены из базы в листы СКУП, Скуп бустов, Продажа бустов")
     @app_commands.checks.has_permissions(administrator=True)
     async def sync_prices(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            prices = await asyncio.to_thread(_sync_prices_from_db, self._repo)
-            await interaction.followup.send(f"✅ Синхронизация завершена. Выгружено {len(prices)} цен.", ephemeral=True)
+            updated = await asyncio.to_thread(self._repo.sync_prices_to_sheets)
+            await interaction.followup.send(
+                f"✅ Синхронизация завершена. Обновлено: ресурсов — {updated.get('resource', 0)}, "
+                f"скуп бустов — {updated.get('skup_boost', 0)}, продажа бустов — {updated.get('boost', 0)}.",
+                ephemeral=True,
+            )
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 
@@ -222,10 +209,6 @@ class ItemsCog(commands.Cog):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
-
-# ------------------------------------------------------------------ #
-#  Вспомогательные функции                                           #
-# ------------------------------------------------------------------ #
 
 def _fmt(n: float) -> str:
     if n == int(n):

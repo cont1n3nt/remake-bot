@@ -40,6 +40,11 @@ MAX_RETRIES: Final[int] = 3
 RETRY_MIN_WAIT: Final[float] = 1.0
 RETRY_MAX_WAIT: Final[float] = 10.0
 
+# Имена листов для синхронизации цен (/sync_prices)
+SYNC_SHEET_SKUP: Final[str] = "СКУП ПРЕДМЕТОВ"
+SYNC_SHEET_SKUP_BOOST: Final[str] = "Скуп бустов"
+SYNC_SHEET_BOOST_SALE: Final[str] = "Продажа бустов"
+
 # — Отслеживаемые каналы —
 MONITORED_CHANNELS: Final[list[int]] = [
     1437410969704730746,
