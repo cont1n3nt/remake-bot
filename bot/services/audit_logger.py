@@ -1,14 +1,8 @@
 import logging
-
 import discord
 from discord import Embed, Colour
 
 logger = logging.getLogger("bot")
-
-
-def _fmt_mention(user: discord.User | discord.Member) -> str:
-    return f"{user.mention} ({user.id})"
-
 
 COMMAND_LABELS = {
     "/add": "[ /add ] 📋 Добавление сделки",
@@ -20,7 +14,7 @@ COMMAND_LABELS = {
     "/set_referral": "[ /set_referral ] 🔗 Реферальная роль",
     "/logs": "[ /logs ] 📜 Логи",
     "/setprice": "[ /setprice ] 🏷 Цена ресурса",
-    "/setboost": "[ /setboost ] 🍔 Цена буста",
+    "/setboost": "[ /setboost ] 🚀 Цена буста",
     "/item_add": "[ /item_add ] ➕ Добавление предмета",
     "/del_item": "[ /del_item ] 🗑 Удаление предмета",
     "/sync_prices": "[ /sync_prices ] 🔄 Синхронизация цен",
@@ -30,6 +24,8 @@ COMMAND_LABELS = {
     "/day": "[ /day ] 📊 День",
     "/week": "[ /week ] 📈 Неделя",
     "/month": "[ /month ] 📉 Месяц",
+    "/edit_request": "[ /edit_request ] ✏️ Изменение заявки",
+    "/ticket_form": "[ /ticket_form ] 📝 Оформление заявки",
 }
 
 
@@ -59,8 +55,8 @@ class AuditLogger:
                 title=title,
                 colour=Colour.green() if success else Colour.red(),
             )
-            embed.add_field(name="\U0001f464 Пользователь", value=_fmt_mention(user), inline=False)
-            embed.add_field(name="\u2699\ufe0f Команда", value=command, inline=False)
+            embed.add_field(name="👤 Пользователь", value=f"@{user.name} ({user.id})", inline=False)
+            embed.add_field(name="⚙ Команда", value=command, inline=False)
 
             if details:
                 if isinstance(details, dict):
@@ -68,20 +64,28 @@ class AuditLogger:
                     for k, v in details.items():
                         if v is not None and v != "":
                             clean_lines.append(f"{k}: {v}")
+                    if clean_lines:
+                        embed.add_field(
+                            name="📄 Изменения",
+                            value="\n".join(clean_lines),
+                            inline=False,
+                        )
+                elif isinstance(details, list):
                     embed.add_field(
-                        name="\U0001f4c4 Параметры",
-                        value="\n".join(clean_lines),
+                        name="📄 Изменения",
+                        value="\n".join(details),
                         inline=False,
                     )
                 else:
-                    embed.add_field(
-                        name="\U0001f4c4 Параметры",
-                        value=str(details),
-                        inline=False,
-                    )
+                    s = str(details)
+                    if s.strip():
+                        embed.add_field(
+                            name="📄 Изменения",
+                            value=s,
+                            inline=False,
+                        )
 
-            embed.add_field(name="\U0001f552 Время", value=self._now_str(), inline=False)
-            embed.add_field(name="\U0001f46e Администратор", value=_fmt_mention(user), inline=False)
+            embed.add_field(name="🕒 Время", value=self._now_str(), inline=False)
             embed.set_footer(text="Связной | Логи")
 
             await channel.send(embed=embed)
@@ -104,8 +108,8 @@ class AuditLogger:
                 title=command_name,
                 colour=Colour.blurple(),
             )
-            embed.add_field(name="\U0001f464 Пользователь", value=_fmt_mention(user), inline=False)
-            embed.add_field(name="\u2699\ufe0f Команда", value=command_name, inline=False)
+            embed.add_field(name="👤 Пользователь", value=f"@{user.name} ({user.id})", inline=False)
+            embed.add_field(name="⚙ Команда", value=command_name, inline=False)
 
             if interaction.data and "options" in interaction.data:
                 param_parts = []
@@ -115,13 +119,12 @@ class AuditLogger:
                         param_parts.append(f"{opt['name']}: {val}")
                 if param_parts:
                     embed.add_field(
-                        name="\U0001f4c4 Параметры",
+                        name="📄 Параметры",
                         value="\n".join(param_parts),
                         inline=False,
                     )
 
-            embed.add_field(name="\U0001f552 Время", value=self._now_str(), inline=False)
-            embed.add_field(name="\U0001f46e Администратор", value=_fmt_mention(user), inline=False)
+            embed.add_field(name="🕒 Время", value=self._now_str(), inline=False)
             embed.set_footer(text="Связной | Логи")
             await channel.send(embed=embed)
         except Exception as e:

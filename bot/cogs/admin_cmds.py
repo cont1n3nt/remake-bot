@@ -323,53 +323,40 @@ class AdminCmdsCog(commands.Cog):
                             changes_skup_boost.append(line)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
             msg = f"✅ Импортировано {count} позиций."
-            all_changes = []
-            cat_sections = []
+
+            audit_all = []
+
             if changes_resources:
-                cat_sections.append(("🛒 **Изменение цен на ресурсы:**", changes_resources))
+                embed = discord.Embed(
+                    title="📦 Изменение цен ресурсов",
+                    colour=discord.Colour.blue(),
+                )
+                embed.description = "\n".join(changes_resources)
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                audit_all.extend(changes_resources)
+
             if changes_boosts:
-                cat_sections.append(("🍔 **Изменение цен на бусты:**", changes_boosts))
+                embed = discord.Embed(
+                    title="🚀 Изменение цен бустов",
+                    colour=discord.Colour.blue(),
+                )
+                embed.description = "\n".join(changes_boosts)
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                audit_all.extend(changes_boosts)
+
             if changes_skup_boost:
-                cat_sections.append(("🍾 **Изменение цен на скуп бустов:**", changes_skup_boost))
-            for idx, (header, items_list) in enumerate(cat_sections):
-                if idx > 0:
-                    all_changes.append("")
-                all_changes.append(header)
-                all_changes.extend(items_list)
-            if all_changes:
-                all_text = "\n".join(all_changes)
-                if len(all_text) <= 1900:
-                    await interaction.followup.send(all_text, ephemeral=True)
-                else:
-                    chunks = []
-                    chunk = ""
-                    for line in all_changes:
-                        if len(chunk) + len(line) + 1 > 1900:
-                            chunks.append(chunk)
-                            chunk = line + "\n"
-                        else:
-                            chunk += line + "\n"
-                    if chunk:
-                        chunks.append(chunk)
-                    for c in chunks:
-                        await interaction.followup.send(c, ephemeral=True)
+                embed = discord.Embed(
+                    title="📦 Изменение цен скупа бустов",
+                    colour=discord.Colour.blue(),
+                )
+                embed.description = "\n".join(changes_skup_boost)
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                audit_all.extend(changes_skup_boost)
+
             await interaction.followup.send(msg, ephemeral=True)
             try:
                 audit = interaction.client.audit_logger
-                audit_details = {}
-                if changes_resources:
-                    audit_details["Ресурсы"] = "\n".join(changes_resources[:5])
-                    if len(changes_resources) > 5:
-                        audit_details["Ресурсы"] += f"\n... и ещё {len(changes_resources) - 5}"
-                if changes_boosts:
-                    audit_details["Бусты"] = "\n".join(changes_boosts[:5])
-                    if len(changes_boosts) > 5:
-                        audit_details["Бусты"] += f"\n... и ещё {len(changes_boosts) - 5}"
-                if changes_skup_boost:
-                    audit_details["Скуп бустов"] = "\n".join(changes_skup_boost[:5])
-                    if len(changes_skup_boost) > 5:
-                        audit_details["Скуп бустов"] += f"\n... и ещё {len(changes_skup_boost) - 5}"
-                await audit.log(interaction.user, "/new_price", audit_details)
+                await audit.log(interaction.user, "/new_price", audit_all)
             except Exception:
                 pass
         except Exception as e:

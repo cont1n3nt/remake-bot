@@ -75,8 +75,8 @@ class AnalyticsCog(commands.Cog):
                 txs.append({
                     "date": raw_date,
                     "nickname": nickname,
-                    "is_buy_checkbox": is_buy,
-                    "is_sell_checkbox": is_sell,
+                    "is_buy": is_buy,
+                    "is_sell": is_sell,
                     "amount": amount,
                     "referrer": referrer,
                 })
@@ -85,44 +85,58 @@ class AnalyticsCog(commands.Cog):
         return txs
 
     def _build_analytics_embed(self, txs: list[dict], title: str) -> discord.Embed:
+        """Строит embed аналитики.
+        
+        is_buy = колонка C (Покупка) — игрок продаёт боту (бот покупает)
+        is_sell = колонка D (Продажа) — игрок покупает у бота (бот продаёт)
+
+        С точки зрения игрока:
+          - Продажа: игрок продаёт → is_buy = TRUE → player_sell
+          - Покупка: игрок покупает → is_sell = TRUE → player_buy
+        """
         players = {}
-        total_bot_buy = 0.0
-        total_bot_sell = 0.0
+        total_player_sell = 0.0  # игроки продали боту
+        total_player_buy = 0.0   # игроки купили у бота
         for tx in txs:
             nick = tx["nickname"]
             if nick not in players:
-                players[nick] = {"bot_buy": 0.0, "bot_sell": 0.0}
-            if tx["is_buy_checkbox"]:
-                players[nick]["bot_buy"] += tx["amount"]
-                total_bot_buy += tx["amount"]
-            if tx["is_sell_checkbox"]:
-                players[nick]["bot_sell"] += tx["amount"]
-                total_bot_sell += tx["amount"]
+                players[nick] = {"sell": 0.0, "buy": 0.0}
+            if tx["is_buy"]:
+                players[nick]["sell"] += tx["amount"]
+                total_player_sell += tx["amount"]
+            if tx["is_sell"]:
+                players[nick]["buy"] += tx["amount"]
+                total_player_buy += tx["amount"]
+
         embed = discord.Embed(title=title, colour=discord.Colour.blue())
         lines = []
-        for nick, data in sorted(players.items(), key=lambda x: x[1]["bot_buy"] + x[1]["bot_sell"], reverse=True):
-            total = data["bot_buy"] + data["bot_sell"]
+        for nick, data in sorted(players.items(), key=lambda x: x[1]["sell"] + x[1]["buy"], reverse=True):
+            total = data["sell"] + data["buy"]
             parts = [f"• {nick}"]
-            if data["bot_buy"] > 0:
-                parts.append(f"Продажа {_fmt(data['bot_buy'])}₽")
-            if data["bot_sell"] > 0:
-                parts.append(f"Покупка {_fmt(data['bot_sell'])}₽")
+            if data["sell"] > 0:
+                parts.append(f"Продажа {_fmt(data['sell'])}₽")
+            if data["buy"] > 0:
+                parts.append(f"Покупка {_fmt(data['buy'])}₽")
             parts.append(f"Оборот {_fmt(total)}₽")
             lines.append(" | ".join(parts))
+
         if lines:
             embed.description = "```\n" + "\n".join(lines[:30]) + "```"
             if len(lines) > 30:
                 embed.set_footer(text=f"… и ещё {len(lines) - 30} игроков")
         else:
             embed.description = "Нет сделок за выбранный период."
-        profit = total_bot_sell - total_bot_buy
-        embed.add_field(name="Общий оборот продаж", value=f"{_fmt(total_bot_sell)} ₽")
-        embed.add_field(name="Общий оборот покупок", value=f"{_fmt(total_bot_buy)} ₽")
+
+        # Прибыль бота = продажи бота (игрок купил) - покупки бота (игрок продал)
+        bot_profit = total_player_buy - total_player_sell
+
+        embed.add_field(name="💰 Сумма продаж игроков", value=f"{_fmt(total_player_sell)} ₽")
+        embed.add_field(name="🛒 Сумма покупок игроков", value=f"{_fmt(total_player_buy)} ₽")
         embed.add_field(
-            name="Чистая прибыль",
-            value=f"{_fmt(profit)} ₽" if profit >= 0 else f"-{_fmt(abs(profit))} ₽",
+            name="📊 Прибыль бота",
+            value=f"{_fmt(bot_profit)} ₽" if bot_profit >= 0 else f"-{_fmt(abs(bot_profit))} ₽",
         )
-        embed.add_field(name="Общее количество тикетов", value=str(len(txs)), inline=False)
+        embed.add_field(name="📝 Количество сделок", value=str(len(txs)), inline=False)
         return embed
 
     @app_commands.command(name="day", description="📊 (Админ) Показать аналитику и статистику продаж за конкретный день")

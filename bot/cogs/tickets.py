@@ -18,6 +18,21 @@ logger = logging.getLogger("bot")
 
 DEAL_REPORTS_DIR = "deal_reports"
 TICKET_TOOL_BOT_ID = 557628352828014614
+RANK_ROLES_MAP = {
+    "Standard": 1518324856549277827,
+    "Premium": 1518328036137631805,
+    "Prestige": 1518328037631066232,
+    "Elite": 1518328222939611166,
+    "Legend": 1518328324605083698,
+}
+REFERRAL_ROLES_MAP = {
+    "Скаут": 1518583879672270878,
+    "Промоутер": 1518584176054636584,
+    "Вербовщик": 1518584268933300274,
+    "Амбассадор": 1518584424818671687,
+    "Рекламный Барон": 1518584494410563625,
+}
+
 
 # ------------------------------------------------------------------ #
 #  Хранилище временных данных формы (в памяти)                       #
@@ -35,6 +50,7 @@ class FormDataStore:
 
     def clear(self, user_id: int):
         self._data.pop(user_id, None)
+
 
 form_store = FormDataStore()
 
@@ -197,7 +213,7 @@ class BaseOrderModal(discord.ui.Modal):
             "total_price": total_price,
             "category": store.get("category", ""),
         }
-        _save_request_meta(interaction.channel_id, message_id, interaction.user.id, request_data)
+        await _save_request_meta(interaction.channel_id, message_id, interaction.user.id, request_data)
 
         entry = {
             "type": "form",
@@ -289,10 +305,21 @@ class BaseOrderModal(discord.ui.Modal):
                 e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
                 emoji_str = e + " " if e else ""
                 qty = b.get("quantity", 1)
-                line_price = b.get("line_total", 0)
-                boost_lines.append(f"• {emoji_str}{b['name']} — {qty} шт. ({_fmt(line_price)} ₽)")
+                boost_lines.append(f"{emoji_str}{b['name']} | x{qty}")
             embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
             embed.add_field(name="Общая стоимость", value=f"{_fmt(total_price)} ₽", inline=False)
+
+        # Отдельный блок для почты
+        if delivery == "Почта":
+            sep = "\u2501" * 24
+            if "Заказ" in category:
+                mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте деньги сразу на указанную почту.\n{sep}"
+            else:
+                mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте ресурсы сразу на указанную почту.\n{sep}"
+            if embed.description:
+                embed.description += f"\n\n{mail_text}"
+            else:
+                embed.description = mail_text
 
         embed.set_footer(text="Клондайк Шёпота")
         return embed
@@ -407,7 +434,7 @@ class BoostSelectionView(discord.ui.View):
 
 
 # ------------------------------------------------------------------ #
-#  Шаг 4: Количество бустов (➕/➖/✏️)                                #
+#  Шаг 4: Количество бустов (➕/➖/✏️ Изменить)                      #
 # ------------------------------------------------------------------ #
 
 class QuantityEditModal(discord.ui.Modal):
@@ -462,6 +489,11 @@ class BoostQuantityView(discord.ui.View):
 
         for idx, b in enumerate(chunk):
             global_idx = start + idx
+            it = all_items_map.get(b["name"].lower())
+            e = resolve_emoji(it.get("emoji", ""), getattr(self, '_guild', None)) if it else ""
+            emoji_str = e + " " if e else ""
+            label_prefix = f"{emoji_str}{b['name']}"
+
             minus_btn = discord.ui.Button(
                 label="➖",
                 style=discord.ButtonStyle.secondary,
@@ -471,14 +503,14 @@ class BoostQuantityView(discord.ui.View):
             minus_btn.callback = lambda i, gi=global_idx: self._on_minus(i, gi)
             self.add_item(minus_btn)
 
-            qty_btn = discord.ui.Button(
-                label=f"{b['quantity']} ✏️",
+            edit_btn = discord.ui.Button(
+                label="✏️ Изменить",
                 style=discord.ButtonStyle.primary,
-                custom_id=f"qty_show_{global_idx}",
+                custom_id=f"qty_edit_{global_idx}",
                 row=idx,
             )
-            qty_btn.callback = lambda i, gi=global_idx: self._on_edit(i, gi)
-            self.add_item(qty_btn)
+            edit_btn.callback = lambda i, gi=global_idx: self._on_edit(i, gi)
+            self.add_item(edit_btn)
 
             plus_btn = discord.ui.Button(
                 label="➕",
@@ -524,6 +556,7 @@ class BoostQuantityView(discord.ui.View):
         all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
         for it in all_items:
             items_map[it["name"].lower()] = it
+        self._guild = interaction.guild
         self._build_controls(items_map)
         embed = self._build_embed(interaction, items_map)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -544,7 +577,7 @@ class BoostQuantityView(discord.ui.View):
             line_total = (price or 0) * b["quantity"]
             embed.add_field(
                 name=f"{emoji_str}{b['name']}",
-                value=f"➖ {b['quantity']} ➕\n✏️ Изменить количество\n({_fmt(line_total)} ₽)",
+                value=f"➖      ✏️ Изменить      ➕\nx{b['quantity']}",
                 inline=False,
             )
 
@@ -586,6 +619,7 @@ class BoostQuantityView(discord.ui.View):
         all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
         for it in all_items:
             items_map[it["name"].lower()] = it
+        self._guild = interaction.guild
         self._build_controls(items_map)
         embed = self._build_embed(interaction, items_map)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -596,6 +630,7 @@ class BoostQuantityView(discord.ui.View):
         all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
         for it in all_items:
             items_map[it["name"].lower()] = it
+        self._guild = interaction.guild
         self._build_controls(items_map)
         embed = self._build_embed(interaction, items_map)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -663,14 +698,25 @@ class BoostQuantityView(discord.ui.View):
                     e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
                     emoji_str = e + " " if e else ""
                     qty = b.get("quantity", 1)
-                    line_price = b.get("line_total", 0)
-                    boost_lines.append(f"• {emoji_str}{b['name']} — {qty} шт. ({_fmt(line_price)} ₽)")
+                    boost_lines.append(f"{emoji_str}{b['name']} | x{qty}")
                 embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
                 embed.add_field(name="Общая стоимость", value=f"{_fmt(total)} ₽", inline=False)
 
+            # Почта блок
+            if delivery == "Почта":
+                sep = "\u2501" * 24
+                if "Заказ" in category:
+                    mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте деньги сразу на указанную почту.\n{sep}"
+                else:
+                    mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте ресурсы сразу на указанную почту.\n{sep}"
+                if embed.description:
+                    embed.description += f"\n\n{mail_text}"
+                else:
+                    embed.description = mail_text
+
             embed.set_footer(text="Клондайк Шёпота")
 
-            _save_request_meta(interaction.channel_id, edit_message_id, interaction.user.id, edit_request_data)
+            await _save_request_meta(interaction.channel_id, edit_message_id, interaction.user.id, edit_request_data)
 
             try:
                 msg = await interaction.channel.fetch_message(edit_message_id)
@@ -804,7 +850,7 @@ class EditRequestModal(discord.ui.Modal):
 
         delivery_current = request_data.get("delivery_method", "Почта")
         self.add_item(discord.ui.TextInput(
-            label="Способ получения",
+            label="Способ получения (Почта или Трейд)",
             custom_id="delivery_method",
             required=True,
             style=discord.TextStyle.short,
@@ -887,7 +933,7 @@ class EditRequestModal(discord.ui.Modal):
 
         embed = self._build_edit_embed(interaction, text_data, delivery, boosts, total_price, category)
 
-        _save_request_meta(interaction.channel_id, self.message_id, interaction.user.id, self.request_data)
+        await _save_request_meta(interaction.channel_id, self.message_id, interaction.user.id, self.request_data)
 
         try:
             msg = await interaction.channel.fetch_message(self.message_id)
@@ -962,10 +1008,21 @@ class EditRequestModal(discord.ui.Modal):
                 e = resolve_emoji(it.get("emoji", ""), interaction.guild) if it else ""
                 emoji_str = e + " " if e else ""
                 qty = b.get("quantity", 1)
-                line_price = b.get("line_total", 0)
-                boost_lines.append(f"• {emoji_str}{b['name']} — {qty} шт. ({_fmt(line_price)} ₽)")
+                boost_lines.append(f"{emoji_str}{b['name']} | x{qty}")
             embed.add_field(name="Заказанные бусты", value="\n".join(boost_lines), inline=False)
             embed.add_field(name="Общая стоимость", value=f"{_fmt(total_price)} ₽", inline=False)
+
+        # Почта блок
+        if delivery == "Почта":
+            sep = "\u2501" * 24
+            if "Заказ" in category:
+                mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте деньги сразу на указанную почту.\n{sep}"
+            else:
+                mail_text = f"{sep}\n📮 Почта\nНик: {nick}\nОтправляйте ресурсы сразу на указанную почту.\n{sep}"
+            if embed.description:
+                embed.description += f"\n\n{mail_text}"
+            else:
+                embed.description = mail_text
 
         embed.set_footer(text="Клондайк Шёпота")
         return embed
@@ -994,6 +1051,112 @@ class EditRequestView(discord.ui.View):
             return
         await interaction.response.send_modal(EditRequestModal(message_id, meta["data"]))
 
+    @discord.ui.button(label="✅ Подтвердить", style=discord.ButtonStyle.success, custom_id="confirm_request")
+    async def confirm_callback(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if not interaction.message:
+            await interaction.response.send_message("Не удалось определить заявку.", ephemeral=True)
+            return
+        message_id = interaction.message.id
+        meta = _load_request_meta(message_id)
+        if meta is None:
+            await interaction.response.send_message(
+                "Не удалось загрузить данные заявки.", ephemeral=True,
+            )
+            return
+        request_data = meta["data"]
+        await interaction.response.send_modal(ConfirmModal(message_id, request_data))
+
+
+# ------------------------------------------------------------------ #
+#  Modal подтверждения заявки (для администратора)                   #
+# ------------------------------------------------------------------ #
+
+class ConfirmModal(discord.ui.Modal):
+
+    def __init__(self, message_id: int, request_data: dict):
+        super().__init__(title="✅ Подтверждение сделки", timeout=120)
+        self.message_id = message_id
+        self.request_data = request_data
+
+        self.add_item(discord.ui.TextInput(
+            label="Сумма сделки",
+            custom_id="amount",
+            required=True,
+            style=discord.TextStyle.short,
+            placeholder="Введите сумму сделки",
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        raw_amount = self.children[0].value if self.children else ""
+        try:
+            from bot.utils.calculator import safe_calc
+            amount = safe_calc(raw_amount)
+        except Exception:
+            await interaction.followup.send("Некорректная сумма.", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.followup.send("Сумма должна быть больше 0.", ephemeral=True)
+            return
+
+        text_data = self.request_data.get("text_data", {})
+        category = self.request_data.get("category", "")
+        nick = text_data.get("game_nick", "").strip().lower()
+        referrer_game = text_data.get("referrer_game", "").strip().lower()
+        referrer_discord = text_data.get("referrer_discord", "").strip().lower()
+
+        if not nick:
+            await interaction.followup.send("В заявке не указан игровой ник.", ephemeral=True)
+            return
+
+        # Определяем тип сделки
+        if "Заказ" in category:
+            tx_type = "buy"
+        elif "Продажа" in category:
+            tx_type = "sell"
+        else:
+            tx_type = "sell"
+
+        # Сохраняем сделку
+        try:
+            await asyncio.to_thread(
+                interaction.client.sheets_service.save_transaction,
+                nick, tx_type, amount, referrer_game or None,
+            )
+        except Exception as e:
+            await interaction.followup.send(f"Ошибка при сохранении: {e}", ephemeral=True)
+            return
+
+        await interaction.followup.send("✅ Сделка подтверждена и сохранена.", ephemeral=True)
+
+        try:
+            embed = discord.Embed(
+                title="Сделка зафиксирована",
+                colour=discord.Colour.green(),
+            )
+            embed.add_field(name="Ник", value=nick)
+            embed.add_field(name="Тип", value="Покупка" if tx_type == "buy" else "Продажа")
+            embed.add_field(name="Сумма", value=_fmt(amount))
+            if referrer_game:
+                embed.add_field(name="Ник пригласившего", value=referrer_game)
+            await interaction.channel.send(embed=embed)
+        except Exception:
+            pass
+
+        try:
+            audit = interaction.client.audit_logger
+            await audit.log(interaction.user, "/confirm_deal", {
+                "Ник": nick,
+                "Сумма": f"{_fmt(amount)} ₽",
+                "Категория": category,
+                "Пригласил": referrer_game or "—",
+            })
+        except Exception:
+            pass
+
 
 # ------------------------------------------------------------------ #
 #  Персистентная кнопка открытия формы                               #
@@ -1012,20 +1175,30 @@ class TicketFormView(discord.ui.View):
             return
 
         if "Заказ" in category:
-            tip = (
-                "**📌 Для заказа бустов:**\n"
-                "• После оформления заявки с вами свяжется администратор\n"
-                "• Бусты выполняются в порядке очереди"
+            embed = discord.Embed(
+                title="📋 Оформление заказа бустов",
+                description=(
+                    "**Для заказа бустов:**\n"
+                    "• После оформления заявки с вами свяжется администратор\n"
+                    "• Бусты выполняются в порядке очереди\n\n"
+                    "**Выберите способ получения:**"
+                ),
+                colour=discord.Colour.blurple(),
             )
         else:
-            tip = (
-                "**📌 Для продажи:**\n"
-                "• Деньги отправляются **только после подтверждения сделки**\n"
-                "• Приложите скриншот для подтверждения"
+            embed = discord.Embed(
+                title="📋 Оформление продажи",
+                description=(
+                    "**Для продажи:**\n"
+                    "• Деньги отправляются **только после подтверждения сделки**\n"
+                    "• Приложите скриншот для подтверждения\n\n"
+                    "**Выберите способ получения:**"
+                ),
+                colour=discord.Colour.blurple(),
             )
 
         view = DeliveryMethodView(category)
-        await interaction.response.send_message(f"{tip}\n\n**Выберите способ получения:**", view=view, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @staticmethod
     def _get_category(interaction: discord.Interaction) -> Optional[str]:
@@ -1050,6 +1223,7 @@ class TicketCog(commands.Cog):
         self._edit_view = EditRequestView()
         bot.add_view(self._view)
         bot.add_view(self._edit_view)
+        self._sending_locks: set[int] = set()
 
     async def cog_load(self) -> None:
         for category, channel_id in CATEGORY_CHANNELS.items():
@@ -1155,8 +1329,13 @@ class TicketCog(commands.Cog):
         )
 
     async def _send_form_to_channel(self, channel, category: str) -> None:
-        embed = self._build_form_embed(category)
+        ch_id = channel.id
+        if ch_id in self._sending_locks:
+            logger.debug("Already sending form to channel %s, skipping", ch_id)
+            return
+        self._sending_locks.add(ch_id)
         try:
+            embed = self._build_form_embed(category)
             existing = await self._find_existing_form_message(channel)
             if existing is not None:
                 await existing.edit(embed=embed)
@@ -1164,6 +1343,8 @@ class TicketCog(commands.Cog):
             await channel.send(embed=embed, view=self._view)
         except Exception as e:
             logger.warning("Не удалось отправить форму в %s: %s", channel.id, e)
+        finally:
+            self._sending_locks.discard(ch_id)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

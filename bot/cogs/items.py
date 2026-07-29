@@ -25,7 +25,6 @@ class ItemsCog(commands.Cog):
 
     @staticmethod
     def _clean_choice_name(it: dict) -> str:
-        """Return clean item name without emoji codes for dropdown display."""
         return it["name"]
 
     async def _autocomplete_items(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
@@ -67,6 +66,16 @@ class ItemsCog(commands.Cog):
         old_str = _fmt(old_price) if old_price is not None else "—"
         return f"• {emoji_str}{it['name']} | {old_str} ₽ → {_fmt(new_price)} ₽"
 
+    async def _send_price_change_embed(self, interaction: discord.Interaction, cat_label: str, cat_emoji: str, changes: list[str]):
+        if not changes:
+            return
+        embed = discord.Embed(
+            title=f"{cat_emoji} Изменение цен {cat_label}",
+            colour=discord.Colour.blue(),
+        )
+        embed.description = "\n".join(changes)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     @app_commands.command(name="setprice", description="🏷️ (Админ) Изменить цену ресурса или скупки буста в базе данных и таблице")
     @app_commands.describe(item="Название предмета", price="Новая цена скупки (поддерживает выражения)")
     @app_commands.autocomplete(item=_autocomplete_resources)
@@ -87,17 +96,10 @@ class ItemsCog(commands.Cog):
             await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_buy=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
             change = self._format_price_change(it, old_price, amount, guild=interaction.guild)
-            await interaction.followup.send(change, ephemeral=True)
+            await self._send_price_change_embed(interaction, "ресурсов", "📦", [change])
             try:
                 audit = interaction.client.audit_logger
-                old_str = f"{_fmt(old_price)} ₽" if old_price is not None else "—"
-                new_str = f"{_fmt(amount)} ₽"
-                await audit.log(interaction.user, "/setprice", {
-                    "Название": it['name'],
-                    "Категория": "resource",
-                    "Цена была": old_str,
-                    "Цена стала": new_str,
-                })
+                await audit.log(interaction.user, "/setprice", [change])
             except Exception:
                 pass
         except Exception as e:
@@ -109,7 +111,7 @@ class ItemsCog(commands.Cog):
             try: await i.response.send_message("Недостаточно прав. Требуются права администратора.", ephemeral=True)
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
-    @app_commands.command(name="setboost", description="🍔 (Админ) Изменить цену продажи буста игрокам")
+    @app_commands.command(name="setboost", description="🚀 (Админ) Изменить цену продажи буста игрокам")
     @app_commands.describe(item="Название буста", price="Новая цена продажи (поддерживает выражения)")
     @app_commands.autocomplete(item=_autocomplete_boosts)
     @app_commands.checks.has_permissions(administrator=True)
@@ -129,17 +131,10 @@ class ItemsCog(commands.Cog):
             await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_sell=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._repo)
             change = self._format_price_change(it, old_price, amount, guild=interaction.guild)
-            await interaction.followup.send(change, ephemeral=True)
+            await self._send_price_change_embed(interaction, "бустов", "🚀", [change])
             try:
                 audit = interaction.client.audit_logger
-                old_str = f"{_fmt(old_price)} ₽" if old_price is not None else "—"
-                new_str = f"{_fmt(amount)} ₽"
-                await audit.log(interaction.user, "/setboost", {
-                    "Название": it['name'],
-                    "Категория": "boost",
-                    "Цена была": old_str,
-                    "Цена стала": new_str,
-                })
+                await audit.log(interaction.user, "/setboost", [change])
             except Exception:
                 pass
         except Exception as e:
@@ -216,12 +211,19 @@ class ItemsCog(commands.Cog):
     async def sync_prices(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            updated = await asyncio.to_thread(self._repo.sync_prices_to_sheets)
-            await interaction.followup.send(
-                f"✅ Синхронизация завершена. Обновлено: ресурсов — {updated.get('resource', 0)}, "
-                f"скуп бустов — {updated.get('skup_boost', 0)}, продажа бустов — {updated.get('boost', 0)}.",
-                ephemeral=True,
+            result = await asyncio.to_thread(self._repo.sync_prices_to_sheets)
+            msg = (
+                f"✅ Синхронизация завершена.\n"
+                f"• Мейн скуп: {result.get('resource', 0)} обновлено\n"
+                f"• Скуп бустов: {result.get('skup_boost', 0)} обновлено\n"
+                f"• БУСТЫ: {result.get('boost', 0)} обновлено"
             )
+            not_found = result.get("not_found", [])
+            if not_found:
+                msg += f"\n⚠️ Не найдены в листах ({len(not_found)}): {', '.join(not_found[:20])}"
+                if len(not_found) > 20:
+                    msg += f" и ещё {len(not_found) - 20}"
+            await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 

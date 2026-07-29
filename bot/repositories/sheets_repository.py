@@ -448,8 +448,26 @@ class SheetsRepository:
             pass
         return (None, None)
 
+    def _collect_sheet_names(self, ws, column_pairs, max_rows) -> set:
+        """Собрать все названия из листа для отчёта о ненайденных."""
+        names = set()
+        if ws is None:
+            return names
+        try:
+            for name_col, _ in column_pairs:
+                vals = ws.col_values(name_col)
+                for row_idx, val in enumerate(vals):
+                    if row_idx >= max_rows:
+                        break
+                    n = val.strip().lower()
+                    if n:
+                        names.add(n)
+        except Exception:
+            pass
+        return names
+
     @_retry
-    def sync_prices_to_sheets(self) -> dict[str, int]:
+    def sync_prices_to_sheets(self) -> dict:
         """Sync prices from DataBase to 3 external sheets using fixed column pairs.
 
         Rules per sheet:
@@ -460,7 +478,7 @@ class SheetsRepository:
           3. БУСТЫ → boost items, max 9 rows
              name cols: C,J,Q,X,AE,AL,AS → price cols: D,K,R,Y,AF,AM,AT
 
-        Returns dict with counts: resource, skup_boost, boost.
+        Returns dict with counts: resource, skup_boost, boost, not_found.
         """
         items = self.get_all_items()
 
@@ -493,18 +511,29 @@ class SheetsRepository:
                     pass
             return count
 
-        result = {"resource": 0, "skup_boost": 0, "boost": 0}
+        result = {"resource": 0, "skup_boost": 0, "boost": 0, "not_found": []}
+
+        # Собираем все названия из листов для отчёта
+        all_sheet_names = set()
 
         # 1) Мейн скуп → resource items, max 31 rows, full column pairs
         ws_skup = self._get_worksheet(SYNC_SHEET_SKUP)
         result["resource"] = _sync_sheet(ws_skup, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_SKUP, resource_by_name, "price_buy")
+        all_sheet_names |= self._collect_sheet_names(ws_skup, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_SKUP)
 
         # 2) Скуп бустов → resource items, max 9 rows, half column pairs
         ws_skup_boost = self._get_worksheet(SYNC_SHEET_SKUP_BOOST)
         result["skup_boost"] = _sync_sheet(ws_skup_boost, SYNC_COLUMN_PAIRS_HALF, SYNC_MAX_ROWS_SKUP_BOOST, resource_by_name, "price_buy")
+        all_sheet_names |= self._collect_sheet_names(ws_skup_boost, SYNC_COLUMN_PAIRS_HALF, SYNC_MAX_ROWS_SKUP_BOOST)
 
         # 3) БУСТЫ → boost items, max 9 rows, full column pairs
         ws_boost_sale = self._get_worksheet(SYNC_SHEET_BOOST_SALE)
         result["boost"] = _sync_sheet(ws_boost_sale, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_BOOST, boost_by_name, "price_sell")
+        all_sheet_names |= self._collect_sheet_names(ws_boost_sale, SYNC_COLUMN_PAIRS_FULL, SYNC_MAX_ROWS_BOOST)
+
+        # Находим предметы, которые есть в базе, но не найдены в листах
+        db_names = set(resource_by_name.keys()) | set(boost_by_name.keys())
+        not_found = db_names - all_sheet_names
+        result["not_found"] = sorted(not_found)
 
         return result
