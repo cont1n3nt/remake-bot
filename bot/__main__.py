@@ -31,7 +31,9 @@ def main() -> None:
     referral_service = ReferralService(repo)
 
     intents = discord.Intents.default()
+    intents.message_content = True
     bot = commands.Bot(command_prefix="/", intents=intents)
+    bot.repo = repo
     bot.sheets_service = sheets_service
     bot.user_service = user_service
     bot.referral_service = referral_service
@@ -41,9 +43,22 @@ def main() -> None:
     async def on_ready() -> None:
         logger.info("Bot logged in as %s", bot.user)
 
+    @bot.event
+    async def on_app_command_completion(interaction: discord.Interaction, command) -> None:
+        """Глобальное логирование всех слэш-команд."""
+        try:
+            await bot.audit_logger.log_command_usage(interaction)
+        except Exception:
+            pass
+
     async def setup_hook() -> None:
         await bot.load_extension("bot.cogs.profile")
         await bot.load_extension("bot.cogs.transactions")
+        await bot.load_extension("bot.cogs.tickets")
+        await bot.load_extension("bot.cogs.roles")
+        await bot.load_extension("bot.cogs.items")
+        await bot.load_extension("bot.cogs.admin_cmds")
+        await bot.load_extension("bot.cogs.analytics")
         guild = Object(id=settings.guild_id)
         bot.tree.copy_global_to(guild=guild)
         await bot.tree.sync(guild=guild)

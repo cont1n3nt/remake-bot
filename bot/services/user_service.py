@@ -10,10 +10,12 @@ class UserService:
         self._sheets = sheets
 
     def get_profile(self, nickname: str) -> Optional[User]:
-        return self._sheets.get_user(nickname)
+        return self._sheets.get_user(nickname.lower().strip())
 
     def set_referral(self, nickname: str, referrer: str) -> User:
-        if nickname.lower() == referrer.lower():
+        nickname = nickname.lower().strip()
+        referrer = referrer.lower().strip()
+        if nickname == referrer:
             raise ValueError("Нельзя указать самого себя")
 
         user = self._sheets.get_user(nickname)
@@ -26,4 +28,4 @@ class UserService:
         return self._sheets.get_user(nickname) or User(nickname=nickname)
 
     def get_referral_info(self, nickname: str) -> Optional[User]:
-        return self._sheets.get_user(nickname)
+        return self._sheets.get_user(nickname.lower().strip())

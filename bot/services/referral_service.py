@@ -1,7 +1,12 @@
+from typing import Optional
+
 from bot.repositories.sheets_repository import SheetsRepository
 
 # Referral levels
 THRESHOLDS = [1, 5, 10, 25, 100]
+
+# Role names (without emoji) matching REFERRAL_ROLES keys
+REF_ROLE_NAMES = ["Скаут", "Промоутер", "Вербовщик", "Амбассадор", "Рекламный Барон"]
 LEVEL_NAMES = [
     "",           # 0
     "🧭 Скаут",
@@ -43,11 +48,11 @@ class ReferralService:
         self._repo = repo
 
     def get_referral_count(self, nickname: str) -> int:
-        referrals = self._repo.find_referrals(nickname)
+        referrals = self._repo.find_referrals(nickname.lower().strip())
         return len(referrals)
 
     def get_referred_users(self, nickname: str) -> list[str]:
-        referrals = self._repo.find_referrals(nickname)
+        referrals = self._repo.find_referrals(nickname.lower().strip())
         seen = set()
         result = []
         for ref in referrals:
@@ -105,3 +110,22 @@ class ReferralService:
         if 0 <= idx < len(RANK_BONUSES):
             return RANK_BONUSES[idx]
         return ""
+
+    @staticmethod
+    def get_target_referral_name(count: int) -> Optional[str]:
+        for i, threshold in enumerate(THRESHOLDS):
+            if count >= threshold and i < len(REF_ROLE_NAMES):
+                pass
+        target = None
+        for i, threshold in enumerate(THRESHOLDS):
+            if count >= threshold:
+                target = REF_ROLE_NAMES[i]
+        return target
+
+    @staticmethod
+    def get_target_rank_name(xp: float) -> Optional[str]:
+        target = None
+        for i, threshold in enumerate(RANK_THRESHOLDS):
+            if xp >= threshold:
+                target = RANK_NAMES[i]
+        return target
