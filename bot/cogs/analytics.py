@@ -7,8 +7,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.repositories.sheets_repository import SheetsRepository
 from bot.services.ocr_service import _fmt
+from bot.services.sheets_service import SheetsService
 from bot.utils.embeds import error_embed
 from bot.utils.parsing import parse_ruble_amount
 
@@ -19,15 +19,15 @@ DATA_START_ROW = 3
 
 class AnalyticsCog(commands.Cog):
 
-    def __init__(self, bot: commands.Bot, repo: SheetsRepository) -> None:
+    def __init__(self, bot: commands.Bot, sheets_service: SheetsService) -> None:
         self.bot = bot
-        self._repo = repo
+        self._sheets_service = sheets_service
 
     def _get_transactions_for_period(self, start: date, end: date) -> list[dict]:
         # Каждая строка уже уникальна по своей позиции в таблице — дедуп по
         # содержимому (tuple(row)) раньше мог по ошибке отбросить честную
         # сделку, если у двух разных строк случайно совпали все колонки.
-        vals = self._repo.get_transactions()
+        vals = self._sheets_service.get_transactions()
         txs = []
         for row in vals:
             if len(row) < 5:
@@ -205,4 +205,4 @@ class AnalyticsCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(AnalyticsCog(bot, bot.repo))
+    await bot.add_cog(AnalyticsCog(bot, bot.sheets_service))

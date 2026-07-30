@@ -451,7 +451,7 @@ E.2 (10 обращений `self._repo.*`/`self._repo` заменены). Доп
 правкой). Живой ручной прогон в Discord не проводился.
 
 ### E.4 — Переключить `analytics.py` на `SheetsService`
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Зависит от: E.1 (независим от E.2/E.3)
 Критерии завершения: аналогично E.2, для `/day`, `/week`, `/month`.
 Команды проверки:
@@ -459,12 +459,25 @@ E.2 (10 обращений `self._repo.*`/`self._repo` заменены). Доп
 python -m bot
 ```
 (+ ручной прогон `/day`, `/week`, `/month`)
+Результат: `AnalyticsCog` переключён на `sheets_service` (единственное
+обращение — `self._repo.get_transactions()` → `self._sheets_service.
+get_transactions()`), `setup()` — через `bot.sheets_service`. `py_compile`/
+импорт-свип/`84 passed` — без регрессий. `ruff` — 1 старый F401
+(`datetime.timedelta`, не связан с правкой).
 
 Общая проверка по завершении E.2–E.4:
 ```
 grep -rn "\.repo\." bot/cogs/
 ```
-(если пусто — можно рассмотреть отдельный тривиальный этап удаления атрибута `bot.repo`)
+Результат: `bot.repo`/`interaction.client.repo` в `items.py`,
+`admin_cmds.py`, `analytics.py` больше не используется нигде — только в
+`bot/cogs/tickets.py` (6 обращений к `interaction.client.repo.get_all_items`).
+Это **осознанно вне охвата Фазы E** — сам план (§F.3) относит
+`tickets.py`/`interaction.client.repo` к отдельному, более сложному
+кандидату из-за размера и сложности файла (1343 строки, персистентные
+Views), который стоит адресовать не «заодно», а отдельным этапом после
+разбора `tickets.py` на модули в Фазе F. Атрибут `bot.repo` в
+`bot/__main__.py` пока не убран — он всё ещё нужен для `tickets.py`.
 
 ---
 
@@ -606,7 +619,7 @@ git log -- bot.py
 | E.1 Методы SheetsService | ✅ | низкий | — | нет |
 | E.2 admin_cmds.py → SheetsService | ✅ | низкий | E.1 | нет |
 | E.3 items.py → SheetsService | ✅ | низкий | E.1 | нет |
-| E.4 analytics.py → SheetsService | 🔲 | низкий | E.1 | нет |
+| E.4 analytics.py → SheetsService | ✅ | низкий | E.1 | нет |
 | F.1 tickets.py → пакет | 🔲 | низкий | 0.1, 0.2 | нет |
 | F.2 Storage-слой | 🔲 | низкий | F.1 | нет |
 | F.3 Embeds-слой | 🔲 | низкий | F.1 | нет |
