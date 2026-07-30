@@ -550,7 +550,7 @@ python -c "from bot.cogs.tickets.embeds import _build_request_card_embed"
 F841 (`label_prefix`, `line_total`), новых находок нет.
 
 ### F.4a–F.4d — Разбить Views/Modals по логическим шагам визарда
-Статус: 🟡 в работе — F.4a ✅, F.4b ✅, F.4c ✅ (2026-07-30), F.4d 🔲
+Статус: ✅ сделано (2026-07-30) — F.4a/F.4b/F.4c/F.4d все выполнены
 Зависит от: F.1–F.3
 Критерии завершения:
 - Классы перенесены в `views_delivery.py`, `views_boosts.py`, `views_screenshot.py`, `views_edit.py` без изменения `custom_id`.
@@ -619,8 +619,28 @@ delivery→screenshot, edit→boosts) — обычные импорты в ша�
 импорта)/`84 passed`/`ruff` (F401/F821 — чисто, только 2 старых F841) —
 всё зелёное.
 
+**F.4d (edit) — результат, последний под-этап F.4:** `EditRequestModal`,
+`EditRequestView`, `ConfirmModal` перенесены в `views_edit.py`.
+`views_delivery.py`'s `EditRequestView` промотирован из отложенного в
+обычный импорт в шапке (безопасно — `views_edit.py` ничего не
+импортирует из `views_delivery.py`). Единственный оставшийся отложенный
+импорт во всём пакете `tickets/` — `views_boosts.py::
+BoostQuantityView._on_confirm` (`BoostOrderModal`, `EditRequestView`),
+ретаргетирован на `bot.cogs.tickets.views_edit` вместо корня пакета;
+это постоянное, а не временное решение (см. схему в F.4a). Из
+`__init__.py` этим же коммитом убраны 5 ставших неиспользуемыми импортов
+(`_build_request_card_embed`, `BoostSelectionView`, `form_store`,
+`_save_request_meta`, `_load_request_meta`) и добавлен недостающий импорт
+`EditRequestView` (использовался в `TicketCog.__init__`, но импорта не
+было — до этого момента имя было доступно случайно, как побочный эффект
+совместного нахождения в одном файле). `py_compile`/импорт (без ошибок
+циклического импорта)/`84 passed`/`ruff` (F401/F821 — чисто, только 2
+старых F841) — всё зелёное. `__init__.py` — 254 строки (было 1329).
+
+Фаза F.4 (F.4a–F.4d) полностью завершена.
+
 ### F.5 — Финальный тонкий `TicketCog`
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30) — уже достигнуто как побочный эффект F.4d
 Зависит от: F.1–F.4
 Критерии завершения:
 - В `bot/cogs/tickets/cog.py` (или `__init__.py`) остаются только `TicketCog` и `setup(bot)`, весь остальной код — импорт из подмодулей.
@@ -629,6 +649,18 @@ delivery→screenshot, edit→boosts) — обычные импорты в ша�
 python -m bot
 ```
 (+ полный regression-прогон по чек-листу 0.2)
+Результат: критерий уже выполнен по факту завершения F.4d — `__init__.py`
+содержит ровно `TicketCog` (слушатели `on_guild_channel_create`,
+`on_thread_create`, `on_message`, команда `/tag`, обработка OCR) и
+`setup(bot)`, весь остальной код импортируется из `storage.py`,
+`embeds.py`, `views_delivery.py`, `views_boosts.py`, `views_screenshot.py`,
+`views_edit.py`. Отдельного `cog.py` не создавал — объём (254 строки) уже
+приемлемый, как и допускает формулировка карточки этапа. `python -m bot`
+не гонял живьём (нет доступа к Discord в этой сессии) — вместо этого
+`py_compile` + полный импорт пакета (включая `bot.__main__`, который его
+загружает через `load_extension`) без ошибок циклического импорта, плюс
+`84 passed`. Полный ручной regression-прогон тикет-флоу по чек-листу 0.2
+не проводился по той же причине.
 
 ---
 
@@ -712,8 +744,8 @@ git log -- bot.py
 | F.1 tickets.py → пакет | ✅ | низкий | 0.1, 0.2 | нет |
 | F.2 Storage-слой | ✅ | низкий | F.1 | нет |
 | F.3 Embeds-слой | ✅ | низкий | F.1 | нет |
-| F.4a–F.4d Views/Modals | 🔲 | средний | F.1–F.3 | нет |
-| F.5 Тонкий Cog | 🔲 | низкий | F.1–F.4 | нет |
+| F.4a–F.4d Views/Modals | ✅ | средний | F.1–F.3 | нет |
+| F.5 Тонкий Cog | ✅ | низкий | F.1–F.4 | нет |
 | G.1 Логирование _ensure_jrow | 🔲 | низкий | — | нет |
 | G.2 Остальные except | 🔲 | низкий | G.1 | нет |
 | H.1 Финальная сверка | 🔲 | нет | A–G | да |

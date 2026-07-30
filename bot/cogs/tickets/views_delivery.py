@@ -4,16 +4,13 @@
 Перенесено из bot/cogs/tickets.py без изменений (REFACTORING_PLAN.md,
 Этап F.4a).
 
-⚠ Оставшийся отложенный (локальный) импорт внутри `BaseOrderModal._publish`
-(`EditRequestView` из views_edit.py, пока эта заявка не вынесена — см.
-Этап F.4d) — не забытый верхнеуровневый импорт, а часть разрыва
-циклической зависимости views_delivery.py ↔ views_boosts.py ↔
-views_edit.py: `BoostQuantityView` в views_boosts.py, в свою очередь,
-нужен `BoostOrderModal` отсюда и `EditRequestView` из views_edit.py — эти
-два обратных ребра остаются отложенными навсегда (см. REFACTOR_PROGRESS.md,
-Фаза F, F.4a, для полной схемы зависимостей). `BoostSelectionView` и
-`ScreenshotPromptView` уже можно импортировать в шапке — ни один из этих
-модулей не импортирует этот файл на уровне модуля."""
+⚠ Все связи с соседними подмодулями пакета tickets теперь в шапке файла.
+Единственное обратное ребро цикла views_delivery.py ↔ views_boosts.py ↔
+views_edit.py — `BoostQuantityView._on_confirm` в views_boosts.py,
+которому нужны `BoostOrderModal` (отсюда) и `EditRequestView`
+(views_edit.py) — остаётся отложенным (локальным) импортом внутри того
+метода, навсегда (см. REFACTOR_PROGRESS.md, Фаза F, F.4a/F.4d, для полной
+схемы зависимостей)."""
 
 from typing import Optional
 
@@ -23,6 +20,7 @@ from bot.config.constants import CATEGORY_CHANNELS
 from bot.cogs.tickets.embeds import _build_request_card_embed
 from bot.cogs.tickets.views_boosts import BoostSelectionView
 from bot.cogs.tickets.views_screenshot import ScreenshotPromptView
+from bot.cogs.tickets.views_edit import EditRequestView
 from bot.cogs.tickets.storage import form_store, _save_request_meta, _save_deal_report
 
 
@@ -118,8 +116,6 @@ class BaseOrderModal(discord.ui.Modal):
             await self._publish(interaction)
 
     async def _publish(self, interaction: discord.Interaction):
-        from bot.cogs.tickets import EditRequestView
-
         store = form_store.get(interaction.user.id)
         text_data = store.get("text_data", {})
         delivery = store.get("delivery_method", "")

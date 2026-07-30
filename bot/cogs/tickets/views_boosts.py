@@ -342,7 +342,7 @@ class BoostQuantityView(discord.ui.View):
         edit_request_data = store.get("edit_request_data")
 
         if edit_message_id and edit_request_data:
-            from bot.cogs.tickets import EditRequestView
+            from bot.cogs.tickets.views_edit import EditRequestView
 
             edit_request_data["selected_boosts"] = enriched
             edit_request_data["total_price"] = total
