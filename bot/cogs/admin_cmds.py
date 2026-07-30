@@ -11,8 +11,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.repositories.sheets_repository import SheetsRepository
 from bot.services.ocr_service import _fmt
+from bot.services.sheets_service import SheetsService
 from bot.utils.embeds import error_embed, resolve_emoji, format_price_change
 from bot.utils.parsing import parse_ruble_amount
 from bot.cogs.items import _sync_prices_from_db
@@ -79,9 +79,9 @@ class PriceListView(discord.ui.View):
 
 class AdminCmdsCog(commands.Cog):
 
-    def __init__(self, bot: commands.Bot, repo: SheetsRepository) -> None:
+    def __init__(self, bot: commands.Bot, sheets_service: SheetsService) -> None:
         self.bot = bot
-        self._repo = repo
+        self._sheets_service = sheets_service
 
     # ------------------------------------------------------------------
     #  LogsView — пагинация для /logs
@@ -119,7 +119,7 @@ class AdminCmdsCog(commands.Cog):
     async def logs(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            vals = await asyncio.to_thread(self._repo.get_transactions)
+            vals = await asyncio.to_thread(self._sheets_service.get_transactions)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
             return
@@ -169,7 +169,7 @@ class AdminCmdsCog(commands.Cog):
     async def give_price(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            items = await asyncio.to_thread(self._repo.get_all_items)
+            items = await asyncio.to_thread(self._sheets_service.get_all_items)
             buf = io.StringIO()
             w = csv.writer(buf)
             w.writerow(["ID", "Название", "Категория", "Цена скупки", "Цена продажи", "Эмодзи", "Обновлено"])
@@ -203,7 +203,7 @@ class AdminCmdsCog(commands.Cog):
     async def price_list(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            items = await asyncio.to_thread(self._repo.get_all_items)
+            items = await asyncio.to_thread(self._sheets_service.get_all_items)
             resources = [it for it in items if it["category"] == "resource"]
             boosts = [it for it in items if it["category"] == "boost"]
             view = PriceListView(resources, boosts, guild=interaction.guild)
@@ -237,7 +237,7 @@ class AdminCmdsCog(commands.Cog):
             else:
                 reader = csv.DictReader(io.StringIO(content))
 
-            all_items = await asyncio.to_thread(self._repo.get_all_items)
+            all_items = await asyncio.to_thread(self._sheets_service.get_all_items)
             old_items_by_name_cat = {(it["name"].lower(), it["category"].lower()): it for it in all_items}
             old_items_by_name = {}
             for it in all_items:
@@ -274,7 +274,7 @@ class AdminCmdsCog(commands.Cog):
                 old_ps = old.get("price_sell") if old else None
                 existing_cat = old["category"] if old else cat
                 await asyncio.to_thread(
-                    self._repo.upsert_item, name, existing_cat,
+                    self._sheets_service.upsert_item, name, existing_cat,
                     price_buy=pb, price_sell=ps, emoji=emoji,
                 )
                 count += 1
@@ -296,7 +296,7 @@ class AdminCmdsCog(commands.Cog):
                             changes_boosts.append(line)
                         else:
                             changes_skup_boost.append(line)
-            await asyncio.to_thread(_sync_prices_from_db, self._repo)
+            await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
             msg = f"✅ Импортировано {count} позиций."
 
             audit_all = []
@@ -345,4 +345,4 @@ class AdminCmdsCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(AdminCmdsCog(bot, bot.repo))
+    await bot.add_cog(AdminCmdsCog(bot, bot.sheets_service))

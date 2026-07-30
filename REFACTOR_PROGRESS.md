@@ -408,7 +408,7 @@ pytest tests/ -v
 предупреждений.
 
 ### E.2 — Переключить `admin_cmds.py` на `SheetsService`
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Зависит от: E.1
 Критерии завершения:
 - `AdminCmdsCog` принимает `sheets_service`, все обращения `self._repo.` заменены на `self._sheets_service.`.
@@ -418,6 +418,17 @@ pytest tests/ -v
 python -m bot
 ```
 (+ ручной прогон `/logs`, `/give_price`, `/price_list`, `/new_price` по чек-листу 0.2)
+Результат: конструктор `AdminCmdsCog` теперь принимает `sheets_service:
+SheetsService` вместо `repo: SheetsRepository`; неиспользуемый более
+импорт `SheetsRepository` удалён. Все 6 обращений `self._repo.*`
+(`get_transactions`, `get_all_items` ×3, `upsert_item`, вызов
+`_sync_prices_from_db(..., self._repo)`) заменены на
+`self._sheets_service.*`/`self._sheets_service`. `setup(bot)` теперь
+создаёт ког через `bot.sheets_service` (уже существовал в
+`bot/__main__.py`, правка туда не потребовалась). `py_compile`/полный
+импорт-свип/`84 passed`/`ruff` — без регрессий (2 старых F401 на `os`/`re`
+не связаны с этой правкой). Живой ручной прогон `/logs` и т.д. в Discord
+не проводился — нет доступа к серверу в этой сессии.
 
 ### E.3 — Переключить `items.py` на `SheetsService`
 Статус: 🔲 не начато
@@ -583,7 +594,7 @@ git log -- bot.py
 | D.3 Объединение REFERRAL_THRESHOLDS | ✅ | средний | D.1, 0.1 | нет |
 | D.4 Эмодзи-мосты | ✅ (сверка частичная, 4/10) | средний-высокий | D.1, D.2 | сделано пользователем частично |
 | E.1 Методы SheetsService | ✅ | низкий | — | нет |
-| E.2 admin_cmds.py → SheetsService | 🔲 | низкий | E.1 | нет |
+| E.2 admin_cmds.py → SheetsService | ✅ | низкий | E.1 | нет |
 | E.3 items.py → SheetsService | 🔲 | низкий | E.1 | нет |
 | E.4 analytics.py → SheetsService | 🔲 | низкий | E.1 | нет |
 | F.1 tickets.py → пакет | 🔲 | низкий | 0.1, 0.2 | нет |
