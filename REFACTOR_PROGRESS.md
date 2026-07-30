@@ -388,7 +388,7 @@ pytest tests/test_emoji_role_mapping.py -v
 ## Фаза E — Единая точка доступа к данным (устранение непоследовательного DI)
 
 ### E.1 — Проксирующие методы в `SheetsService`
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Критерии завершения:
 - В `SheetsService` добавлены обёртки `get_all_items`, `find_item_by_name_and_category`, `upsert_item`, `delete_item`, `sync_prices_to_sheets`, `get_transactions`, дословно делегирующие в `SheetsRepository`.
 - Новые методы пока нигде не вызываются — поведение приложения не изменилось.
@@ -397,6 +397,15 @@ pytest tests/test_emoji_role_mapping.py -v
 python -c "from bot.services.sheets_service import SheetsService"
 pytest tests/ -v
 ```
+Результат: перед добавлением сверил список реально используемых методов
+`self._repo.*` по всем трём когам (`items.py`, `admin_cmds.py`,
+`analytics.py`) через `grep` — совпал ровно с перечнем из карточки этапа.
+Добавлены 6 методов-обёрток, каждый — однострочная делегация в
+`self._repo.*` с той же сигнатурой (включая `start_row`/`end_row` по
+умолчанию у `get_transactions`, взятые из того же `DATA_START_ROW`, что
+использует сам `SheetsRepository`). `grep` подтверждает: ни один из
+методов пока не вызывается ни в одном коге. `84 passed`, `ruff` — 0
+предупреждений.
 
 ### E.2 — Переключить `admin_cmds.py` на `SheetsService`
 Статус: 🔲 не начато
@@ -573,7 +582,7 @@ git log -- bot.py
 | D.2 XP_RANK_* переименование | ✅ | низкий | D.1 | нет |
 | D.3 Объединение REFERRAL_THRESHOLDS | ✅ | средний | D.1, 0.1 | нет |
 | D.4 Эмодзи-мосты | ✅ (сверка частичная, 4/10) | средний-высокий | D.1, D.2 | сделано пользователем частично |
-| E.1 Методы SheetsService | 🔲 | низкий | — | нет |
+| E.1 Методы SheetsService | ✅ | низкий | — | нет |
 | E.2 admin_cmds.py → SheetsService | 🔲 | низкий | E.1 | нет |
 | E.3 items.py → SheetsService | 🔲 | низкий | E.1 | нет |
 | E.4 analytics.py → SheetsService | 🔲 | низкий | E.1 | нет |
