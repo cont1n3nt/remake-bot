@@ -106,23 +106,23 @@ class TransactionsCog(commands.Cog):
             before = await asyncio.to_thread(self._sheets_service.get_user, nickname)
             if before:
                 old_rank = before.rank or ""
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("record_transaction: failed to read 'before' state for %s: %s", nickname, e)
 
         if referrer:
             try:
                 before_ref = await asyncio.to_thread(self._sheets_service.get_user, referrer)
                 if before_ref:
                     old_referral_role = before_ref.referral_role or ""
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("record_transaction: failed to read 'before' referral state for %s: %s", referrer, e)
 
         try:
             await asyncio.to_thread(self._sheets_service.ensure_user, nickname)
             if referrer:
                 await asyncio.to_thread(self._sheets_service.ensure_user, referrer)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("record_transaction: ensure_user failed for %s/%s: %s", nickname, referrer, e)
 
         try:
             await asyncio.to_thread(self._sheets_service.save_transaction, nickname, tx_type, amount, referrer)
@@ -142,8 +142,8 @@ class TransactionsCog(commands.Cog):
                         after_ref = await asyncio.to_thread(self._sheets_service.get_user, referrer)
                         new_referral_role = after_ref.referral_role or "" if after_ref else ""
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("record_transaction: 'after' state poll attempt %s failed for %s: %s", attempt, nickname, e)
             if attempt < 4:
                 await asyncio.sleep(1)
 
