@@ -9,7 +9,7 @@ COL_AMOUNT: Final[int] = 5         # E — Сумма
 COL_COINS_FORMULA: Final[int] = 6  # F — Coins (формула листа, не трогать)
 COL_XP_FORMULA: Final[int] = 7     # G — XP (формула листа, не трогать)
 COL_REFERRED_BY: Final[int] = 8    # H — Пришел от
-# I = 9 — пустой разделитель
+COL_DISCORD_ID: Final[int] = 9     # I — Discord ID (привязка к уникальному нику в J)
 # — Секция базы пользователей (J-S) —
 COL_UNIQUE_NICK: Final[int] = 10   # J — Уникальный ник
 COL_TOTAL_COINS: Final[int] = 11   # K — Всего Coins (formula)
@@ -85,6 +85,15 @@ CATEGORY_CHANNELS: dict[str, int] = {
     "Заказ бустов":     1479228622014251049,
 }
 
+# Ник магазина, на который отправляют ресурсы/деньги при способе получения
+# «Почта». Постоянный, не зависит от того, кто создал заявку.
+SHOP_MAIL_NICK: Final[str] = "Scaryyyyy"
+
+# — Единые заголовки эмбедов изменения цен (/setprice, /setboost, /new_price) —
+PRICE_CHANGE_TITLE_RESOURCE: Final[str] = "🛒 Изменение цен на ресурсы"
+PRICE_CHANGE_TITLE_BOOST: Final[str] = "🍔 Изменение цен на бусты"
+PRICE_CHANGE_TITLE_SKUP_BOOST: Final[str] = "📦 Изменение цен на скуп бустов"
+
 # — Ранговые роли —
 RANK_THRESHOLDS: dict[str, int] = {
     "Standard": 0, "Premium": 5000, "Prestige": 25000, "Elite": 100000, "Legend": 500000,
@@ -103,4 +112,37 @@ REFERRAL_ROLES: dict[str, int] = {
     "Скаут": 1518583879672270878, "Промоутер": 1518584176054636584,
     "Вербовщик": 1518584268933300274, "Амбассадор": 1518584424818671687,
     "Рекламный Барон": 1518584494410563625,
+}
+
+# — Эмодзи-метки рангов/рефералов (REFACTORING_PLAN.md, Этап D.4) —
+# Именно в таком виде формула Google Sheets возвращает значения в колонках
+# R (ранг) и S (реферальная роль): "эмодзи + пробел + имя". Пользователь
+# сверил вручную по живой таблице 2026-07-30: подтверждены "🔹 Standard",
+# "🔷 Premium", "🧭 Скаут", "📣 Промоутер" — совпадают. Остальные пять
+# значений (Prestige/Elite/Legend, Вербовщик/Амбассадор/Рекламный Барон)
+# приняты по аналогии формата (та же схема "эмодзи + имя", тот же список
+# эмодзи, что уже был захардкожен в bot/cogs/transactions.py до этого
+# этапа) — НЕ сверены построчно с таблицей. Если авто-выдача ролей после
+# сделки перестанет находить упоминание роли для одного из непроверенных
+# уровней — начните разбор именно с этих пяти строк.
+RANK_EMOJI_LABELS: dict[str, str] = {
+    "Standard": "🔹 Standard",
+    "Premium": "🔷 Premium",
+    "Prestige": "💠 Prestige",
+    "Elite": "💎 Elite",
+    "Legend": "👑 Legend",
+}
+REFERRAL_EMOJI_LABELS: dict[str, str] = {
+    "Скаут": "🧭 Скаут",
+    "Промоутер": "📣 Промоутер",
+    "Вербовщик": "🧲 Вербовщик",
+    "Амбассадор": "📢 Амбассадор",
+    "Рекламный Барон": "🎩 Рекламный Барон",
+}
+
+RANK_ROLES_BY_LABEL: dict[str, int] = {
+    label: RANK_ROLES[name] for name, label in RANK_EMOJI_LABELS.items()
+}
+REFERRAL_ROLES_BY_LABEL: dict[str, int] = {
+    label: REFERRAL_ROLES[name] for name, label in REFERRAL_EMOJI_LABELS.items()
 }

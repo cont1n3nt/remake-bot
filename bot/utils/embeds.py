@@ -4,9 +4,28 @@ import discord
 from discord import Embed, Colour
 
 from bot.models.user import User
+from bot.utils.formatting import format_amount
+from bot.services.ocr_service import _fmt as _fmt_plain
 
 
 _EMOJI_RE = re.compile(r"<a?:\w+:\d+>")
+_EMOJI_FULL_RE = re.compile(r"^<a?:(\w+):\d+>$")
+
+
+def normalize_emoji_name(raw: str) -> str:
+    """Свести любую запись эмодзи к голому имени для хранения в таблице.
+
+    "<:topot:123456>" / "<a:topot:123456>" / ":topot:" / "topot" → "topot".
+    Юникодные эмодзи ("🚀") возвращаются как есть. Вывод от этого не страдает:
+    resolve_emoji() разворачивает имя обратно в <:name:id> по эмодзи гильдии.
+    """
+    if not raw:
+        return ""
+    s = raw.strip()
+    m = _EMOJI_FULL_RE.match(s)
+    if m:
+        return m.group(1)
+    return s.strip(":")
 
 
 def resolve_emoji(emoji_str: str, guild: discord.Guild | None = None) -> str:
@@ -26,16 +45,23 @@ def resolve_emoji(emoji_str: str, guild: discord.Guild | None = None) -> str:
     return ""
 
 
-def _fmt(n: float | int) -> str:
-    s = str(int(n)) if isinstance(n, float) and n == int(n) else str(n)
-    parts = s.split(".")
-    int_part = parts[0]
-    groups = []
-    while int_part:
-        groups.append(int_part[-3:])
-        int_part = int_part[:-3]
-    parts[0] = " ".join(reversed(groups))
-    return ".".join(parts)
+def format_price_change(
+    it: dict,
+    old_price: float | None,
+    new_price: float,
+    guild: discord.Guild | None = None,
+) -> str:
+    """Единый формат строки изменения цены для /setprice, /setboost, /new_price
+    и соответствующих аудит-логов: "• emoji Название | old ₽ → new ₽"."""
+    e = resolve_emoji(it.get("emoji", ""), guild)
+    emoji_str = e + " " if e else ""
+    old_str = _fmt_plain(old_price) if old_price is not None else "—"
+    return f"• {emoji_str}{it['name']} | {old_str} ₽ → {_fmt_plain(new_price)} ₽"
+
+
+def _fmt_thousands(n: float | int) -> str:
+    """Обёртка над единым форматтером (bot/utils/formatting.py)."""
+    return format_amount(n)
 
 
 def _progress_bar(current: int, total: int, size: int = 10) -> str:
@@ -63,11 +89,11 @@ def profile_embed(
         title=f"Профиль — {user.nickname}",
         colour=Colour.blurple(),
     )
-    embed.add_field(name="\U0001fa99 Coins", value=_fmt(user.coins))
-    embed.add_field(name="\u26a1 XP", value=_fmt(user.xp))
+    embed.add_field(name="\U0001fa99 Coins", value=_fmt_thousands(user.coins))
+    embed.add_field(name="\u26a1 XP", value=_fmt_thousands(user.xp))
 
     if _has(user.turnover):
-        embed.add_field(name="Общий оборот", value=_fmt(user.turnover))
+        embed.add_field(name="Общий оборот", value=_fmt_thousands(user.turnover))
 
     if _has(user.rank):
         embed.add_field(name="Ранг", value=user.rank)
@@ -76,7 +102,7 @@ def profile_embed(
         embed.add_field(name="Реферальная роль", value=user.referral_role)
 
     if _has(user.referral_count):
-        embed.add_field(name="Приглашено", value=_fmt(user.referral_count))
+        embed.add_field(name="Приглашено", value=_fmt_thousands(user.referral_count))
 
     if rank_bonus:
         embed.add_field(name="Бонус текущего ранга", value=rank_bonus, inline=False)
@@ -86,7 +112,7 @@ def profile_embed(
         bar = _progress_bar(current, needed)
         embed.add_field(
             name=f"До «{next_name}»",
-            value=f"{bar} {_fmt(current)} / {_fmt(needed)} XP",
+            value=f"{bar} {_fmt_thousands(current)} / {_fmt_thousands(needed)} XP",
             inline=False,
         )
 
@@ -112,7 +138,7 @@ def transaction_confirmation_embed(
     )
     embed.add_field(name="Ник", value=nickname)
     embed.add_field(name="Тип", value=label)
-    embed.add_field(name="Сумма", value=_fmt(amount))
+    embed.add_field(name="Сумма", value=_fmt_thousands(amount))
     if referrer:
         embed.add_field(name="Ник пригласившего", value=referrer)
     return embed
@@ -148,9 +174,9 @@ def referrals_embed(
     if referred_users:
         text = "\n".join(f"• {u}" for u in referred_users[:25])
         if len(referred_users) > 25:
-            text += f"\n… и ещё {_fmt(len(referred_users) - 25)}"
+            text += f"\n… и ещё {_fmt_thousands(len(referred_users) - 25)}"
         embed.add_field(
-            name=f"Приглашено ({_fmt(len(referred_users))})",
+            name=f"Приглашено ({_fmt_thousands(len(referred_users))})",
             value=text,
             inline=False,
         )
@@ -162,7 +188,7 @@ def referrals_embed(
         bar = _progress_bar(current, needed)
         embed.add_field(
             name=f"До «{next_name}»",
-            value=f"{bar} {_fmt(current)}/{_fmt(needed)}",
+            value=f"{bar} {_fmt_thousands(current)}/{_fmt_thousands(needed)}",
             inline=False,
         )
         if next_bonus:

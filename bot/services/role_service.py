@@ -7,49 +7,14 @@ from typing import Optional
 
 import discord
 
+from bot.config.constants import (
+    RANK_THRESHOLDS,
+    RANK_ROLES,
+    REFERRAL_THRESHOLDS,
+    REFERRAL_ROLES,
+)
+
 logger = logging.getLogger("bot")
-
-# ------------------------------------------------------------------ #
-#  Конфигурация ранговых ролей                                      #
-#  Порог — минимальный объём сделок для получения роли               #
-# ------------------------------------------------------------------ #
-
-RANK_THRESHOLDS: dict[str, int] = {
-    "Standard": 0,
-    "Premium": 5000,
-    "Prestige": 25000,
-    "Elite": 100000,
-    "Legend": 500000,
-}
-
-RANK_ROLES: dict[str, int] = {
-    "Standard": 1518324856549277827,
-    "Premium": 1518328036137631805,
-    "Prestige": 1518328037631066232,
-    "Elite": 1518328222939611166,
-    "Legend": 1518328324605083698,
-}
-
-# ------------------------------------------------------------------ #
-#  Конфигурация реферальных ролей                                   #
-#  Порог — количество приглашённых пользователей                     #
-# ------------------------------------------------------------------ #
-
-REFERRAL_THRESHOLDS: dict[str, int] = {
-    "Скаут": 1,
-    "Промоутер": 5,
-    "Вербовщик": 10,
-    "Амбассадор": 25,
-    "Рекламный Барон": 100,
-}
-
-REFERRAL_ROLES: dict[str, int] = {
-    "Скаут": 1518583879672270878,
-    "Промоутер": 1518584176054636584,
-    "Вербовщик": 1518584268933300274,
-    "Амбассадор": 1518584424818671687,
-    "Рекламный Барон": 1518584494410563625,
-}
 
 REFERRALS_FILE = "referrals.json"
 
@@ -178,8 +143,11 @@ class RoleService:
             if role_obj and role_obj in member.roles:
                 try:
                     await member.remove_roles(role_obj, reason=f"Auto {group_label} sync")
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    logger.warning(
+                        "Не удалось снять роль %s (group=%s) у %s: %s",
+                        role_obj.name, group_label, member, e,
+                    )
 
         # Надеваем новую роль (если есть)
         role_obj = member.guild.get_role(target_id) if target_id else None

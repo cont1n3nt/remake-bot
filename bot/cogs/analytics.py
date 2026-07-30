@@ -7,49 +7,31 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.repositories.sheets_repository import SheetsRepository
+from bot.services.ocr_service import _fmt
+from bot.services.sheets_service import SheetsService
 from bot.utils.embeds import error_embed
+from bot.utils.parsing import parse_ruble_amount
 
 logger = logging.getLogger("bot")
 
 DATA_START_ROW = 3
 
 
-def _fmt(n: float) -> str:
-    if n == int(n):
-        return str(int(n))
-    return f"{n:.2f}".rstrip("0").rstrip(".")
-
-
-def _parse_float(val) -> float:
-    if val is None:
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).strip().replace(" ", "").replace(",", ".").replace("₽", "")
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
-
-
 class AnalyticsCog(commands.Cog):
 
-    def __init__(self, bot: commands.Bot, repo: SheetsRepository) -> None:
+    def __init__(self, bot: commands.Bot, sheets_service: SheetsService) -> None:
         self.bot = bot
-        self._repo = repo
+        self._sheets_service = sheets_service
 
     def _get_transactions_for_period(self, start: date, end: date) -> list[dict]:
-        vals = self._repo.get_transactions()
+        # Каждая строка уже уникальна по своей позиции в таблице — дедуп по
+        # содержимому (tuple(row)) раньше мог по ошибке отбросить честную
+        # сделку, если у двух разных строк случайно совпали все колонки.
+        vals = self._sheets_service.get_transactions()
         txs = []
-        seen_rows = set()
         for row in vals:
             if len(row) < 5:
                 continue
-            row_key = tuple(row)
-            if row_key in seen_rows:
-                continue
-            seen_rows.add(row_key)
             try:
                 raw_date = str(row[0]).strip() if row[0] else ""
                 if not raw_date:
@@ -68,15 +50,15 @@ class AnalyticsCog(commands.Cog):
                 nickname = str(row[1]).strip() if len(row) > 1 else ""
                 is_buy = len(row) > 2 and str(row[2]).strip().upper() == "TRUE"
                 is_sell = len(row) > 3 and str(row[3]).strip().upper() == "TRUE"
-                amount = _parse_float(row[4]) if len(row) > 4 else 0.0
+                amount = parse_ruble_amount(row[4]) if len(row) > 4 else 0.0
                 if amount == 0.0 and not is_buy and not is_sell:
                     continue
                 referrer = str(row[7]).strip() if len(row) > 7 and row[7] else ""
                 txs.append({
                     "date": raw_date,
                     "nickname": nickname,
-                    "is_buy_checkbox": is_buy,
-                    "is_sell_checkbox": is_sell,
+                    "is_buy": is_buy,
+                    "is_sell": is_sell,
                     "amount": amount,
                     "referrer": referrer,
                 })
@@ -85,44 +67,58 @@ class AnalyticsCog(commands.Cog):
         return txs
 
     def _build_analytics_embed(self, txs: list[dict], title: str) -> discord.Embed:
+        """Строит embed аналитики.
+        
+        is_buy = колонка C (Покупка) — игрок продаёт боту (бот покупает)
+        is_sell = колонка D (Продажа) — игрок покупает у бота (бот продаёт)
+
+        С точки зрения игрока:
+          - Продажа: игрок продаёт → is_buy = TRUE → player_sell
+          - Покупка: игрок покупает → is_sell = TRUE → player_buy
+        """
         players = {}
-        total_bot_buy = 0.0
-        total_bot_sell = 0.0
+        total_player_sell = 0.0  # игроки продали боту
+        total_player_buy = 0.0   # игроки купили у бота
         for tx in txs:
             nick = tx["nickname"]
             if nick not in players:
-                players[nick] = {"bot_buy": 0.0, "bot_sell": 0.0}
-            if tx["is_buy_checkbox"]:
-                players[nick]["bot_buy"] += tx["amount"]
-                total_bot_buy += tx["amount"]
-            if tx["is_sell_checkbox"]:
-                players[nick]["bot_sell"] += tx["amount"]
-                total_bot_sell += tx["amount"]
+                players[nick] = {"sell": 0.0, "buy": 0.0}
+            if tx["is_buy"]:
+                players[nick]["sell"] += tx["amount"]
+                total_player_sell += tx["amount"]
+            if tx["is_sell"]:
+                players[nick]["buy"] += tx["amount"]
+                total_player_buy += tx["amount"]
+
         embed = discord.Embed(title=title, colour=discord.Colour.blue())
         lines = []
-        for nick, data in sorted(players.items(), key=lambda x: x[1]["bot_buy"] + x[1]["bot_sell"], reverse=True):
-            total = data["bot_buy"] + data["bot_sell"]
+        for nick, data in sorted(players.items(), key=lambda x: x[1]["sell"] + x[1]["buy"], reverse=True):
+            total = data["sell"] + data["buy"]
             parts = [f"• {nick}"]
-            if data["bot_buy"] > 0:
-                parts.append(f"Продажа {_fmt(data['bot_buy'])}₽")
-            if data["bot_sell"] > 0:
-                parts.append(f"Покупка {_fmt(data['bot_sell'])}₽")
+            if data["sell"] > 0:
+                parts.append(f"Продажа {_fmt(data['sell'])}₽")
+            if data["buy"] > 0:
+                parts.append(f"Покупка {_fmt(data['buy'])}₽")
             parts.append(f"Оборот {_fmt(total)}₽")
             lines.append(" | ".join(parts))
+
         if lines:
             embed.description = "```\n" + "\n".join(lines[:30]) + "```"
             if len(lines) > 30:
                 embed.set_footer(text=f"… и ещё {len(lines) - 30} игроков")
         else:
             embed.description = "Нет сделок за выбранный период."
-        profit = total_bot_sell - total_bot_buy
-        embed.add_field(name="Общий оборот продаж", value=f"{_fmt(total_bot_sell)} ₽")
-        embed.add_field(name="Общий оборот покупок", value=f"{_fmt(total_bot_buy)} ₽")
+
+        # Прибыль бота = продажи бота (игрок купил) - покупки бота (игрок продал)
+        bot_profit = total_player_buy - total_player_sell
+
+        embed.add_field(name="💰 Сумма продаж игроков", value=f"{_fmt(total_player_sell)} ₽")
+        embed.add_field(name="🛒 Сумма покупок игроков", value=f"{_fmt(total_player_buy)} ₽")
         embed.add_field(
-            name="Чистая прибыль",
-            value=f"{_fmt(profit)} ₽" if profit >= 0 else f"-{_fmt(abs(profit))} ₽",
+            name="📊 Прибыль бота",
+            value=f"{_fmt(bot_profit)} ₽" if bot_profit >= 0 else f"-{_fmt(abs(bot_profit))} ₽",
         )
-        embed.add_field(name="Общее количество тикетов", value=str(len(txs)), inline=False)
+        embed.add_field(name="📝 Количество сделок", value=str(len(txs)), inline=False)
         return embed
 
     @app_commands.command(name="day", description="📊 (Админ) Показать аналитику и статистику продаж за конкретный день")
@@ -209,4 +205,4 @@ class AnalyticsCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(AnalyticsCog(bot, bot.repo))
+    await bot.add_cog(AnalyticsCog(bot, bot.sheets_service))

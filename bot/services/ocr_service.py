@@ -7,14 +7,16 @@ import os
 import re
 from typing import Optional
 
+from bot.utils.formatting import format_amount
+
 logger = logging.getLogger("bot")
 
 
 def _fmt(n: float) -> str:
-    """Форматирование числа: убирает .0 у целых."""
-    if n == int(n):
-        return str(int(n))
-    return f"{n:.2f}".rstrip("0").rstrip(".")
+    """Обёртка над единым форматтером (bot/utils/formatting.py).
+
+    Оставлена ради множества существующих импортов `from ... import _fmt`."""
+    return format_amount(n)
 
 
 class OcrService:

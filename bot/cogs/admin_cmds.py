@@ -1,7 +1,6 @@
 import asyncio
 import csv
 import io
-import json
 import logging
 import math
 import os
@@ -12,31 +11,20 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.repositories.sheets_repository import SheetsRepository
-from bot.utils.embeds import error_embed, resolve_emoji
+from bot.config.constants import (
+    PRICE_CHANGE_TITLE_RESOURCE, PRICE_CHANGE_TITLE_BOOST, PRICE_CHANGE_TITLE_SKUP_BOOST,
+)
+from bot.services.ocr_service import _fmt
+from bot.services.sheets_service import SheetsService
+from bot.utils.embeds import (
+    error_embed, resolve_emoji, format_price_change, normalize_emoji_name,
+)
+from bot.utils.parsing import parse_ruble_amount
+from bot.cogs.items import _sync_prices_from_db
 
 logger = logging.getLogger("bot")
 
-PRICES_FILE = "prices.json"
 DATA_START_ROW = 3
-
-
-def _fmt(n: float) -> str:
-    if n == int(n):
-        return str(int(n))
-    return f"{n:.2f}".rstrip("0").rstrip(".")
-
-
-def _parse_amount_logs(val) -> float:
-    if val is None:
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).strip().replace(" ", "").replace(",", ".").replace("₽", "")
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
 
 
 # ------------------------------------------------------------------ #
@@ -96,9 +84,9 @@ class PriceListView(discord.ui.View):
 
 class AdminCmdsCog(commands.Cog):
 
-    def __init__(self, bot: commands.Bot, repo: SheetsRepository) -> None:
+    def __init__(self, bot: commands.Bot, sheets_service: SheetsService) -> None:
         self.bot = bot
-        self._repo = repo
+        self._sheets_service = sheets_service
 
     # ------------------------------------------------------------------
     #  LogsView — пагинация для /logs
@@ -112,21 +100,29 @@ class AdminCmdsCog(commands.Cog):
             self.page = 0
             self.total_pages = max(1, (len(lines) + per_page - 1) // per_page)
 
-        def _build_text(self) -> str:
+        def build_embed(self) -> discord.Embed:
+            """Эмбед в том же стиле, что и остальные логи — без ``` -блоков."""
             start = self.page * self.per_page
             chunk = self.lines[start:start + self.per_page]
-            text = "```\n" + "\n".join(chunk) + "```"
-            return text
+            embed = discord.Embed(
+                title="📜 Логи сделок",
+                description="\n".join(chunk) if chunk else "Нет записей.",
+                colour=discord.Colour.green(),
+            )
+            embed.set_footer(
+                text=f"Страница {self.page + 1}/{self.total_pages} • Всего: {len(self.lines)}"
+            )
+            return embed
 
         @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary, custom_id="logs_prev")
         async def prev(self, i: discord.Interaction, _b: discord.ui.Button):
             self.page = (self.page - 1) % self.total_pages
-            await i.response.edit_message(content=self._build_text(), view=self)
+            await i.response.edit_message(embed=self.build_embed(), view=self)
 
         @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary, custom_id="logs_next")
         async def nxt(self, i: discord.Interaction, _b: discord.ui.Button):
             self.page = (self.page + 1) % self.total_pages
-            await i.response.edit_message(content=self._build_text(), view=self)
+            await i.response.edit_message(embed=self.build_embed(), view=self)
 
     # ------------------------------------------------------------------
     #  /logs
@@ -136,20 +132,15 @@ class AdminCmdsCog(commands.Cog):
     async def logs(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            vals = await asyncio.to_thread(self._repo.get_transactions)
+            vals = await asyncio.to_thread(self._sheets_service.get_transactions)
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
             return
         lines = []
-        seen = set()
         day_counters = {}
         for row in reversed(vals):
             if len(row) < 5:
                 continue
-            key = tuple(row)
-            if key in seen:
-                continue
-            seen.add(key)
             raw_date = str(row[0]).strip() if row[0] else ""
             if not raw_date:
                 continue
@@ -159,23 +150,22 @@ class AdminCmdsCog(commands.Cog):
             if not is_buy and not is_sell:
                 continue
             t = "Покупка" if is_buy else "Продажа"
-            amt = _parse_amount_logs(row[4]) if len(row) > 4 and row[4] else 0.0
+            amt = parse_ruble_amount(row[4]) if len(row) > 4 and row[4] else 0.0
             if amt == 0.0:
                 continue
             ref = str(row[7]).strip() if len(row) > 7 and row[7] else ""
             day_key = raw_date[:10]
             day_counters[day_key] = day_counters.get(day_key, 0) + 1
             ticket_num = day_counters[day_key]
-            line = f"№{ticket_num} [{raw_date}] {nick} | {t} | {_fmt(amt)}₽"
+            line = f"№{ticket_num} • {raw_date} • {nick} • {t} • {_fmt(amt)} ₽"
             if ref:
-                line += f" | Реферер: {ref}"
+                line += f" • Реферер: {ref}"
             lines.append(line)
         if not lines:
             await interaction.followup.send("Нет записей.", ephemeral=True)
             return
         view = self.LogsView(lines)
-        text = view._build_text()
-        await interaction.followup.send(text, view=view, ephemeral=True)
+        await interaction.followup.send(embed=view.build_embed(), view=view, ephemeral=True)
 
     @logs.error
     async def logs_error(self, i: discord.Interaction, e: app_commands.AppCommandError):
@@ -191,7 +181,7 @@ class AdminCmdsCog(commands.Cog):
     async def give_price(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            items = await asyncio.to_thread(self._repo.get_all_items)
+            items = await asyncio.to_thread(self._sheets_service.get_all_items)
             buf = io.StringIO()
             w = csv.writer(buf)
             w.writerow(["ID", "Название", "Категория", "Цена скупки", "Цена продажи", "Эмодзи", "Обновлено"])
@@ -225,7 +215,7 @@ class AdminCmdsCog(commands.Cog):
     async def price_list(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            items = await asyncio.to_thread(self._repo.get_all_items)
+            items = await asyncio.to_thread(self._sheets_service.get_all_items)
             resources = [it for it in items if it["category"] == "resource"]
             boosts = [it for it in items if it["category"] == "boost"]
             view = PriceListView(resources, boosts, guild=interaction.guild)
@@ -259,7 +249,7 @@ class AdminCmdsCog(commands.Cog):
             else:
                 reader = csv.DictReader(io.StringIO(content))
 
-            all_items = await asyncio.to_thread(self._repo.get_all_items)
+            all_items = await asyncio.to_thread(self._sheets_service.get_all_items)
             old_items_by_name_cat = {(it["name"].lower(), it["category"].lower()): it for it in all_items}
             old_items_by_name = {}
             for it in all_items:
@@ -281,7 +271,8 @@ class AdminCmdsCog(commands.Cog):
                 ps_raw = row.get("Цена продажи", "").strip()
                 pb = float(pb_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if pb_raw else None
                 ps = float(ps_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if ps_raw else None
-                emoji = row.get("Эмодзи", "").strip()
+                # В базу — только имя эмодзи, без ID (пункт 22).
+                emoji = normalize_emoji_name(row.get("Эмодзи", ""))
                 old = old_items_by_name_cat.get((name.lower(), cat.lower()))
                 if old is None:
                     old_by_name = old_items_by_name.get(name.lower())
@@ -296,16 +287,14 @@ class AdminCmdsCog(commands.Cog):
                 old_ps = old.get("price_sell") if old else None
                 existing_cat = old["category"] if old else cat
                 await asyncio.to_thread(
-                    self._repo.upsert_item, name, existing_cat,
+                    self._sheets_service.upsert_item, name, existing_cat,
                     price_buy=pb, price_sell=ps, emoji=emoji,
                 )
                 count += 1
                 if old and (old_pb != pb or old_ps != ps):
-                    e = resolve_emoji(old.get("emoji", ""), guild)
-                    emoji_str = e + " " if e else ""
+                    item_for_line = {"name": name, "emoji": old.get("emoji", "")}
                     if old_pb != pb and pb is not None and pb != 0:
-                        old_str = _fmt(old_pb) if old_pb is not None else "—"
-                        line = f"• {emoji_str}{name} | {old_str} ₽ → {_fmt(pb)} ₽"
+                        line = format_price_change(item_for_line, old_pb, pb, guild=guild)
                         if existing_cat == "resource":
                             changes_resources.append(line)
                         elif existing_cat == "boost":
@@ -313,63 +302,35 @@ class AdminCmdsCog(commands.Cog):
                         else:
                             changes_skup_boost.append(line)
                     if old_ps != ps and ps is not None and ps != 0:
-                        old_str = _fmt(old_ps) if old_ps is not None else "—"
-                        line = f"• {emoji_str}{name} | {old_str} ₽ → {_fmt(ps)} ₽"
+                        line = format_price_change(item_for_line, old_ps, ps, guild=guild)
                         if existing_cat == "resource":
                             changes_resources.append(line)
                         elif existing_cat == "boost":
                             changes_boosts.append(line)
                         else:
                             changes_skup_boost.append(line)
-            await asyncio.to_thread(_sync_prices_from_db, self._repo)
+            await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
             msg = f"✅ Импортировано {count} позиций."
-            all_changes = []
-            cat_sections = []
-            if changes_resources:
-                cat_sections.append(("🛒 **Изменение цен на ресурсы:**", changes_resources))
-            if changes_boosts:
-                cat_sections.append(("🍔 **Изменение цен на бусты:**", changes_boosts))
-            if changes_skup_boost:
-                cat_sections.append(("🍾 **Изменение цен на скуп бустов:**", changes_skup_boost))
-            for idx, (header, items_list) in enumerate(cat_sections):
-                if idx > 0:
-                    all_changes.append("")
-                all_changes.append(header)
-                all_changes.extend(items_list)
-            if all_changes:
-                all_text = "\n".join(all_changes)
-                if len(all_text) <= 1900:
-                    await interaction.followup.send(all_text, ephemeral=True)
-                else:
-                    chunks = []
-                    chunk = ""
-                    for line in all_changes:
-                        if len(chunk) + len(line) + 1 > 1900:
-                            chunks.append(chunk)
-                            chunk = line + "\n"
-                        else:
-                            chunk += line + "\n"
-                    if chunk:
-                        chunks.append(chunk)
-                    for c in chunks:
-                        await interaction.followup.send(c, ephemeral=True)
+
+            audit_all = []
+
+            # Заголовки — из констант, общих с /setprice и /setboost (пункт 19).
+            for title, changes in (
+                (PRICE_CHANGE_TITLE_RESOURCE, changes_resources),
+                (PRICE_CHANGE_TITLE_BOOST, changes_boosts),
+                (PRICE_CHANGE_TITLE_SKUP_BOOST, changes_skup_boost),
+            ):
+                if not changes:
+                    continue
+                embed = discord.Embed(title=title, colour=discord.Colour.blue())
+                embed.description = "\n".join(changes)
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                audit_all.extend(changes)
+
             await interaction.followup.send(msg, ephemeral=True)
             try:
                 audit = interaction.client.audit_logger
-                audit_details = {}
-                if changes_resources:
-                    audit_details["Ресурсы"] = "\n".join(changes_resources[:5])
-                    if len(changes_resources) > 5:
-                        audit_details["Ресурсы"] += f"\n... и ещё {len(changes_resources) - 5}"
-                if changes_boosts:
-                    audit_details["Бусты"] = "\n".join(changes_boosts[:5])
-                    if len(changes_boosts) > 5:
-                        audit_details["Бусты"] += f"\n... и ещё {len(changes_boosts) - 5}"
-                if changes_skup_boost:
-                    audit_details["Скуп бустов"] = "\n".join(changes_skup_boost[:5])
-                    if len(changes_skup_boost) > 5:
-                        audit_details["Скуп бустов"] += f"\n... и ещё {len(changes_skup_boost) - 5}"
-                await audit.log(interaction.user, "/new_price", audit_details)
+                await audit.log(interaction.user, "/new_price", audit_all)
             except Exception:
                 pass
         except Exception as e:
@@ -382,18 +343,5 @@ class AdminCmdsCog(commands.Cog):
             except: await i.followup.send("Недостаточно прав.", ephemeral=True)
 
 
-def _sync_prices_from_db(repo: SheetsRepository) -> dict[str, float]:
-    items = repo.get_all_items()
-    prices = {}
-    for it in items:
-        if it.get("price_buy") is not None:
-            prices[it["name"]] = it["price_buy"]
-        if it.get("price_sell") is not None:
-            prices[f"{it['name']} (boost)"] = it["price_sell"]
-    with open(PRICES_FILE, "w", encoding="utf-8") as f:
-        json.dump(prices, f, ensure_ascii=False, indent=2)
-    return prices
-
-
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(AdminCmdsCog(bot, bot.repo))
+    await bot.add_cog(AdminCmdsCog(bot, bot.sheets_service))

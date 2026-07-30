@@ -1,32 +1,17 @@
 import asyncio
 import logging
-import math
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot.config.constants import RANK_ROLES_BY_LABEL, REFERRAL_ROLES_BY_LABEL
 from bot.services.sheets_service import SheetsService
 from bot.utils.embeds import error_embed
 from bot.utils.calculator import safe_calc
+from bot.utils.formatting import format_amount
 
 logger = logging.getLogger("bot")
-
-RANK_ROLES: dict[str, int] = {
-    "🔹 Standard": 1518324856549277827,
-    "🔷 Premium": 1518328036137631805,
-    "💠 Prestige": 1518328037631066232,
-    "💎 Elite": 1518328222939611166,
-    "👑 Legend": 1518328324605083698,
-}
-
-REFERRAL_ROLES: dict[str, int] = {
-    "🧭 Скаут": 1518583879672270878,
-    "📣 Промоутер": 1518584176054636584,
-    "🧲 Вербовщик": 1518584268933300274,
-    "📢 Амбассадор": 1518584424818671687,
-    "🎩 Рекламный Барон": 1518584494410563625,
-}
 
 _MAX_NICK_LENGTH = 32
 
@@ -37,9 +22,8 @@ def _role_mention(role_name: str, role_map: dict[str, int]) -> str:
 
 
 def _amount_str(amount: float) -> str:
-    if not math.isfinite(amount):
-        return str(amount)
-    return str(int(amount)) if amount == int(amount) else str(amount)
+    """Обёртка над единым форматтером (bot/utils/formatting.py)."""
+    return format_amount(amount)
 
 
 class TransactionsCog(commands.Cog):
@@ -47,6 +31,11 @@ class TransactionsCog(commands.Cog):
     def __init__(self, bot: commands.Bot, sheets_service: SheetsService) -> None:
         self.bot = bot
         self._sheets_service = sheets_service
+        # Защита от повторной фиксации одной и той же сделки: Discord может
+        # переслать взаимодействие, а админ — нажать «Завершить сделку» дважды.
+        # Без неё в канал уходили два «Сделка успешно завершена», а в таблицу —
+        # две строки (пункт 20).
+        self._in_flight: set[tuple[int, str, float]] = set()
 
     @app_commands.command(name="add", description="📝 (Админ) Записать новую сделку в Google Таблицу (сумма, тип, ник) с авто-калькулятором")
     @app_commands.checks.has_permissions(administrator=True)
@@ -102,6 +91,40 @@ class TransactionsCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("Сумма должна быть больше 0"), ephemeral=True)
             return
 
+        await self.record_transaction(interaction, тип, nickname, amount, referrer)
+
+    async def record_transaction(
+        self,
+        interaction: discord.Interaction,
+        tx_type: str,
+        nickname: str,
+        amount: float,
+        referrer: str | None = None,
+    ) -> None:
+        """Единая логика фиксации сделки: используется и командой /add, и кнопкой
+        «Завершить сделку» под заявкой в тикете — чтобы поведение никогда не расходилось."""
+        key = (interaction.channel_id, nickname, amount)
+        if key in self._in_flight:
+            logger.warning("record_transaction: повтор той же сделки %s — пропущено", key)
+            await interaction.followup.send(
+                embed=error_embed("Эта сделка уже фиксируется, подождите пару секунд."),
+                ephemeral=True,
+            )
+            return
+        self._in_flight.add(key)
+        try:
+            await self._record_transaction(interaction, tx_type, nickname, amount, referrer)
+        finally:
+            self._in_flight.discard(key)
+
+    async def _record_transaction(
+        self,
+        interaction: discord.Interaction,
+        tx_type: str,
+        nickname: str,
+        amount: float,
+        referrer: str | None = None,
+    ) -> None:
         old_rank = ""
         old_referral_role = ""
 
@@ -109,28 +132,28 @@ class TransactionsCog(commands.Cog):
             before = await asyncio.to_thread(self._sheets_service.get_user, nickname)
             if before:
                 old_rank = before.rank or ""
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("record_transaction: failed to read 'before' state for %s: %s", nickname, e)
 
         if referrer:
             try:
                 before_ref = await asyncio.to_thread(self._sheets_service.get_user, referrer)
                 if before_ref:
                     old_referral_role = before_ref.referral_role or ""
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("record_transaction: failed to read 'before' referral state for %s: %s", referrer, e)
 
         try:
             await asyncio.to_thread(self._sheets_service.ensure_user, nickname)
             if referrer:
                 await asyncio.to_thread(self._sheets_service.ensure_user, referrer)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("record_transaction: ensure_user failed for %s/%s: %s", nickname, referrer, e)
 
         try:
-            await asyncio.to_thread(self._sheets_service.save_transaction, nickname, тип, amount, referrer)
+            await asyncio.to_thread(self._sheets_service.save_transaction, nickname, tx_type, amount, referrer)
         except Exception as e:
-            logger.error("add save error by %s: %s", interaction.user, e)
+            logger.error("record_transaction save error by %s: %s", interaction.user, e)
             await interaction.followup.send(embed=error_embed(f"Ошибка при сохранении: {e}"), ephemeral=True)
             return
 
@@ -145,8 +168,8 @@ class TransactionsCog(commands.Cog):
                         after_ref = await asyncio.to_thread(self._sheets_service.get_user, referrer)
                         new_referral_role = after_ref.referral_role or "" if after_ref else ""
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("record_transaction: 'after' state poll attempt %s failed for %s: %s", attempt, nickname, e)
             if attempt < 4:
                 await asyncio.sleep(1)
 
@@ -155,7 +178,7 @@ class TransactionsCog(commands.Cog):
             colour=discord.Colour.green(),
         )
         embed.add_field(name="Ник", value=nickname)
-        embed.add_field(name="Тип", value="Покупка" if тип == "buy" else "Продажа")
+        embed.add_field(name="Тип", value="Покупка" if tx_type == "buy" else "Продажа")
         embed.add_field(name="Сумма", value=_amount_str(amount))
         if referrer:
             embed.add_field(name="Ник пригласившего", value=referrer)
@@ -171,7 +194,7 @@ class TransactionsCog(commands.Cog):
 
         try:
             if new_rank and new_rank != old_rank:
-                role_mention = _role_mention(new_rank, RANK_ROLES)
+                role_mention = _role_mention(new_rank, RANK_ROLES_BY_LABEL)
                 msg = (
                     f"🎉 **Выдача ранговой роли!**\n\n"
                     f"1️⃣ Пользователь: {interaction.user.mention}\n"
@@ -182,7 +205,7 @@ class TransactionsCog(commands.Cog):
                 await interaction.channel.send(msg)
 
             if referrer and new_referral_role and new_referral_role != old_referral_role:
-                role_mention = _role_mention(new_referral_role, REFERRAL_ROLES)
+                role_mention = _role_mention(new_referral_role, REFERRAL_ROLES_BY_LABEL)
                 msg = (
                     f"🎉 **Выдача реферальной роли!**\n\n"
                     f"1️⃣ Пользователь: {interaction.user.mention}\n"
@@ -193,6 +216,19 @@ class TransactionsCog(commands.Cog):
                 await interaction.channel.send(msg)
         except Exception as e:
             logger.warning("rank/referral check failed: %s", e)
+
+        try:
+            audit = interaction.client.audit_logger
+            details = {
+                "Ник": nickname,
+                "Тип": "Покупка" if tx_type == "buy" else "Продажа",
+                "Сумма": f"{_amount_str(amount)} ₽",
+            }
+            if referrer:
+                details["Пригласил"] = referrer
+            await audit.log(interaction.user, "/add", details)
+        except Exception:
+            pass
 
     @add.error
     async def add_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
