@@ -24,16 +24,18 @@ LEVEL_BONUSES = [
     "└ 🎁 🪙 150 Coins\n└ 💸 🪙 0.1 с любой сделки\n└ 🎫 Промокод: -1.5% новичку",
 ]
 
-# Rank thresholds and bonuses
-RANK_THRESHOLDS = [50, 250, 1000, 5000, 10000]
-RANK_NAMES = [
+# Rank thresholds and bonuses — ⚠ пороги XP, НЕ обороты в рублях (те — в
+# bot/config/constants.py::RANK_THRESHOLDS / bot/services/role_service.py).
+# Одноимённая переменная в тех модулях означает другое бизнес-правило.
+XP_RANK_THRESHOLDS = [50, 250, 1000, 5000, 10000]
+XP_RANK_NAMES = [
     "🔹 Standard",
     "🔷 Premium",
     "💠 Prestige",
     "💎 Elite",
     "👑 Legend",
 ]
-RANK_BONUSES = [
+XP_RANK_BONUSES = [
     "└ 🎁 🪙 5 Coin",
     "└ 🎁 🪙 10 Coins\n└ ⚡ +5% XP\n└ 📊 Скидка 0.5% / Наценка 0.5%",
     "└ 🎁 🪙 40 Coins\n└ 🔥 +2 Coin за сделку >₽50М\n└ 📊 Скидка 1.5% / Наценка 1%\n└ ⏱ Приоритет",
@@ -90,7 +92,7 @@ class ReferralService:
 
     def get_rank_index(self, xp: float) -> int:
         idx = -1
-        for i, t in enumerate(RANK_THRESHOLDS):
+        for i, t in enumerate(XP_RANK_THRESHOLDS):
             if xp >= t:
                 idx = i
             else:
@@ -99,16 +101,16 @@ class ReferralService:
 
     def get_rank_progress(self, xp: float) -> tuple | None:
         idx = self.get_rank_index(xp)
-        if idx == len(RANK_THRESHOLDS) - 1:
+        if idx == len(XP_RANK_THRESHOLDS) - 1:
             return None
-        nxt = RANK_THRESHOLDS[idx + 1]
-        next_name = RANK_NAMES[idx + 1]
+        nxt = XP_RANK_THRESHOLDS[idx + 1]
+        next_name = XP_RANK_NAMES[idx + 1]
         return (int(xp), nxt, next_name)
 
     def get_rank_bonus(self, xp: float) -> str:
         idx = self.get_rank_index(xp)
-        if 0 <= idx < len(RANK_BONUSES):
-            return RANK_BONUSES[idx]
+        if 0 <= idx < len(XP_RANK_BONUSES):
+            return XP_RANK_BONUSES[idx]
         return ""
 
     @staticmethod
@@ -122,7 +124,7 @@ class ReferralService:
     @staticmethod
     def get_target_rank_name(xp: float) -> Optional[str]:
         target = None
-        for i, threshold in enumerate(RANK_THRESHOLDS):
+        for i, threshold in enumerate(XP_RANK_THRESHOLDS):
             if xp >= threshold:
-                target = RANK_NAMES[i]
+                target = XP_RANK_NAMES[i]
         return target

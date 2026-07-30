@@ -294,7 +294,7 @@ python -c "from bot.services.role_service import RANK_THRESHOLDS; from bot.confi
 не зависит.
 
 ### D.2 — Явная маркировка XP-порогов в `referral_service.py`
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Зависит от: D.1
 Критерии завершения:
 - `RANK_THRESHOLDS`/`RANK_NAMES`/`RANK_BONUSES` переименованы в `XP_RANK_THRESHOLDS`/`XP_RANK_NAMES`/`XP_RANK_BONUSES` внутри `referral_service.py`, внешний API класса не изменился.
@@ -305,6 +305,14 @@ grep -rn "XP_RANK_THRESHOLDS" bot/services/referral_service.py
 grep -rn "^RANK_THRESHOLDS" bot/services/referral_service.py
 ```
 (второй grep не должен ничего найти)
+Результат: переименовано (6 внутренних мест: `get_rank_index`,
+`get_rank_progress`, `get_rank_bonus`, `get_target_rank_name`), плюс
+добавлен явный ⚠-комментарий у объявления, отсылающий к `constants.py`/
+`role_service.py`. Ничего снаружи `referral_service.py` эти три имени не
+импортировало (`grep` по всему `bot/` — пусто), значит внешний API класса
+(методы, а не модульные переменные) действительно не менялся. `THRESHOLDS`
+(список порогов количества рефералов) этим этапом не тронут — он относится
+к Этапу D.3. Тесты — `78 passed`, `ruff` на файле — 0 предупреждений.
 
 ### D.3 — Объединение `REFERRAL_THRESHOLDS` (dict) и `THRESHOLDS` (list)
 Статус: 🔲 не начато
@@ -516,7 +524,7 @@ git log -- bot.py
 | C.3 Фиксация «не трогать» | ✅ | нет | 0.1 | нет |
 | C.4 Переименование embeds._fmt | ✅ | низкий | C.1 | нет |
 | D.1 role_service ← constants | ✅ | низкий | 0.1 | нет |
-| D.2 XP_RANK_* переименование | 🔲 | низкий | D.1 | нет |
+| D.2 XP_RANK_* переименование | ✅ | низкий | D.1 | нет |
 | D.3 Объединение REFERRAL_THRESHOLDS | 🔲 | средний | D.1, 0.1 | нет |
 | D.4 Эмодзи-мосты | 🔲 | средний-высокий | D.1, D.2 | да |
 | E.1 Методы SheetsService | 🔲 | низкий | — | нет |
