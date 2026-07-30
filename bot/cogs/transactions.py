@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import math
 
 import discord
 from discord import app_commands
@@ -10,6 +9,7 @@ from bot.config.constants import RANK_ROLES_BY_LABEL, REFERRAL_ROLES_BY_LABEL
 from bot.services.sheets_service import SheetsService
 from bot.utils.embeds import error_embed
 from bot.utils.calculator import safe_calc
+from bot.utils.formatting import format_amount
 
 logger = logging.getLogger("bot")
 
@@ -22,9 +22,8 @@ def _role_mention(role_name: str, role_map: dict[str, int]) -> str:
 
 
 def _amount_str(amount: float) -> str:
-    if not math.isfinite(amount):
-        return str(amount)
-    return str(int(amount)) if amount == int(amount) else str(amount)
+    """Обёртка над единым форматтером (bot/utils/formatting.py)."""
+    return format_amount(amount)
 
 
 class TransactionsCog(commands.Cog):
@@ -32,6 +31,11 @@ class TransactionsCog(commands.Cog):
     def __init__(self, bot: commands.Bot, sheets_service: SheetsService) -> None:
         self.bot = bot
         self._sheets_service = sheets_service
+        # Защита от повторной фиксации одной и той же сделки: Discord может
+        # переслать взаимодействие, а админ — нажать «Завершить сделку» дважды.
+        # Без неё в канал уходили два «Сделка успешно завершена», а в таблицу —
+        # две строки (пункт 20).
+        self._in_flight: set[tuple[int, str, float]] = set()
 
     @app_commands.command(name="add", description="📝 (Админ) Записать новую сделку в Google Таблицу (сумма, тип, ник) с авто-калькулятором")
     @app_commands.checks.has_permissions(administrator=True)
@@ -98,7 +102,29 @@ class TransactionsCog(commands.Cog):
         referrer: str | None = None,
     ) -> None:
         """Единая логика фиксации сделки: используется и командой /add, и кнопкой
-        «✅ Подтвердить» под заявкой в тикете — чтобы поведение никогда не расходилось."""
+        «Завершить сделку» под заявкой в тикете — чтобы поведение никогда не расходилось."""
+        key = (interaction.channel_id, nickname, amount)
+        if key in self._in_flight:
+            logger.warning("record_transaction: повтор той же сделки %s — пропущено", key)
+            await interaction.followup.send(
+                embed=error_embed("Эта сделка уже фиксируется, подождите пару секунд."),
+                ephemeral=True,
+            )
+            return
+        self._in_flight.add(key)
+        try:
+            await self._record_transaction(interaction, tx_type, nickname, amount, referrer)
+        finally:
+            self._in_flight.discard(key)
+
+    async def _record_transaction(
+        self,
+        interaction: discord.Interaction,
+        tx_type: str,
+        nickname: str,
+        amount: float,
+        referrer: str | None = None,
+    ) -> None:
         old_rank = ""
         old_referral_role = ""
 

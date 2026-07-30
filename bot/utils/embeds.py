@@ -4,10 +4,28 @@ import discord
 from discord import Embed, Colour
 
 from bot.models.user import User
+from bot.utils.formatting import format_amount
 from bot.services.ocr_service import _fmt as _fmt_plain
 
 
 _EMOJI_RE = re.compile(r"<a?:\w+:\d+>")
+_EMOJI_FULL_RE = re.compile(r"^<a?:(\w+):\d+>$")
+
+
+def normalize_emoji_name(raw: str) -> str:
+    """Свести любую запись эмодзи к голому имени для хранения в таблице.
+
+    "<:topot:123456>" / "<a:topot:123456>" / ":topot:" / "topot" → "topot".
+    Юникодные эмодзи ("🚀") возвращаются как есть. Вывод от этого не страдает:
+    resolve_emoji() разворачивает имя обратно в <:name:id> по эмодзи гильдии.
+    """
+    if not raw:
+        return ""
+    s = raw.strip()
+    m = _EMOJI_FULL_RE.match(s)
+    if m:
+        return m.group(1)
+    return s.strip(":")
 
 
 def resolve_emoji(emoji_str: str, guild: discord.Guild | None = None) -> str:
@@ -42,15 +60,8 @@ def format_price_change(
 
 
 def _fmt_thousands(n: float | int) -> str:
-    s = str(int(n)) if isinstance(n, float) and n == int(n) else str(n)
-    parts = s.split(".")
-    int_part = parts[0]
-    groups = []
-    while int_part:
-        groups.append(int_part[-3:])
-        int_part = int_part[:-3]
-    parts[0] = " ".join(reversed(groups))
-    return ".".join(parts)
+    """Обёртка над единым форматтером (bot/utils/formatting.py)."""
+    return format_amount(n)
 
 
 def _progress_bar(current: int, total: int, size: int = 10) -> str:

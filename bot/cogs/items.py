@@ -8,9 +8,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot.config.constants import (
+    PRICE_CHANGE_TITLE_RESOURCE, PRICE_CHANGE_TITLE_BOOST,
+    SYNC_SHEET_SKUP, SYNC_SHEET_SKUP_BOOST, SYNC_SHEET_BOOST_SALE,
+)
 from bot.services.sheets_service import SheetsService
 from bot.utils.calculator import safe_calc
-from bot.utils.embeds import error_embed, resolve_emoji, format_price_change
+from bot.utils.embeds import (
+    error_embed, resolve_emoji, format_price_change, normalize_emoji_name,
+)
 
 logger = logging.getLogger("bot")
 
@@ -60,13 +66,12 @@ class ItemsCog(commands.Cog):
             for it in matches[:25]
         ]
 
-    async def _send_price_change_embed(self, interaction: discord.Interaction, cat_label: str, cat_emoji: str, changes: list[str]):
+    async def _send_price_change_embed(self, interaction: discord.Interaction, title: str, changes: list[str]):
+        """Единый вид ответа для /setprice, /setboost и /new_price (пункт 19):
+        заголовки берутся из констант, чтобы форматы больше не расходились."""
         if not changes:
             return
-        embed = discord.Embed(
-            title=f"{cat_emoji} Изменение цен {cat_label}",
-            colour=discord.Colour.blue(),
-        )
+        embed = discord.Embed(title=title, colour=discord.Colour.blue())
         embed.description = "\n".join(changes)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -90,7 +95,7 @@ class ItemsCog(commands.Cog):
             await asyncio.to_thread(self._sheets_service.upsert_item, it["name"], it["category"], price_buy=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
             change = format_price_change(it, old_price, amount, guild=interaction.guild)
-            await self._send_price_change_embed(interaction, "ресурсов", "📦", [change])
+            await self._send_price_change_embed(interaction, PRICE_CHANGE_TITLE_RESOURCE, [change])
             try:
                 audit = interaction.client.audit_logger
                 await audit.log(interaction.user, "/setprice", [change])
@@ -125,7 +130,7 @@ class ItemsCog(commands.Cog):
             await asyncio.to_thread(self._sheets_service.upsert_item, it["name"], it["category"], price_sell=amount)
             await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
             change = format_price_change(it, old_price, amount, guild=interaction.guild)
-            await self._send_price_change_embed(interaction, "бустов", "🚀", [change])
+            await self._send_price_change_embed(interaction, PRICE_CHANGE_TITLE_BOOST, [change])
             try:
                 audit = interaction.client.audit_logger
                 await audit.log(interaction.user, "/setboost", [change])
@@ -164,8 +169,11 @@ class ItemsCog(commands.Cog):
             ps = safe_calc(price_sell) if price_sell else None
         except Exception:
             ps = None
+        # В таблицу пишем только имя эмодзи, без ID (пункт 22) — resolve_emoji
+        # ниже всё равно развернёт его обратно в <:name:id> для вывода.
+        emoji_name = normalize_emoji_name(emoji)
         try:
-            it = await asyncio.to_thread(self._sheets_service.upsert_item, name.strip(), category, price_buy=pb, price_sell=ps, emoji=emoji.strip())
+            it = await asyncio.to_thread(self._sheets_service.upsert_item, name.strip(), category, price_buy=pb, price_sell=ps, emoji=emoji_name)
             await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
             e = resolve_emoji(it.get("emoji", ""), interaction.guild)
             emoji_str = e + " " if e else ""
@@ -180,17 +188,32 @@ class ItemsCog(commands.Cog):
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
     @app_commands.command(name="del_item", description="🗑️ (Админ) Удалить выбранный предмет из базы данных")
-    @app_commands.describe(item="Название предмета для удаления")
+    @app_commands.describe(
+        item="Название предмета для удаления",
+        category="Категория — обязательна, если предмет есть и в ресурсах, и в бустах",
+    )
     @app_commands.autocomplete(item=_autocomplete_items)
+    @app_commands.choices(category=[
+        app_commands.Choice(name="Ресурс (скупка)", value="resource"),
+        app_commands.Choice(name="Буст (продажа)", value="boost"),
+    ])
     @app_commands.checks.has_permissions(administrator=True)
-    async def del_item(self, interaction: discord.Interaction, item: str):
+    async def del_item(self, interaction: discord.Interaction, item: str, category: Optional[str] = None):
         await interaction.response.defer(ephemeral=True)
         try:
-            if await asyncio.to_thread(self._sheets_service.delete_item, item):
+            if await asyncio.to_thread(self._sheets_service.delete_item, item, category):
                 await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
                 await interaction.followup.send(f"✅ {item} удалён из базы.", ephemeral=True)
             else:
-                await interaction.followup.send(embed=error_embed("Предмет не найден."), ephemeral=True)
+                # delete_item отказывается удалять при неоднозначности, чтобы не
+                # снести одноимённый предмет из другой категории.
+                await interaction.followup.send(
+                    embed=error_embed(
+                        f"«{item}» не найден или существует сразу в двух категориях. "
+                        "Укажите категорию параметром `category`."
+                    ),
+                    ephemeral=True,
+                )
         except Exception as e:
             await interaction.followup.send(embed=error_embed(f"Ошибка: {e}"), ephemeral=True)
 
@@ -206,35 +229,60 @@ class ItemsCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         try:
             result = await asyncio.to_thread(self._sheets_service.sync_prices_to_sheets)
-            msg = (
-                f"✅ Синхронизация завершена.\n"
-                f"• Мейн скуп: {result.get('resource', 0)} обновлено\n"
-                f"• Скуп бустов: {result.get('skup_boost', 0)} обновлено\n"
-                f"• БУСТЫ: {result.get('boost', 0)} обновлено"
-            )
             not_found = result.get("not_found", [])
-            if not_found:
-                msg += f"\n⚠️ Не найдены в листах ({len(not_found)}): {', '.join(not_found[:20])}"
-                if len(not_found) > 20:
-                    msg += f" и ещё {len(not_found) - 20}"
             errors = result.get("errors", [])
+            protected = result.get("protected", [])
+
+            embed = discord.Embed(
+                title="🔄 Синхронизация цен",
+                colour=discord.Colour.red() if errors else discord.Colour.green(),
+            )
+            embed.add_field(
+                name="📄 Обновлено",
+                value=(
+                    f"• {SYNC_SHEET_SKUP}: {result.get('resource', 0)}\n"
+                    f"• {SYNC_SHEET_SKUP_BOOST}: {result.get('skup_boost', 0)}\n"
+                    f"• {SYNC_SHEET_BOOST_SALE}: {result.get('boost', 0)}"
+                ),
+                inline=False,
+            )
+            if not_found:
+                text = "\n".join(f"• {n}" for n in not_found[:20])
+                if len(not_found) > 20:
+                    text += f"\n… и ещё {len(not_found) - 20}"
+                embed.add_field(name=f"⚠️ Не найдены в листах ({len(not_found)})", value=text[:1024], inline=False)
             if errors:
-                msg += f"\n❌ Ошибки при записи ({len(errors)}): " + "; ".join(errors[:10])
+                text = "\n".join(f"• {e}" for e in errors[:10])
                 if len(errors) > 10:
-                    msg += f" и ещё {len(errors) - 10}"
-            await interaction.followup.send(msg, ephemeral=True)
+                    text += f"\n… и ещё {len(errors) - 10}"
+                embed.add_field(name=f"❌ Ошибки при записи ({len(errors)})", value=text[:1024], inline=False)
+            if protected:
+                # Защиту диапазона обойти нельзя — это право владельца таблицы.
+                account = result.get("service_account") or "сервис-аккаунт из credentials.json"
+                embed.add_field(
+                    name="🔒 Что сделать",
+                    value=(
+                        f"Листы {', '.join(sorted(set(protected)))} защищены от редактирования.\n"
+                        f"Откройте в таблице Данные → Защищённые листы и диапазоны и добавьте "
+                        f"в список редакторов:\n{account}"
+                    )[:1024],
+                    inline=False,
+                )
+            await interaction.followup.send(embed=embed, ephemeral=True)
             try:
                 audit = interaction.client.audit_logger
                 audit_lines = [
-                    f"Мейн скуп: {result.get('resource', 0)} обновлено",
-                    f"Скуп бустов: {result.get('skup_boost', 0)} обновлено",
-                    f"БУСТЫ: {result.get('boost', 0)} обновлено",
+                    f"{SYNC_SHEET_SKUP}: {result.get('resource', 0)} обновлено",
+                    f"{SYNC_SHEET_SKUP_BOOST}: {result.get('skup_boost', 0)} обновлено",
+                    f"{SYNC_SHEET_BOOST_SALE}: {result.get('boost', 0)} обновлено",
                 ]
                 if not_found:
                     audit_lines.append(f"Не найдено: {len(not_found)}")
                 if errors:
                     audit_lines.append(f"Ошибки: {len(errors)}")
-                await audit.log(interaction.user, "/sync_prices", audit_lines)
+                if protected:
+                    audit_lines.append(f"Защищены: {', '.join(sorted(set(protected)))}")
+                await audit.log(interaction.user, "/sync_prices", audit_lines, success=not errors)
             except Exception:
                 pass
         except Exception as e:

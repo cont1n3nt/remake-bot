@@ -9,7 +9,7 @@ COL_AMOUNT: Final[int] = 5         # E — Сумма
 COL_COINS_FORMULA: Final[int] = 6  # F — Coins (формула листа, не трогать)
 COL_XP_FORMULA: Final[int] = 7     # G — XP (формула листа, не трогать)
 COL_REFERRED_BY: Final[int] = 8    # H — Пришел от
-# I = 9 — пустой разделитель
+COL_DISCORD_ID: Final[int] = 9     # I — Discord ID (привязка к уникальному нику в J)
 # — Секция базы пользователей (J-S) —
 COL_UNIQUE_NICK: Final[int] = 10   # J — Уникальный ник
 COL_TOTAL_COINS: Final[int] = 11   # K — Всего Coins (formula)
@@ -84,6 +84,15 @@ CATEGORY_CHANNELS: dict[str, int] = {
     "Продажа бустов":   1503802805801058336,
     "Заказ бустов":     1479228622014251049,
 }
+
+# Ник магазина, на который отправляют ресурсы/деньги при способе получения
+# «Почта». Постоянный, не зависит от того, кто создал заявку.
+SHOP_MAIL_NICK: Final[str] = "Scaryyyyy"
+
+# — Единые заголовки эмбедов изменения цен (/setprice, /setboost, /new_price) —
+PRICE_CHANGE_TITLE_RESOURCE: Final[str] = "🛒 Изменение цен на ресурсы"
+PRICE_CHANGE_TITLE_BOOST: Final[str] = "🍔 Изменение цен на бусты"
+PRICE_CHANGE_TITLE_SKUP_BOOST: Final[str] = "📦 Изменение цен на скуп бустов"
 
 # — Ранговые роли —
 RANK_THRESHOLDS: dict[str, int] = {

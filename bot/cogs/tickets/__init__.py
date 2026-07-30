@@ -10,9 +10,12 @@ from discord.ext import commands
 
 from bot.services.ocr_service import OcrService, _fmt
 from bot.config.constants import MONITORED_CHANNELS, CATEGORY_CHANNELS
-from bot.cogs.tickets.views_delivery import TicketFormView
+from bot.cogs.tickets.embeds import build_request_card_embed, build_audit_details_from_data
+from bot.cogs.tickets.views_delivery import TicketFormView, DeliveryMethodView
 from bot.cogs.tickets.views_edit import EditRequestView
-from bot.cogs.tickets.storage import _load_request_meta_by_channel, _save_deal_report
+from bot.cogs.tickets.storage import (
+    _load_request_meta_by_channel, _save_deal_report, _save_request_meta,
+)
 
 logger = logging.getLogger("bot")
 
@@ -33,6 +36,9 @@ class TicketCog(commands.Cog):
         self._edit_view = EditRequestView()
         bot.add_view(self._view)
         bot.add_view(self._edit_view)
+        # Выбор способа получения тоже персистентный — иначе после таймаута или
+        # перезапуска бота Discord отвечает «не ответило вовремя» (пункт 1).
+        bot.add_view(DeliveryMethodView())
         self._sending_locks: set[int] = set()
 
     @commands.Cog.listener()
@@ -136,58 +142,42 @@ class TicketCog(commands.Cog):
         if message.author.bot:
             return
         category_id = getattr(message.channel, "category_id", None)
-        is_ticket = category_id is not None and category_id in CATEGORY_CHANNELS.values()
+        category_name = next(
+            (n for n, cid in CATEGORY_CHANNELS.items() if cid == category_id), None,
+        )
+        is_ticket = category_name is not None
         is_monitored = message.channel.id in MONITORED_CHANNELS
         if not is_ticket and not is_monitored:
             return
         images = [a for a in message.attachments if a.content_type and a.content_type.startswith("image/")]
         if not images:
             return
-        await message.add_reaction("⏳")
-        for attachment in images:
-            await self._process_image(message, attachment)
+
         if is_ticket:
-            await self._attach_screenshot_to_request(message, images[0])
-        await message.remove_reaction("⏳", self.bot.user)
-        await message.add_reaction("✅")
+            # В заказе бустов состав задан формой — скриншот не запрашивается и
+            # OCR не запускается, поэтому и ошибок распознавания там нет (п. 7).
+            if "Заказ" in category_name:
+                return
+            await self._handle_ticket_screenshot(message, images[0])
+            return
 
-    async def _attach_screenshot_to_request(self, message: discord.Message, attachment: discord.Attachment) -> None:
-        """Если в этом канале уже опубликована заявка — встраиваем скриншот в её
-        Embed через set_image (attachment), а не оставляем отдельным вложением."""
-        meta = await asyncio.to_thread(_load_request_meta_by_channel, message.channel.id)
-        if meta is None:
-            return
-        request_message_id, _data = meta
-        try:
-            request_msg = await message.channel.fetch_message(request_message_id)
-        except (discord.NotFound, discord.HTTPException):
-            return
-        if not request_msg.embeds:
-            return
-        embed = request_msg.embeds[0]
-        try:
-            fp = await attachment.to_file()
-        except Exception:
-            return
-        embed.set_image(url=f"attachment://{fp.filename}")
-        try:
-            await request_msg.edit(embed=embed, attachments=[fp])
-        except (discord.HTTPException, discord.Forbidden) as e:
-            logger.warning("Не удалось прикрепить скриншот к заявке %s: %s", request_message_id, e)
+        for attachment in images:
+            await self._process_monitored_image(message, attachment)
 
-    async def _process_image(self, message: discord.Message, attachment: discord.Attachment) -> None:
+    async def _run_ocr(self, message: discord.Message, attachment: discord.Attachment) -> Optional[dict]:
+        """Распознать скриншот и сверить с базой цен.
+
+        Возвращает None, если распознать не удалось — вызывающий код в этом
+        случае пишет «Будет посчитано вручную» (пункт 11)."""
         try:
             await self.ocr.reload_prices()
             img_bytes = await attachment.read()
-            text = await asyncio.wait_for(self.ocr.extract_text(img_bytes), timeout=30.0)
-            text = text.strip()
+            text = (await asyncio.wait_for(self.ocr.extract_text(img_bytes), timeout=30.0)).strip()
             if not text:
                 logger.info("OCR не нашёл текст на изображении %s", attachment.filename)
-                return
+                return None
             parsed = self.ocr.parse_items(text)
             readable, total, unknown = self.ocr.cross_reference(parsed)
-            items_str = "; ".join(readable)
-            result = f"[OCR Result] Items: {items_str} | Total: {_fmt(total)} RUB"
             entry = {
                 "type": "ocr", "timestamp": discord.utils.utcnow().isoformat(),
                 "user_id": message.author.id, "user_name": str(message.author),
@@ -195,19 +185,157 @@ class TicketCog(commands.Cog):
                 "items": parsed, "total": total, "unknown": unknown, "raw_text": text,
             }
             await _save_deal_report(message.channel.id, entry)
-            await message.channel.send(f"```{result}```")
-            if unknown:
-                await message.channel.send(
-                    f"⚠️ Не удалось определить цену для: {', '.join(unknown)}. "
-                    "Проверьте базу цен или укажите стоимость вручную."
-                )
+            return {"readable": readable, "total": total, "unknown": unknown}
         except asyncio.TimeoutError:
-            await message.channel.send("⏱ OCR-распознавание превысило таймаут (30 с).")
+            logger.warning("OCR превысил таймаут на %s", attachment.filename)
         except ValueError as exc:
-            await message.channel.send(f"⚠️ {exc}")
+            logger.warning("OCR не смог декодировать %s: %s", attachment.filename, exc)
         except Exception:
             logger.exception("Ошибка OCR при обработке %s", attachment.filename)
-            await message.channel.send("⚠️ Произошла ошибка при OCR-распознавании.")
+        return None
+
+    async def _handle_ticket_screenshot(self, message: discord.Message, attachment: discord.Attachment) -> None:
+        """Встроить скриншот в карточку заявки, проставить сумму и убрать
+        исходное сообщение, чтобы в канале осталась только итоговая карточка
+        (пункты 7, 10, 11, 15)."""
+        meta = await asyncio.to_thread(_load_request_meta_by_channel, message.channel.id)
+        if meta is None:
+            return
+        request_message_id, meta_data = meta
+        try:
+            request_msg = await message.channel.fetch_message(request_message_id)
+        except (discord.NotFound, discord.HTTPException):
+            return
+
+        try:
+            fp = await attachment.to_file()
+        except Exception as e:
+            logger.warning("Не удалось скачать скриншот %s: %s", attachment.filename, e)
+            return
+
+        ocr = await self._run_ocr(message, attachment)
+        data = meta_data.get("data", {})
+        if ocr is not None and ocr["total"]:
+            data["total_price"] = ocr["total"]
+        data.setdefault("total_price", 0.0)
+
+        # Автор карточки — тот, кто создал заявку, а не тот, кто прислал
+        # скриншот: иначе поле «Создатель» переписалось бы на админа.
+        author = await self._resolve_request_author(message, meta_data)
+
+        embed = build_request_card_embed(
+            author, message.guild, self.bot.repo,
+            data.get("text_data", {}), data.get("delivery_method", ""),
+            data.get("selected_boosts", []), data.get("total_price", 0.0),
+            data.get("category", ""),
+        )
+        embed.set_image(url=f"attachment://{fp.filename}")
+
+        try:
+            await request_msg.edit(
+                embed=embed, attachments=[fp], view=EditRequestView(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except (discord.HTTPException, discord.Forbidden) as e:
+            logger.warning("Не удалось прикрепить скриншот к заявке %s: %s", request_message_id, e)
+            return
+
+        await _save_request_meta(
+            message.channel.id, request_message_id, meta_data.get("user_id", message.author.id), data,
+        )
+        await self._sync_request_log(message, data, ocr, attachment, author)
+
+        # Исходное сообщение больше не нужно — картинка уже внутри карточки.
+        try:
+            await message.delete()
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.debug("Не удалось удалить сообщение со скриншотом %s: %s", message.id, e)
+
+        if ocr is None or not ocr["total"]:
+            await message.channel.send(
+                "⚠️ Не удалось распознать предметы на скриншоте — "
+                "сумму заказа посчитает администратор вручную.",
+                delete_after=30,
+            )
+
+    async def _resolve_request_author(self, message: discord.Message, meta_data: dict) -> discord.abc.User:
+        """Автор заявки по сохранённому user_id, с откатом на автора сообщения."""
+        user_id = meta_data.get("user_id")
+        if not user_id or user_id == message.author.id:
+            return message.author
+        if message.guild is not None:
+            member = message.guild.get_member(user_id)
+            if member is not None:
+                return member
+        try:
+            return await self.bot.fetch_user(user_id)
+        except (discord.NotFound, discord.HTTPException) as e:
+            logger.debug("Не удалось получить автора заявки %s: %s", user_id, e)
+            return message.author
+
+    async def _sync_request_log(
+        self,
+        message: discord.Message,
+        data: dict,
+        ocr: Optional[dict],
+        attachment: Optional[discord.Attachment] = None,
+        author: Optional[discord.abc.User] = None,
+    ) -> None:
+        """Обновить уже отправленный лог заявки вместо отправки нового (п. 14).
+
+        Скриншот уходит внутрь лог-эмбеда через set_image, а не отдельным файлом.
+        Нужен отдельный discord.File: тот, что уже ушёл в карточку заявки,
+        повторно отправить нельзя — его поток вычитан."""
+        log_message_id = data.get("log_message_id")
+        if not log_message_id:
+            return
+        try:
+            details = build_audit_details_from_data(self.bot.repo, message.guild, data)
+            if ocr is not None and ocr.get("unknown"):
+                details["Не распознано"] = ", ".join(ocr["unknown"][:10])
+            log_image = None
+            if attachment is not None:
+                try:
+                    log_image = await attachment.to_file()
+                except Exception as e:
+                    logger.debug("Не удалось подготовить скриншот для лога: %s", e)
+            await self.audit_logger.edit_log(
+                log_message_id, author or message.author, "/ticket_form", details, image=log_image,
+            )
+        except Exception:
+            logger.exception("Не удалось обновить лог заявки %s", log_message_id)
+
+    async def _process_monitored_image(self, message: discord.Message, attachment: discord.Attachment) -> None:
+        """Скриншот в обычном (не тикетном) канале — просто калькулятор."""
+        ocr = await self._run_ocr(message, attachment)
+        embed = discord.Embed(
+            title="🧮 Расчёт по скриншоту",
+            colour=discord.Colour.green() if ocr and ocr["total"] else discord.Colour.orange(),
+        )
+        embed.add_field(name="👤 Пользователь", value=message.author.mention, inline=False)
+        if ocr is None:
+            embed.add_field(
+                name="⚠️ Ничего не найдено",
+                value="Не удалось распознать предметы с ценой. Сумму посчитает администратор вручную.",
+                inline=False,
+            )
+        else:
+            if ocr["readable"]:
+                embed.add_field(
+                    name="📦 Позиции",
+                    value="\n".join(f"• {line}" for line in ocr["readable"])[:1024],
+                    inline=False,
+                )
+            embed.add_field(name="💰 Итого", value=f"{_fmt(ocr['total'])} ₽", inline=False)
+            if ocr["unknown"]:
+                embed.add_field(
+                    name="❓ Не найдены в базе цен",
+                    value=", ".join(ocr["unknown"][:20])[:1024],
+                    inline=False,
+                )
+        embed.set_image(url=attachment.url)
+        embed.set_footer(text="Клондайк Шёпота")
+        await message.channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
     @app_commands.command(name="tag", description="💬 (Админ) Отправить уведомление пользователю в личные сообщения о тикете")
     @app_commands.checks.has_permissions(administrator=True)

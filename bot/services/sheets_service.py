@@ -69,8 +69,11 @@ class SheetsService:
             name, category, price_buy=price_buy, price_sell=price_sell, emoji=emoji,
         )
 
-    def delete_item(self, name: str) -> bool:
-        return self._repo.delete_item(name)
+    def delete_item(self, name: str, category: Optional[str] = None) -> bool:
+        return self._repo.delete_item(name, category)
+
+    def set_discord_id(self, unique_nick: str, discord_id: str) -> bool:
+        return self._repo.set_discord_id(unique_nick, discord_id)
 
     def get_transactions(self, start_row: int = DATA_START_ROW, end_row: int = 2000) -> list[list]:
         return self._repo.get_transactions(start_row, end_row)

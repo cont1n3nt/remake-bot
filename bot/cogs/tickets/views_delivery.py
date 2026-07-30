@@ -12,16 +12,35 @@ views_edit.py — `BoostQuantityView._on_confirm` в views_boosts.py,
 метода, навсегда (см. REFACTOR_PROGRESS.md, Фаза F, F.4a/F.4d, для полной
 схемы зависимостей)."""
 
+import logging
 from typing import Optional
 
 import discord
 
 from bot.config.constants import CATEGORY_CHANNELS
-from bot.cogs.tickets.embeds import _build_request_card_embed
+from bot.cogs.tickets.embeds import _build_request_card_embed, build_audit_details
 from bot.cogs.tickets.views_boosts import BoostSelectionView
 from bot.cogs.tickets.views_screenshot import ScreenshotPromptView
 from bot.cogs.tickets.views_edit import EditRequestView
 from bot.cogs.tickets.storage import form_store, _save_request_meta, _save_deal_report
+
+logger = logging.getLogger("bot")
+
+# Идёт ли прямо сейчас публикация карточки для (канал, пользователь) — защита
+# от дублей при повторном сабмите модалки и двойном клике (пункт 8).
+_publishing: set[tuple[int, int]] = set()
+
+# Требования к скриншоту: без них OCR не может сопоставить предметы с базой цен
+# и посчитать сумму заявки (пункт 11).
+SCREENSHOT_REQUIREMENTS = (
+    "📷 **Прикрепите скриншот следующим сообщением.**\n\n"
+    "**Чтобы бот посчитал сумму автоматически:**\n"
+    "• снимок целиком, без обрезки — видны все предметы и их количество\n"
+    "• подписи количества (например `227x`) и названия читаемы, не размыты\n"
+    "• отправляйте файл изображением, а не ссылкой и не документом\n"
+    "• один скриншот на сообщение, без наложений и стикеров поверх\n\n"
+    "Если распознать не удастся, сумму посчитает администратор вручную."
+)
 
 
 # ------------------------------------------------------------------ #
@@ -30,27 +49,38 @@ from bot.cogs.tickets.storage import form_store, _save_request_meta, _save_deal_
 
 class DeliveryMethodSelect(discord.ui.Select):
 
-    def __init__(self, category: str):
+    def __init__(self):
         options = [
             discord.SelectOption(label="Почта", emoji="📮", value="Почта"),
             discord.SelectOption(label="Трейд", emoji="🤝", value="Трейд"),
         ]
         super().__init__(placeholder="Выберите способ получения", options=options, custom_id="delivery_method")
-        self.category = category
 
     async def callback(self, interaction: discord.Interaction):
+        # Категорию берём из канала, а не из состояния объекта: представление
+        # персистентное и переживает перезапуск бота (пункт 1).
+        category = TicketFormView._get_category(interaction)
+        if category is None:
+            await interaction.response.send_message(
+                "Этот канал не является каналом тикета.", ephemeral=True,
+            )
+            return
         form_store.set(interaction.user.id, "delivery_method", self.values[0])
-        if "Заказ" in self.category:
-            modal = BoostOrderModal(self.category)
-        else:
-            modal = SaleModal(self.category)
+        modal = BoostOrderModal(category) if "Заказ" in category else SaleModal(category)
         await interaction.response.send_modal(modal)
 
 
 class DeliveryMethodView(discord.ui.View):
-    def __init__(self, category: str):
-        super().__init__(timeout=120)
-        self.add_item(DeliveryMethodSelect(category))
+    """Персистентное представление.
+
+    Раньше здесь стоял timeout=120: после таймаута (или после перезапуска бота)
+    callback селекта уже не был зарегистрирован, и Discord отвечал
+    «Приложение Связной не ответило вовремя» (пункт 1).
+    """
+
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(DeliveryMethodSelect())
 
 
 # ------------------------------------------------------------------ #
@@ -116,15 +146,35 @@ class BaseOrderModal(discord.ui.Modal):
             await self._publish(interaction)
 
     async def _publish(self, interaction: discord.Interaction):
+        # Один пользователь — одна публикация за раз. Повторный сабмит модалки и
+        # двойной клик по «Подтвердить» раньше давали две одинаковые карточки
+        # в канале (пункт 8).
+        lock_key = (interaction.channel_id, interaction.user.id)
+        if lock_key in _publishing:
+            return
+        _publishing.add(lock_key)
+        try:
+            await self._publish_locked(interaction)
+        finally:
+            _publishing.discard(lock_key)
+
+    async def _publish_locked(self, interaction: discord.Interaction):
         store = form_store.get(interaction.user.id)
         text_data = store.get("text_data", {})
         delivery = store.get("delivery_method", "")
         boosts = store.get("selected_boosts", [])
         total_price = store.get("total_price", 0.0)
+        category = store.get("category", "")
 
-        embed = _build_request_card_embed(interaction, text_data, delivery, boosts, total_price, store.get("category", ""))
+        embed = _build_request_card_embed(interaction, text_data, delivery, boosts, total_price, category)
 
-        msg = await interaction.channel.send(embed=embed, view=EditRequestView())
+        # allowed_mentions=none: упоминание создателя внутри карточки не должно
+        # порождать отдельный пинг над эмбедом (пункт 6).
+        msg = await interaction.channel.send(
+            embed=embed,
+            view=EditRequestView(),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
         message_id = msg.id
 
         request_data = {
@@ -132,8 +182,23 @@ class BaseOrderModal(discord.ui.Modal):
             "delivery_method": delivery,
             "selected_boosts": boosts,
             "total_price": total_price,
-            "category": store.get("category", ""),
+            "category": category,
         }
+
+        # Лог заявки отправляем один раз и запоминаем его id: при последующих
+        # правках заявки тот же лог редактируется, а не дублируется (пункт 14).
+        try:
+            audit = interaction.client.audit_logger
+            details = build_audit_details(
+                interaction.client.repo, interaction.guild,
+                text_data, delivery, boosts, total_price, category,
+            )
+            log_msg = await audit.log(interaction.user, "/ticket_form", details)
+            if log_msg is not None:
+                request_data["log_message_id"] = log_msg.id
+        except Exception:
+            logger.exception("Не удалось записать лог заявки в канале %s", interaction.channel_id)
+
         await _save_request_meta(interaction.channel_id, message_id, interaction.user.id, request_data)
 
         entry = {
@@ -141,7 +206,7 @@ class BaseOrderModal(discord.ui.Modal):
             "timestamp": discord.utils.utcnow().isoformat(),
             "user_id": interaction.user.id,
             "user_name": str(interaction.user),
-            "category": store.get("category", ""),
+            "category": category,
             "data": {k: v for k, v in text_data.items() if v},
             "delivery_method": delivery,
             "selected_boosts": boosts,
@@ -149,33 +214,16 @@ class BaseOrderModal(discord.ui.Modal):
         }
         await _save_deal_report(interaction.channel_id, entry)
 
-        try:
-            audit = interaction.client.audit_logger
-            audit_details = {
-                "Категория": store.get("category", ""),
-                "Ник в игре": text_data.get("game_nick", ""),
-            }
-            if delivery:
-                audit_details["Способ"] = delivery
-            ref_game = text_data.get("referrer_game", "").strip()
-            ref_discord = text_data.get("referrer_discord", "").strip()
-            if ref_game:
-                audit_details["Пригласил (игра)"] = ref_game
-            if ref_discord:
-                audit_details["Пригласил (Discord)"] = ref_discord
-            if boosts:
-                boost_names = [b["name"] for b in boosts]
-                audit_details["Бусты"] = ", ".join(boost_names)
-            await audit.log(interaction.user, f"/ticket_form [{store.get('category', '')}]", audit_details)
-        except Exception:
-            pass
-
-        screenshot_view = ScreenshotPromptView(interaction.user.id, msg, embed)
-        await interaction.followup.send(
-            "📷 **Прикрепите изображение следующим сообщением.**",
-            view=screenshot_view,
-            ephemeral=True,
-        )
+        # Скриншот нужен только при продаже: в заказе бустов состав и так задан
+        # формой, поэтому ни запроса скриншота, ни OCR там больше нет (пункт 7).
+        if "Заказ" not in category:
+            await interaction.followup.send(
+                SCREENSHOT_REQUIREMENTS,
+                view=ScreenshotPromptView(interaction.user.id),
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send("✅ Заявка опубликована.", ephemeral=True)
 
         form_store.clear(interaction.user.id)
 
@@ -224,15 +272,13 @@ class TicketFormView(discord.ui.View):
                 title="📋 Оформление продажи",
                 description=(
                     "**Для продажи:**\n"
-                    "• Деньги отправляются **только после подтверждения сделки**\n"
-                    "• Приложите скриншот для подтверждения\n\n"
+                    "• Деньги отправляются **только после подтверждения сделки**\n\n"
                     "**Выберите способ получения:**"
                 ),
                 colour=discord.Colour.blurple(),
             )
 
-        view = DeliveryMethodView(category)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=DeliveryMethodView(), ephemeral=True)
 
     @staticmethod
     def _get_category(interaction: discord.Interaction) -> Optional[str]:

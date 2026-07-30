@@ -53,10 +53,8 @@ class BoostSelectionView(discord.ui.View):
         self._boost_select.callback = self._on_select
         self.add_item(self._boost_select)
 
-        self._add_btn = discord.ui.Button(label="➕ Добавить", style=discord.ButtonStyle.success, custom_id="boost_add")
-        self._add_btn.callback = self._on_add
-        self.add_item(self._add_btn)
-
+        # Кнопки «➕ Добавить» здесь нет (пункт 2): состав правится прямо в
+        # выпадающем списке, а количество — на следующем шаге.
         self._clear_btn = discord.ui.Button(label="🗑 Очистить", style=discord.ButtonStyle.danger, custom_id="boost_clear")
         self._clear_btn.callback = self._on_clear
         self.add_item(self._clear_btn)
@@ -74,24 +72,29 @@ class BoostSelectionView(discord.ui.View):
     def _get_selected_names(self) -> list[str]:
         return [it["name"] for it in self.boost_items if it["name"] in self._selected]
 
+    def _sync_select_defaults(self) -> None:
+        """Держать галочки в выпадающем списке в согласии с self._selected."""
+        for option in self._boost_select.options:
+            option.default = option.value in self._selected
+
     async def _update_message(self, interaction: discord.Interaction):
         selected_names = self._get_selected_names()
         if selected_names:
             lines = "\n".join(f"• {n}" for n in selected_names)
-            content = f"**Выбранные бусты:**\n{lines}\n\n**Добавьте ещё или нажмите ✅ Далее**"
+            content = f"**Выбранные бусты:**\n{lines}\n\n**Нажмите ✅ Далее**"
         else:
             content = "**Выберите нужные бусты:**"
+        self._sync_select_defaults()
         await interaction.response.edit_message(content=content, view=self)
 
     async def _on_select(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-    async def _on_add(self, interaction: discord.Interaction):
-        selected_in_menu = self._boost_select.values
-        for s in selected_in_menu:
-            if s not in self._selected:
-                self._selected.append(s)
-        form_store.set(interaction.user.id, "selected_boosts", [{"name": n, "quantity": 1} for n in self._selected])
+        # Выбор фиксируется сразу: отдельной кнопки «Добавить» больше нет,
+        # список в меню и есть итоговый состав заявки (пункт 2).
+        self._selected = list(self._boost_select.values)
+        form_store.set(
+            interaction.user.id, "selected_boosts",
+            [{"name": n, "quantity": 1} for n in self._selected],
+        )
         await self._update_message(interaction)
 
     async def _on_clear(self, interaction: discord.Interaction):
@@ -114,7 +117,9 @@ class BoostSelectionView(discord.ui.View):
             boosts.append({"name": n, "quantity": qty})
         form_store.set(interaction.user.id, "selected_boosts", boosts)
         view = await BoostQuantityView.create(interaction)
-        await interaction.response.edit_message(content="**Настройте количество каждого буста:**", view=view)
+        # Именно здесь раньше терялись кнопки: view отдавался без _build_controls(),
+        # и пользователь получал пустое сообщение без «✅ Подтвердить» (пункт 12).
+        await view.render(interaction, content="**Настройте количество каждого буста:**")
 
 
 # ------------------------------------------------------------------ #
@@ -149,7 +154,7 @@ class QuantityEditModal(discord.ui.Modal):
             boosts[self.boost_index]["quantity"] = qty
             form_store.set(interaction.user.id, "selected_boosts", boosts)
         view = await BoostQuantityView.create(interaction)
-        await interaction.response.edit_message(content="**Настройте количество каждого буста:**", embed=None, view=view)
+        await view.render(interaction, content="**Настройте количество каждого буста:**")
 
 
 class BoostQuantityView(discord.ui.View):
@@ -160,6 +165,8 @@ class BoostQuantityView(discord.ui.View):
         self.page = page
         self.per_page = per_page
         self.total_pages = max(1, (len(boosts_with_qty) + per_page - 1) // per_page)
+        # Второй клик по «Подтвердить» публиковал вторую карточку (пункт 8).
+        self._submitting = False
 
     @classmethod
     async def create(cls, interaction: discord.Interaction):
@@ -173,10 +180,6 @@ class BoostQuantityView(discord.ui.View):
 
         for idx, b in enumerate(chunk):
             global_idx = start + idx
-            it = all_items_map.get(b["name"].lower())
-            e = resolve_emoji(it.get("emoji", ""), getattr(self, '_guild', None)) if it else ""
-            emoji_str = e + " " if e else ""
-            label_prefix = f"{emoji_str}{b['name']}"
 
             minus_btn = discord.ui.Button(
                 label="➖",
@@ -235,15 +238,29 @@ class BoostQuantityView(discord.ui.View):
             next_btn.callback = self._on_next
             self.add_item(next_btn)
 
-    async def _refresh(self, interaction: discord.Interaction):
-        items_map = {}
+    @staticmethod
+    async def _load_items_map(interaction: discord.Interaction) -> dict:
         all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
-        for it in all_items:
-            items_map[it["name"].lower()] = it
+        return {it["name"].lower(): it for it in all_items}
+
+    async def render(self, interaction: discord.Interaction, content: str | None = None):
+        """Единственный способ показать это представление.
+
+        Раньше кнопки строились только внутри _refresh/_on_prev/_on_next, а два
+        других места отдавали view без них — отсюда «кнопка подтвердить иногда
+        не работает» (пункт 12). Теперь любая отрисовка идёт через этот метод.
+        """
+        items_map = await self._load_items_map(interaction)
         self._guild = interaction.guild
         self._build_controls(items_map)
         embed = self._build_embed(interaction, items_map)
-        await interaction.response.edit_message(embed=embed, view=self)
+        kwargs = {"embed": embed, "view": self}
+        if content is not None:
+            kwargs["content"] = content
+        await interaction.response.edit_message(**kwargs)
+
+    async def _refresh(self, interaction: discord.Interaction):
+        await self.render(interaction)
 
     def _build_embed(self, interaction: discord.Interaction, items_map: dict = None) -> discord.Embed:
         if items_map is None:
@@ -261,7 +278,7 @@ class BoostQuantityView(discord.ui.View):
             line_total = (price or 0) * b["quantity"]
             embed.add_field(
                 name=f"{emoji_str}{b['name']}",
-                value=f"➖      ✏️ Изменить      ➕\nx{b['quantity']}",
+                value=f"Количество: {b['quantity']}\nСтоимость: {_fmt(line_total)} ₽",
                 inline=False,
             )
 
@@ -269,7 +286,7 @@ class BoostQuantityView(discord.ui.View):
             (items_map.get(b["name"].lower(), {}).get("price_sell", 0) or 0) * b["quantity"]
             for b in self.boosts
         )
-        embed.add_field(name="Общая стоимость", value=f"{_fmt(total)} ₽", inline=False)
+        embed.add_field(name="💰 Общая стоимость", value=f"{_fmt(total)} ₽", inline=False)
 
         if self.total_pages > 1:
             embed.set_footer(text=f"Страница {self.page + 1} / {self.total_pages}")
@@ -299,31 +316,21 @@ class BoostQuantityView(discord.ui.View):
 
     async def _on_prev(self, interaction: discord.Interaction):
         self.page = (self.page - 1) % self.total_pages
-        items_map = {}
-        all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
-        for it in all_items:
-            items_map[it["name"].lower()] = it
-        self._guild = interaction.guild
-        self._build_controls(items_map)
-        embed = self._build_embed(interaction, items_map)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await self.render(interaction)
 
     async def _on_next(self, interaction: discord.Interaction):
         self.page = (self.page + 1) % self.total_pages
-        items_map = {}
-        all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
-        for it in all_items:
-            items_map[it["name"].lower()] = it
-        self._guild = interaction.guild
-        self._build_controls(items_map)
-        embed = self._build_embed(interaction, items_map)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await self.render(interaction)
 
     async def _on_confirm(self, interaction: discord.Interaction):
-        items_map = {}
-        all_items = await asyncio.to_thread(interaction.client.repo.get_all_items)
-        for it in all_items:
-            items_map[it["name"].lower()] = it
+        if self._submitting:
+            await interaction.response.send_message("Заявка уже отправляется…", ephemeral=True)
+            return
+        self._submitting = True
+        for child in self.children:
+            child.disabled = True
+
+        items_map = await self._load_items_map(interaction)
         total = sum(
             (items_map.get(b["name"].lower(), {}).get("price_sell", 0) or 0) * b["quantity"]
             for b in self.boosts
@@ -342,7 +349,7 @@ class BoostQuantityView(discord.ui.View):
         edit_request_data = store.get("edit_request_data")
 
         if edit_message_id and edit_request_data:
-            from bot.cogs.tickets.views_edit import EditRequestView
+            from bot.cogs.tickets.views_edit import EditRequestView, update_request_log
 
             edit_request_data["selected_boosts"] = enriched
             edit_request_data["total_price"] = total
@@ -362,7 +369,11 @@ class BoostQuantityView(discord.ui.View):
                     if a.content_type and a.content_type.startswith("image/"):
                         fp = await a.to_file()
                         files.append(fp)
-                kwargs = {"embed": embed, "view": EditRequestView()}
+                kwargs = {
+                    "embed": embed,
+                    "view": EditRequestView(),
+                    "allowed_mentions": discord.AllowedMentions.none(),
+                }
                 if files:
                     kwargs["attachments"] = files[:1]
                 await msg.edit(**kwargs)
@@ -372,6 +383,8 @@ class BoostQuantityView(discord.ui.View):
                 await interaction.followup.send("⚠️ Не удалось найти заявку для редактирования.", ephemeral=True)
                 logger.warning("Edit failed: message %s not found: %s", edit_message_id, e)
 
+            # Обновляем тот же лог, а не шлём новый (пункт 14).
+            await update_request_log(interaction, edit_request_data)
             form_store.clear(interaction.user.id)
         else:
             text_data = store.get("text_data", {})

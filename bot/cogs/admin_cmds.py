@@ -11,9 +11,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot.config.constants import (
+    PRICE_CHANGE_TITLE_RESOURCE, PRICE_CHANGE_TITLE_BOOST, PRICE_CHANGE_TITLE_SKUP_BOOST,
+)
 from bot.services.ocr_service import _fmt
 from bot.services.sheets_service import SheetsService
-from bot.utils.embeds import error_embed, resolve_emoji, format_price_change
+from bot.utils.embeds import (
+    error_embed, resolve_emoji, format_price_change, normalize_emoji_name,
+)
 from bot.utils.parsing import parse_ruble_amount
 from bot.cogs.items import _sync_prices_from_db
 
@@ -95,21 +100,29 @@ class AdminCmdsCog(commands.Cog):
             self.page = 0
             self.total_pages = max(1, (len(lines) + per_page - 1) // per_page)
 
-        def _build_text(self) -> str:
+        def build_embed(self) -> discord.Embed:
+            """Эмбед в том же стиле, что и остальные логи — без ``` -блоков."""
             start = self.page * self.per_page
             chunk = self.lines[start:start + self.per_page]
-            text = "```\n" + "\n".join(chunk) + "```"
-            return text
+            embed = discord.Embed(
+                title="📜 Логи сделок",
+                description="\n".join(chunk) if chunk else "Нет записей.",
+                colour=discord.Colour.green(),
+            )
+            embed.set_footer(
+                text=f"Страница {self.page + 1}/{self.total_pages} • Всего: {len(self.lines)}"
+            )
+            return embed
 
         @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary, custom_id="logs_prev")
         async def prev(self, i: discord.Interaction, _b: discord.ui.Button):
             self.page = (self.page - 1) % self.total_pages
-            await i.response.edit_message(content=self._build_text(), view=self)
+            await i.response.edit_message(embed=self.build_embed(), view=self)
 
         @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary, custom_id="logs_next")
         async def nxt(self, i: discord.Interaction, _b: discord.ui.Button):
             self.page = (self.page + 1) % self.total_pages
-            await i.response.edit_message(content=self._build_text(), view=self)
+            await i.response.edit_message(embed=self.build_embed(), view=self)
 
     # ------------------------------------------------------------------
     #  /logs
@@ -144,16 +157,15 @@ class AdminCmdsCog(commands.Cog):
             day_key = raw_date[:10]
             day_counters[day_key] = day_counters.get(day_key, 0) + 1
             ticket_num = day_counters[day_key]
-            line = f"№{ticket_num} [{raw_date}] {nick} | {t} | {_fmt(amt)}₽"
+            line = f"№{ticket_num} • {raw_date} • {nick} • {t} • {_fmt(amt)} ₽"
             if ref:
-                line += f" | Реферер: {ref}"
+                line += f" • Реферер: {ref}"
             lines.append(line)
         if not lines:
             await interaction.followup.send("Нет записей.", ephemeral=True)
             return
         view = self.LogsView(lines)
-        text = view._build_text()
-        await interaction.followup.send(text, view=view, ephemeral=True)
+        await interaction.followup.send(embed=view.build_embed(), view=view, ephemeral=True)
 
     @logs.error
     async def logs_error(self, i: discord.Interaction, e: app_commands.AppCommandError):
@@ -259,7 +271,8 @@ class AdminCmdsCog(commands.Cog):
                 ps_raw = row.get("Цена продажи", "").strip()
                 pb = float(pb_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if pb_raw else None
                 ps = float(ps_raw.replace(" ", "").replace(",", ".").replace("₽", "")) if ps_raw else None
-                emoji = row.get("Эмодзи", "").strip()
+                # В базу — только имя эмодзи, без ID (пункт 22).
+                emoji = normalize_emoji_name(row.get("Эмодзи", ""))
                 old = old_items_by_name_cat.get((name.lower(), cat.lower()))
                 if old is None:
                     old_by_name = old_items_by_name.get(name.lower())
@@ -301,32 +314,18 @@ class AdminCmdsCog(commands.Cog):
 
             audit_all = []
 
-            if changes_resources:
-                embed = discord.Embed(
-                    title="📦 Изменение цен ресурсов",
-                    colour=discord.Colour.blue(),
-                )
-                embed.description = "\n".join(changes_resources)
+            # Заголовки — из констант, общих с /setprice и /setboost (пункт 19).
+            for title, changes in (
+                (PRICE_CHANGE_TITLE_RESOURCE, changes_resources),
+                (PRICE_CHANGE_TITLE_BOOST, changes_boosts),
+                (PRICE_CHANGE_TITLE_SKUP_BOOST, changes_skup_boost),
+            ):
+                if not changes:
+                    continue
+                embed = discord.Embed(title=title, colour=discord.Colour.blue())
+                embed.description = "\n".join(changes)
                 await interaction.followup.send(embed=embed, ephemeral=True)
-                audit_all.extend(changes_resources)
-
-            if changes_boosts:
-                embed = discord.Embed(
-                    title="🚀 Изменение цен бустов",
-                    colour=discord.Colour.blue(),
-                )
-                embed.description = "\n".join(changes_boosts)
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                audit_all.extend(changes_boosts)
-
-            if changes_skup_boost:
-                embed = discord.Embed(
-                    title="📦 Изменение цен скупа бустов",
-                    colour=discord.Colour.blue(),
-                )
-                embed.description = "\n".join(changes_skup_boost)
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                audit_all.extend(changes_skup_boost)
+                audit_all.extend(changes)
 
             await interaction.followup.send(msg, ephemeral=True)
             try:
