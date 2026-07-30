@@ -8,29 +8,13 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.repositories.sheets_repository import SheetsRepository
+from bot.services.ocr_service import _fmt
 from bot.utils.embeds import error_embed
+from bot.utils.parsing import parse_ruble_amount
 
 logger = logging.getLogger("bot")
 
 DATA_START_ROW = 3
-
-
-def _fmt(n: float) -> str:
-    if n == int(n):
-        return str(int(n))
-    return f"{n:.2f}".rstrip("0").rstrip(".")
-
-
-def _parse_float(val) -> float:
-    if val is None:
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).strip().replace(" ", "").replace(",", ".").replace("₽", "")
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
 
 
 class AnalyticsCog(commands.Cog):
@@ -66,7 +50,7 @@ class AnalyticsCog(commands.Cog):
                 nickname = str(row[1]).strip() if len(row) > 1 else ""
                 is_buy = len(row) > 2 and str(row[2]).strip().upper() == "TRUE"
                 is_sell = len(row) > 3 and str(row[3]).strip().upper() == "TRUE"
-                amount = _parse_float(row[4]) if len(row) > 4 else 0.0
+                amount = parse_ruble_amount(row[4]) if len(row) > 4 else 0.0
                 if amount == 0.0 and not is_buy and not is_sell:
                     continue
                 referrer = str(row[7]).strip() if len(row) > 7 and row[7] else ""

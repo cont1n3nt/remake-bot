@@ -12,30 +12,14 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.repositories.sheets_repository import SheetsRepository
+from bot.services.ocr_service import _fmt
 from bot.utils.embeds import error_embed, resolve_emoji, format_price_change
+from bot.utils.parsing import parse_ruble_amount
 from bot.cogs.items import _sync_prices_from_db
 
 logger = logging.getLogger("bot")
 
 DATA_START_ROW = 3
-
-
-def _fmt(n: float) -> str:
-    if n == int(n):
-        return str(int(n))
-    return f"{n:.2f}".rstrip("0").rstrip(".")
-
-
-def _parse_amount_logs(val) -> float:
-    if val is None:
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).strip().replace(" ", "").replace(",", ".").replace("₽", "")
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
 
 
 # ------------------------------------------------------------------ #
@@ -153,7 +137,7 @@ class AdminCmdsCog(commands.Cog):
             if not is_buy and not is_sell:
                 continue
             t = "Покупка" if is_buy else "Продажа"
-            amt = _parse_amount_logs(row[4]) if len(row) > 4 and row[4] else 0.0
+            amt = parse_ruble_amount(row[4]) if len(row) > 4 and row[4] else 0.0
             if amt == 0.0:
                 continue
             ref = str(row[7]).strip() if len(row) > 7 and row[7] else ""
