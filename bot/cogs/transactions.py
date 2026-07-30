@@ -6,27 +6,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot.config.constants import RANK_ROLES_BY_LABEL, REFERRAL_ROLES_BY_LABEL
 from bot.services.sheets_service import SheetsService
 from bot.utils.embeds import error_embed
 from bot.utils.calculator import safe_calc
 
 logger = logging.getLogger("bot")
-
-RANK_ROLES: dict[str, int] = {
-    "🔹 Standard": 1518324856549277827,
-    "🔷 Premium": 1518328036137631805,
-    "💠 Prestige": 1518328037631066232,
-    "💎 Elite": 1518328222939611166,
-    "👑 Legend": 1518328324605083698,
-}
-
-REFERRAL_ROLES: dict[str, int] = {
-    "🧭 Скаут": 1518583879672270878,
-    "📣 Промоутер": 1518584176054636584,
-    "🧲 Вербовщик": 1518584268933300274,
-    "📢 Амбассадор": 1518584424818671687,
-    "🎩 Рекламный Барон": 1518584494410563625,
-}
 
 _MAX_NICK_LENGTH = 32
 
@@ -183,7 +168,7 @@ class TransactionsCog(commands.Cog):
 
         try:
             if new_rank and new_rank != old_rank:
-                role_mention = _role_mention(new_rank, RANK_ROLES)
+                role_mention = _role_mention(new_rank, RANK_ROLES_BY_LABEL)
                 msg = (
                     f"🎉 **Выдача ранговой роли!**\n\n"
                     f"1️⃣ Пользователь: {interaction.user.mention}\n"
@@ -194,7 +179,7 @@ class TransactionsCog(commands.Cog):
                 await interaction.channel.send(msg)
 
             if referrer and new_referral_role and new_referral_role != old_referral_role:
-                role_mention = _role_mention(new_referral_role, REFERRAL_ROLES)
+                role_mention = _role_mention(new_referral_role, REFERRAL_ROLES_BY_LABEL)
                 msg = (
                     f"🎉 **Выдача реферальной роли!**\n\n"
                     f"1️⃣ Пользователь: {interaction.user.mention}\n"
