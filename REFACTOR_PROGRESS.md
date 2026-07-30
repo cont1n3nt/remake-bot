@@ -431,7 +431,7 @@ SheetsService` вместо `repo: SheetsRepository`; неиспользуемы
 не проводился — нет доступа к серверу в этой сессии.
 
 ### E.3 — Переключить `items.py` на `SheetsService`
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Зависит от: E.1 (независим от E.2)
 Критерии завершения: аналогично E.2, для `/setprice`, `/setboost`, `/item_add`, `/del_item`, `/sync_prices`.
 Команды проверки:
@@ -439,6 +439,16 @@ SheetsService` вместо `repo: SheetsRepository`; неиспользуемы
 python -m bot
 ```
 (+ ручной прогон `/setprice`, `/setboost`, `/item_add`, `/del_item`, `/sync_prices`)
+Результат: `ItemsCog` переключён на `sheets_service` тем же паттерном, что
+E.2 (10 обращений `self._repo.*`/`self._repo` заменены). Дополнительно
+обновлены сигнатуры модульных функций `_db_prices_dict`/
+`_sync_prices_from_db` — параметр `repo: SheetsRepository` →
+`sheets_service: SheetsService`, т.к. после E.2+E.3 туда больше никогда не
+передаётся сырой `SheetsRepository` (обе функции вызываются из `items.py`
+и `admin_cmds.py`, оба кога теперь передают `self._sheets_service`).
+`setup()` создаёт ког через `bot.sheets_service`. `py_compile`/импорт-свип/
+`84 passed`/`ruff` — без регрессий (1 старый F401 на `os`, не связан с
+правкой). Живой ручной прогон в Discord не проводился.
 
 ### E.4 — Переключить `analytics.py` на `SheetsService`
 Статус: 🔲 не начато
@@ -595,7 +605,7 @@ git log -- bot.py
 | D.4 Эмодзи-мосты | ✅ (сверка частичная, 4/10) | средний-высокий | D.1, D.2 | сделано пользователем частично |
 | E.1 Методы SheetsService | ✅ | низкий | — | нет |
 | E.2 admin_cmds.py → SheetsService | ✅ | низкий | E.1 | нет |
-| E.3 items.py → SheetsService | 🔲 | низкий | E.1 | нет |
+| E.3 items.py → SheetsService | ✅ | низкий | E.1 | нет |
 | E.4 analytics.py → SheetsService | 🔲 | низкий | E.1 | нет |
 | F.1 tickets.py → пакет | 🔲 | низкий | 0.1, 0.2 | нет |
 | F.2 Storage-слой | 🔲 | низкий | F.1 | нет |

@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.repositories.sheets_repository import SheetsRepository
+from bot.services.sheets_service import SheetsService
 from bot.utils.calculator import safe_calc
 from bot.utils.embeds import error_embed, resolve_emoji, format_price_change
 
@@ -19,16 +19,16 @@ PRICES_FILE = "prices.json"
 
 class ItemsCog(commands.Cog):
 
-    def __init__(self, bot: commands.Bot, repo: SheetsRepository) -> None:
+    def __init__(self, bot: commands.Bot, sheets_service: SheetsService) -> None:
         self.bot = bot
-        self._repo = repo
+        self._sheets_service = sheets_service
 
     @staticmethod
     def _clean_choice_name(it: dict) -> str:
         return it["name"]
 
     async def _autocomplete_items(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
-        items = await asyncio.to_thread(self._repo.get_all_items)
+        items = await asyncio.to_thread(self._sheets_service.get_all_items)
         matches = [it for it in items if current.lower() in it["name"].lower()]
         return [
             app_commands.Choice(
@@ -39,7 +39,7 @@ class ItemsCog(commands.Cog):
         ]
 
     async def _autocomplete_resources(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
-        items = [it for it in (await asyncio.to_thread(self._repo.get_all_items)) if it["category"] == "resource"]
+        items = [it for it in (await asyncio.to_thread(self._sheets_service.get_all_items)) if it["category"] == "resource"]
         matches = [it for it in items if current.lower() in it["name"].lower()]
         return [
             app_commands.Choice(
@@ -50,7 +50,7 @@ class ItemsCog(commands.Cog):
         ]
 
     async def _autocomplete_boosts(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice]:
-        items = [it for it in (await asyncio.to_thread(self._repo.get_all_items)) if it["category"] == "boost"]
+        items = [it for it in (await asyncio.to_thread(self._sheets_service.get_all_items)) if it["category"] == "boost"]
         matches = [it for it in items if current.lower() in it["name"].lower()]
         return [
             app_commands.Choice(
@@ -82,13 +82,13 @@ class ItemsCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("Некорректная цена."), ephemeral=True)
             return
         try:
-            it = await asyncio.to_thread(self._repo.find_item_by_name_and_category, item, "resource")
+            it = await asyncio.to_thread(self._sheets_service.find_item_by_name_and_category, item, "resource")
             if it is None:
                 await interaction.followup.send(embed=error_embed("Предмет не найден в категории resource."), ephemeral=True)
                 return
             old_price = it.get("price_buy")
-            await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_buy=amount)
-            await asyncio.to_thread(_sync_prices_from_db, self._repo)
+            await asyncio.to_thread(self._sheets_service.upsert_item, it["name"], it["category"], price_buy=amount)
+            await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
             change = format_price_change(it, old_price, amount, guild=interaction.guild)
             await self._send_price_change_embed(interaction, "ресурсов", "📦", [change])
             try:
@@ -117,13 +117,13 @@ class ItemsCog(commands.Cog):
             await interaction.followup.send(embed=error_embed("Некорректная цена."), ephemeral=True)
             return
         try:
-            it = await asyncio.to_thread(self._repo.find_item_by_name_and_category, item, "boost")
+            it = await asyncio.to_thread(self._sheets_service.find_item_by_name_and_category, item, "boost")
             if it is None:
                 await interaction.followup.send(embed=error_embed("Буст не найден в категории boost."), ephemeral=True)
                 return
             old_price = it.get("price_sell")
-            await asyncio.to_thread(self._repo.upsert_item, it["name"], it["category"], price_sell=amount)
-            await asyncio.to_thread(_sync_prices_from_db, self._repo)
+            await asyncio.to_thread(self._sheets_service.upsert_item, it["name"], it["category"], price_sell=amount)
+            await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
             change = format_price_change(it, old_price, amount, guild=interaction.guild)
             await self._send_price_change_embed(interaction, "бустов", "🚀", [change])
             try:
@@ -165,8 +165,8 @@ class ItemsCog(commands.Cog):
         except Exception:
             ps = None
         try:
-            it = await asyncio.to_thread(self._repo.upsert_item, name.strip(), category, price_buy=pb, price_sell=ps, emoji=emoji.strip())
-            await asyncio.to_thread(_sync_prices_from_db, self._repo)
+            it = await asyncio.to_thread(self._sheets_service.upsert_item, name.strip(), category, price_buy=pb, price_sell=ps, emoji=emoji.strip())
+            await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
             e = resolve_emoji(it.get("emoji", ""), interaction.guild)
             emoji_str = e + " " if e else ""
             await interaction.followup.send(f"✅ {emoji_str}{it['name']} добавлен (ID: {it['id']})", ephemeral=True)
@@ -186,8 +186,8 @@ class ItemsCog(commands.Cog):
     async def del_item(self, interaction: discord.Interaction, item: str):
         await interaction.response.defer(ephemeral=True)
         try:
-            if await asyncio.to_thread(self._repo.delete_item, item):
-                await asyncio.to_thread(_sync_prices_from_db, self._repo)
+            if await asyncio.to_thread(self._sheets_service.delete_item, item):
+                await asyncio.to_thread(_sync_prices_from_db, self._sheets_service)
                 await interaction.followup.send(f"✅ {item} удалён из базы.", ephemeral=True)
             else:
                 await interaction.followup.send(embed=error_embed("Предмет не найден."), ephemeral=True)
@@ -205,7 +205,7 @@ class ItemsCog(commands.Cog):
     async def sync_prices(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            result = await asyncio.to_thread(self._repo.sync_prices_to_sheets)
+            result = await asyncio.to_thread(self._sheets_service.sync_prices_to_sheets)
             msg = (
                 f"✅ Синхронизация завершена.\n"
                 f"• Мейн скуп: {result.get('resource', 0)} обновлено\n"
@@ -247,8 +247,8 @@ class ItemsCog(commands.Cog):
             except: await i.followup.send("Недостаточно прав. Требуются права администратора.", ephemeral=True)
 
 
-def _db_prices_dict(repo: SheetsRepository) -> dict[str, float]:
-    items = repo.get_all_items()
+def _db_prices_dict(sheets_service: SheetsService) -> dict[str, float]:
+    items = sheets_service.get_all_items()
     result = {}
     for it in items:
         if it.get("price_buy") is not None:
@@ -258,12 +258,12 @@ def _db_prices_dict(repo: SheetsRepository) -> dict[str, float]:
     return result
 
 
-def _sync_prices_from_db(repo: SheetsRepository) -> dict[str, float]:
-    prices = _db_prices_dict(repo)
+def _sync_prices_from_db(sheets_service: SheetsService) -> dict[str, float]:
+    prices = _db_prices_dict(sheets_service)
     with open(PRICES_FILE, "w", encoding="utf-8") as f:
         json.dump(prices, f, ensure_ascii=False, indent=2)
     return prices
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(ItemsCog(bot, bot.repo))
+    await bot.add_cog(ItemsCog(bot, bot.sheets_service))
