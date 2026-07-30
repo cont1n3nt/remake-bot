@@ -5,6 +5,7 @@ dist/
 build/
 .env
 *.json
+*.log
 .venv/
 venv/
 selfbot/
