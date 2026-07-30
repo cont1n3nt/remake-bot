@@ -315,7 +315,7 @@ grep -rn "^RANK_THRESHOLDS" bot/services/referral_service.py
 к Этапу D.3. Тесты — `78 passed`, `ruff` на файле — 0 предупреждений.
 
 ### D.3 — Объединение `REFERRAL_THRESHOLDS` (dict) и `THRESHOLDS` (list)
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Зависит от: D.1, 0.1
 Критерии завершения:
 - `THRESHOLDS` в `referral_service.py` заменён на `list(REFERRAL_THRESHOLDS.values())` из `constants.py`.
@@ -324,6 +324,20 @@ grep -rn "^RANK_THRESHOLDS" bot/services/referral_service.py
 ```
 pytest tests/test_referral_thresholds_regression.py -v
 ```
+Результат: перед правкой сверил порядок ключей в `constants.py::
+REFERRAL_THRESHOLDS` с порядком `REF_ROLE_NAMES` — совпадает
+(Скаут→1, Промоутер→5, Вербовщик→10, Амбассадор→25, Рекламный Барон→100).
+`THRESHOLDS = [1, 5, 10, 25, 100]` заменён на
+`THRESHOLDS = list(REFERRAL_THRESHOLDS.values())` с импортом из
+`constants.py`; `REF_ROLE_NAMES` не тронут, добавлен комментарий про
+зависимость порядка. Добавлен независимый регрессионный тест
+`tests/test_referral_thresholds_regression.py` — эталон (`_ORACLE_*`),
+зафиксированный жёстко закодированными числами ДО правки (не берётся из
+самого `referral_service.py`, чтобы не превратиться в тавтологию после
+правки), сверяется с `get_referral_level`/`get_target_referral_name` для
+всех `count` от 0 до 200. Прогнан **и до, и после** правки — 100%
+совпадение в обоих случаях. Полный набор тестов — `80 passed`, `ruff` на
+файле — 0 предупреждений.
 
 ### D.4 (опционально) — Мосты для эмодзи-ключей
 Статус: 🔲 не начато · требует подтверждения пользователя (сверка с реальными данными Google Sheets)
@@ -525,7 +539,7 @@ git log -- bot.py
 | C.4 Переименование embeds._fmt | ✅ | низкий | C.1 | нет |
 | D.1 role_service ← constants | ✅ | низкий | 0.1 | нет |
 | D.2 XP_RANK_* переименование | ✅ | низкий | D.1 | нет |
-| D.3 Объединение REFERRAL_THRESHOLDS | 🔲 | средний | D.1, 0.1 | нет |
+| D.3 Объединение REFERRAL_THRESHOLDS | ✅ | средний | D.1, 0.1 | нет |
 | D.4 Эмодзи-мосты | 🔲 | средний-высокий | D.1, D.2 | да |
 | E.1 Методы SheetsService | 🔲 | низкий | — | нет |
 | E.2 admin_cmds.py → SheetsService | 🔲 | низкий | E.1 | нет |

@@ -1,9 +1,13 @@
 from typing import Optional
 
+from bot.config.constants import REFERRAL_THRESHOLDS
 from bot.repositories.sheets_repository import SheetsRepository
 
-# Referral levels
-THRESHOLDS = [1, 5, 10, 25, 100]
+# Referral levels. Значения берутся из constants.py::REFERRAL_THRESHOLDS —
+# порядок этого списка жёстко завязан на порядок вставки ключей в тот
+# словарь, который, в свою очередь, должен совпадать по порядку с
+# REF_ROLE_NAMES ниже (см. REFACTORING_PLAN.md, Этап D.3).
+THRESHOLDS = list(REFERRAL_THRESHOLDS.values())
 
 # Role names (without emoji) matching REFERRAL_ROLES keys
 REF_ROLE_NAMES = ["Скаут", "Промоутер", "Вербовщик", "Амбассадор", "Рекламный Барон"]
