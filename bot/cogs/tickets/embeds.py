@@ -4,10 +4,14 @@
 Этап F.3). `interaction.client.repo` внутри функции сознательно не
 трогается в рамках этого этапа — см. карточку F.3 в REFACTORING_PLAN.md."""
 
+import logging
+
 import discord
 
 from bot.services.ocr_service import _fmt
 from bot.utils.embeds import resolve_emoji
+
+logger = logging.getLogger("bot")
 
 
 # ------------------------------------------------------------------ #
@@ -58,8 +62,8 @@ def _build_request_card_embed(
             for it in all_items:
                 if it.get("category") == "boost":
                     items_map[it["name"].lower()] = it
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("_build_request_card_embed: failed to fetch items for boost lookup: %s", e)
         boost_lines = []
         for b in boosts:
             it = items_map.get(b["name"].lower())

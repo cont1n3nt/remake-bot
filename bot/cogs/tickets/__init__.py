@@ -77,7 +77,7 @@ class TicketCog(commands.Cog):
         try:
             await self.bot.wait_for("message", timeout=60.0, check=ticket_tool_check)
         except asyncio.TimeoutError:
-            pass
+            logger.warning("Ticket Tool message not received in thread %s, sending form anyway", thread.id)
 
         await self._send_form_to_channel(thread, category_name)
 
@@ -109,8 +109,8 @@ class TicketCog(commands.Cog):
                         for child in comp.children:
                             if child.custom_id == "ticket_form:open":
                                 return msg
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("_find_existing_form_message failed for channel %s: %s", channel.id, e)
         return None
 
     async def _send_form_to_channel(self, channel, category: str) -> None:
