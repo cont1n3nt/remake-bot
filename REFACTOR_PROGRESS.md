@@ -550,7 +550,7 @@ python -c "from bot.cogs.tickets.embeds import _build_request_card_embed"
 F841 (`label_prefix`, `line_total`), новых находок нет.
 
 ### F.4a–F.4d — Разбить Views/Modals по логическим шагам визарда
-Статус: 🔲 не начато (4 независимых под-этапа: delivery / boosts / screenshot / edit)
+Статус: 🟡 в работе — F.4a ✅ сделано (2026-07-30), F.4b/F.4c/F.4d 🔲
 Зависит от: F.1–F.3
 Критерии завершения:
 - Классы перенесены в `views_delivery.py`, `views_boosts.py`, `views_screenshot.py`, `views_edit.py` без изменения `custom_id`.
@@ -560,6 +560,37 @@ F841 (`label_prefix`, `line_total`), новых находок нет.
 python -m bot
 ```
 (+ после каждого под-этапа: перезапуск бота, проверка реакции старых сообщений с кнопками на нажатие, полный ручной прогон тикет-флоу)
+
+⚠ **Обнаруженная при выполнении циклическая зависимость (не описанная в
+REFACTORING_PLAN.md настолько детально):** `views_delivery.py` (нужен
+`BoostSelectionView` из `views_boosts.py`) ↔ `views_boosts.py` (нужен
+`BoostOrderModal` из `views_delivery.py` И `EditRequestView` из
+`views_edit.py`) ↔ `views_edit.py` (нужен `BoostSelectionView` из
+`views_boosts.py`) — трёхсторонний цикл. Разрывается отложенными
+(локальными, внутри метода) импортами на **исходящих** рёбрах из
+`views_boosts.py` (`BoostQuantityView._on_confirm` импортирует
+`BoostOrderModal`/`EditRequestView` локально, а не на уровне модуля) —
+это единственные два места во всей Фазе F, где импорт находится не в
+шапке файла. Everything else (delivery→boosts, delivery→edit,
+delivery→screenshot, edit→boosts) — обычные импорты в шапке.
+
+**F.4a (delivery) — результат:** `DeliveryMethodSelect`, `DeliveryMethodView`,
+`BaseOrderModal`, `BoostOrderModal`, `SaleModal` перенесены в
+`views_delivery.py`. Также перенесена `TicketFormView` — в карточке плана
+она не была явно приписана ни к одному из F.4a–d, но логически относится
+именно к шагу 1 (создаёт `DeliveryMethodView`), и без этого `__init__.py`
+не мог бы стать «тонким» в F.5 (класс больше нигде не упомянут в
+исходной раскладке). На момент F.4a `BoostSelectionView`/
+`ScreenshotPromptView`/`EditRequestView` ещё не вынесены — три отложенных
+импорта в `views_delivery.py` временно указывают на `bot.cogs.tickets`
+(корень пакета) и будут переведены на конкретные подмодули по мере их
+выноса в F.4b/c/d. В оставшейся части `__init__.py`
+(`BoostQuantityView._on_confirm`) добавлен свой отложенный импорт
+`BoostOrderModal` из `views_delivery.py` — та же самая строка останется
+рабочей и после переезда всего метода в `views_boosts.py` (F.4b), путь
+уже правильный. `py_compile`/импорт (без ошибок циклического импорта)/
+`84 passed`/`ruff` (F401/F821 — чисто, только 2 старых F841) — всё
+зелёное.
 
 ### F.5 — Финальный тонкий `TicketCog`
 Статус: 🔲 не начато
