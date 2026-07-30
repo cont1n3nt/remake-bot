@@ -532,7 +532,7 @@ rewrite»). Импорты `json`/`os` в `__init__.py` стали неиспо�
 `tickets/` — только 2 старых F841, ничего нового.
 
 ### F.3 — Вынести построение embed'ов
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Зависит от: F.1
 Критерии завершения:
 - `_build_request_card_embed` перенесена в `bot/cogs/tickets/embeds.py`.
@@ -541,6 +541,13 @@ rewrite»). Импорты `json`/`os` в `__init__.py` стали неиспо�
 python -c "from bot.cogs.tickets.embeds import _build_request_card_embed"
 ```
 (+ ручной прогон формирования/редактирования карточки заявки)
+Результат: функция перенесена дословно, включая необращённый
+`interaction.client.repo.get_all_items()` внутри — как и оговорено в
+карточке этапа, не тронут. `resolve_emoji`/`_fmt` остались импортированы и
+в `__init__.py` тоже — используются там и помимо этой функции (в
+`BoostQuantityView` и `TicketCog._process_image`). `py_compile`/импорт/
+`84 passed`/`ruff` на всём пакете `tickets/` — по-прежнему только 2 старых
+F841 (`label_prefix`, `line_total`), новых находок нет.
 
 ### F.4a–F.4d — Разбить Views/Modals по логическим шагам визарда
 Статус: 🔲 не начато (4 независимых под-этапа: delivery / boosts / screenshot / edit)
@@ -646,7 +653,7 @@ git log -- bot.py
 | E.4 analytics.py → SheetsService | ✅ | низкий | E.1 | нет |
 | F.1 tickets.py → пакет | ✅ | низкий | 0.1, 0.2 | нет |
 | F.2 Storage-слой | ✅ | низкий | F.1 | нет |
-| F.3 Embeds-слой | 🔲 | низкий | F.1 | нет |
+| F.3 Embeds-слой | ✅ | низкий | F.1 | нет |
 | F.4a–F.4d Views/Modals | 🔲 | средний | F.1–F.3 | нет |
 | F.5 Тонкий Cog | 🔲 | низкий | F.1–F.4 | нет |
 | G.1 Логирование _ensure_jrow | 🔲 | низкий | — | нет |
