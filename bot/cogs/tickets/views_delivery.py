@@ -12,6 +12,7 @@ views_edit.py — `BoostQuantityView._on_confirm` в views_boosts.py,
 метода, навсегда (см. REFACTOR_PROGRESS.md, Фаза F, F.4a/F.4d, для полной
 схемы зависимостей)."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -22,7 +23,9 @@ from bot.cogs.tickets.embeds import _build_request_card_embed, build_audit_detai
 from bot.cogs.tickets.views_boosts import BoostSelectionView
 from bot.cogs.tickets.views_screenshot import ScreenshotPromptView
 from bot.cogs.tickets.views_edit import EditRequestView
-from bot.cogs.tickets.storage import form_store, _save_request_meta, _save_deal_report
+from bot.cogs.tickets.storage import (
+    form_store, _save_request_meta, _save_deal_report, _load_request_meta_by_channel,
+)
 
 logger = logging.getLogger("bot")
 
@@ -89,8 +92,11 @@ class DeliveryMethodView(discord.ui.View):
 
 class BaseOrderModal(discord.ui.Modal):
 
-    def __init__(self, category: str, title_text: str):
-        super().__init__(title=title_text, timeout=300)
+    # Параметр называется именно `title`: наследники зовут super().__init__(
+    # category, title=...), и при имени `title_text` конструктор падал с
+    # TypeError — форма тикета не открывалась вовсе.
+    def __init__(self, category: str, title: str):
+        super().__init__(title=title, timeout=300)
         self.category = category
 
         self.add_item(discord.ui.TextInput(
@@ -158,7 +164,33 @@ class BaseOrderModal(discord.ui.Modal):
         finally:
             _publishing.discard(lock_key)
 
+    async def _already_published(self, interaction: discord.Interaction) -> bool:
+        """Есть ли в этом канале живая карточка того же пользователя.
+
+        Замок `_publishing` спасает только от одновременных вызовов, а дубли
+        возникали и от последовательных: повторный сабмит модалки, повторная
+        доставка взаимодействия, второй клик по «Подтвердить» (пункт 8).
+        Один тикет — одна заявка, поэтому вторую не публикуем."""
+        meta = await asyncio.to_thread(_load_request_meta_by_channel, interaction.channel_id)
+        if meta is None:
+            return False
+        message_id, meta_data = meta
+        if meta_data.get("user_id") != interaction.user.id:
+            return False
+        try:
+            await interaction.channel.fetch_message(message_id)
+        except (discord.NotFound, discord.HTTPException):
+            return False  # карточку удалили — можно публиковать заново
+        return True
+
     async def _publish_locked(self, interaction: discord.Interaction):
+        if await self._already_published(interaction):
+            logger.info(
+                "Заявка в канале %s для пользователя %s уже опубликована — дубль отменён",
+                interaction.channel_id, interaction.user.id,
+            )
+            return
+
         store = form_store.get(interaction.user.id)
         text_data = store.get("text_data", {})
         delivery = store.get("delivery_method", "")
