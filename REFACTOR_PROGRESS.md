@@ -270,7 +270,7 @@ grep -rn "embeds\._fmt\b\|from bot.utils.embeds import _fmt\b" bot/
 ⚠ Ловушка на всю фазу: `RANK_THRESHOLDS` в `constants.py`/`role_service.py` (пороги оборота, `dict[str,int]`) — это **не то же самое**, что `RANK_THRESHOLDS` в `referral_service.py` (пороги XP, `list[int]`). Не объединять между собой.
 
 ### D.1 — `role_service.py` перестаёт дублировать `constants.py`
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Зависит от: 0.1
 Критерии завершения:
 - `role_service.py` импортирует `RANK_THRESHOLDS`, `RANK_ROLES`, `REFERRAL_THRESHOLDS`, `REFERRAL_ROLES` из `constants.py` вместо локальных копий.
@@ -280,6 +280,18 @@ grep -rn "embeds\._fmt\b\|from bot.utils.embeds import _fmt\b" bot/
 pytest tests/ -k role_service -v
 python -c "from bot.services.role_service import RANK_THRESHOLDS; from bot.config.constants import RANK_THRESHOLDS as C; assert RANK_THRESHOLDS is C"
 ```
+Результат: перед правкой заново сверил оба набора словарей построчно —
+совпадали побайтово (ключи, ID). `role_service.py` теперь импортирует все
+4 константы из `bot/config/constants.py`, локальные копии удалены.
+Проверено, что `bot/cogs/profile.py` и `bot/cogs/roles.py` — оба реально
+используют `RANK_ROLES`/`REFERRAL_ROLES`, импортированные из
+`bot.services.role_service` (не мёртвый импорт) — они продолжают работать
+без изменений, т.к. модульный реэкспорт сохраняет тот же объект. Добавлен
+тест `test_role_service_constants_are_constants_module_objects`
+(идентичность объектов). `ruff check bot/services/role_service.py` — 0
+предупреждений. Полный набор тестов — `78 passed`.
+Циклического импорта нет: `bot/config/constants.py` ни от чего в `bot/`
+не зависит.
 
 ### D.2 — Явная маркировка XP-порогов в `referral_service.py`
 Статус: 🔲 не начато
@@ -503,7 +515,7 @@ git log -- bot.py
 | C.2 Единый parse_ruble_amount | ✅ | низкий | 0.1 | нет |
 | C.3 Фиксация «не трогать» | ✅ | нет | 0.1 | нет |
 | C.4 Переименование embeds._fmt | ✅ | низкий | C.1 | нет |
-| D.1 role_service ← constants | 🔲 | низкий | 0.1 | нет |
+| D.1 role_service ← constants | ✅ | низкий | 0.1 | нет |
 | D.2 XP_RANK_* переименование | 🔲 | низкий | D.1 | нет |
 | D.3 Объединение REFERRAL_THRESHOLDS | 🔲 | средний | D.1, 0.1 | нет |
 | D.4 Эмодзи-мосты | 🔲 | средний-высокий | D.1, D.2 | да |

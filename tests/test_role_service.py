@@ -11,6 +11,19 @@
 from bot.services.role_service import RoleService
 
 
+# --- D.1: role_service больше не хранит свои копии констант, а реэкспортирует
+#     объекты из bot/config/constants.py ---
+
+def test_role_service_constants_are_constants_module_objects():
+    import bot.config.constants as constants
+    import bot.services.role_service as role_service
+
+    assert role_service.RANK_THRESHOLDS is constants.RANK_THRESHOLDS
+    assert role_service.RANK_ROLES is constants.RANK_ROLES
+    assert role_service.REFERRAL_THRESHOLDS is constants.REFERRAL_THRESHOLDS
+    assert role_service.REFERRAL_ROLES is constants.REFERRAL_ROLES
+
+
 # --- get_target_rank_name (пороги ОБОРОТА В РУБЛЯХ: Standard=0, Premium=5000,
 #     Prestige=25000, Elite=100000, Legend=500000) ---
 
