@@ -4,13 +4,16 @@
 Перенесено из bot/cogs/tickets.py без изменений (REFACTORING_PLAN.md,
 Этап F.4a).
 
-⚠ Отложенные (локальные) импорты внутри методов — не забытые верхнеуровневые
-импорты, а намеренный разрыв циклической зависимости между
-views_delivery.py ↔ views_boosts.py ↔ views_edit.py (BaseOrderModal нужен
-BoostSelectionView/ScreenshotPromptView/EditRequestView, а
-BoostQuantityView в views_boosts.py, в свою очередь, нужен BoostOrderModal
-отсюда и EditRequestView из views_edit.py — см. REFACTOR_PROGRESS.md,
-Фаза F, для полной схемы зависимостей)."""
+⚠ Оставшийся отложенный (локальный) импорт внутри `BaseOrderModal._publish`
+(`EditRequestView` из views_edit.py, пока эта заявка не вынесена — см.
+Этап F.4d) — не забытый верхнеуровневый импорт, а часть разрыва
+циклической зависимости views_delivery.py ↔ views_boosts.py ↔
+views_edit.py: `BoostQuantityView` в views_boosts.py, в свою очередь,
+нужен `BoostOrderModal` отсюда и `EditRequestView` из views_edit.py — эти
+два обратных ребра остаются отложенными навсегда (см. REFACTOR_PROGRESS.md,
+Фаза F, F.4a, для полной схемы зависимостей). `BoostSelectionView` уже
+можно импортировать в шапке — `views_boosts.py` не импортирует этот файл
+на уровне модуля."""
 
 from typing import Optional
 
@@ -18,6 +21,7 @@ import discord
 
 from bot.config.constants import CATEGORY_CHANNELS
 from bot.cogs.tickets.embeds import _build_request_card_embed
+from bot.cogs.tickets.views_boosts import BoostSelectionView
 from bot.cogs.tickets.storage import form_store, _save_request_meta, _save_deal_report
 
 
@@ -102,7 +106,6 @@ class BaseOrderModal(discord.ui.Modal):
 
         selected = form_store.get(interaction.user.id).get("selected_boosts", [])
         if "Заказ" in self.category:
-            from bot.cogs.tickets import BoostSelectionView
             view = await BoostSelectionView.create(interaction, selected)
             content = "**Выберите нужные бусты:**"
             await interaction.followup.send(content, view=view, ephemeral=True)

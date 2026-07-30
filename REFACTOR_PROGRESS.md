@@ -550,7 +550,7 @@ python -c "from bot.cogs.tickets.embeds import _build_request_card_embed"
 F841 (`label_prefix`, `line_total`), новых находок нет.
 
 ### F.4a–F.4d — Разбить Views/Modals по логическим шагам визарда
-Статус: 🟡 в работе — F.4a ✅ сделано (2026-07-30), F.4b/F.4c/F.4d 🔲
+Статус: 🟡 в работе — F.4a ✅, F.4b ✅ (2026-07-30), F.4c/F.4d 🔲
 Зависит от: F.1–F.3
 Критерии завершения:
 - Классы перенесены в `views_delivery.py`, `views_boosts.py`, `views_screenshot.py`, `views_edit.py` без изменения `custom_id`.
@@ -591,6 +591,24 @@ delivery→screenshot, edit→boosts) — обычные импорты в ша�
 уже правильный. `py_compile`/импорт (без ошибок циклического импорта)/
 `84 passed`/`ruff` (F401/F821 — чисто, только 2 старых F841) — всё
 зелёное.
+
+**F.4b (boosts) — результат:** `BoostSelectionView`, `QuantityEditModal`,
+`BoostQuantityView` перенесены в `views_boosts.py`. Ребро
+`views_delivery.py → views_boosts.py` (`BoostSelectionView`) повышено с
+отложенного до обычного импорта в шапке — теперь это безопасно, т.к.
+`views_boosts.py` не импортирует `views_delivery.py` на уровне модуля
+(только отложенно, внутри `_on_confirm`). Единственные оставшиеся
+отложенные импорты во всём пакете: `BoostQuantityView._on_confirm`
+(`BoostOrderModal` из `views_delivery.py`, `EditRequestView` — пока ещё
+из `bot.cogs.tickets`, т.к. `views_edit.py` появится в F.4d) и
+`BaseOrderModal._publish` (`ScreenshotPromptView`/`EditRequestView` — та
+же причина). В `__init__.py` добавлен верхнеуровневый импорт
+`BoostSelectionView` из `views_boosts.py` — нужен `EditRequestModal`,
+который пока остаётся в `__init__.py` (переедет в F.4d). Заодно убран
+ставший неиспользуемым импорт `resolve_emoji` (был нужен только коду,
+который уже уехал в F.4a/F.4b). `py_compile`/импорт (без ошибок
+циклического импорта)/`84 passed`/`ruff` (F401/F821 — чисто, только 2
+старых F841) — всё зелёное.
 
 ### F.5 — Финальный тонкий `TicketCog`
 Статус: 🔲 не начато
