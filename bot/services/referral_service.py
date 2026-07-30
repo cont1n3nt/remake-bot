@@ -113,9 +113,6 @@ class ReferralService:
 
     @staticmethod
     def get_target_referral_name(count: int) -> Optional[str]:
-        for i, threshold in enumerate(THRESHOLDS):
-            if count >= threshold and i < len(REF_ROLE_NAMES):
-                pass
         target = None
         for i, threshold in enumerate(THRESHOLDS):
             if count >= threshold:

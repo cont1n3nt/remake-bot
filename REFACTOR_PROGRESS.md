@@ -107,7 +107,7 @@ python -m bot
 `import bot.__main__` по-прежнему работает без ошибок.
 
 ### A.4 — Удалить заведомо мёртвый no-op цикл
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Зависит от: 0.1
 Критерии завершения:
 - Пустой цикл `for i, threshold in enumerate(THRESHOLDS): if ...: pass` удалён из `bot/services/referral_service.py::get_target_referral_name`.
@@ -116,6 +116,13 @@ python -m bot
 ```
 pytest tests/ -k referral_service -v
 ```
+Результат: цикл удалён (`bot/services/referral_service.py`, было 4 строки
+кода перед `target = None`). Полный набор тестов Этапа 0.1 — `67 passed`,
+без изменений (18 тестов из `test_referral_service.py`/`test_role_service.py`
+с `-k referral` — тоже зелёные). `py_compile`/импорт модуля — без ошибок. `ruff check
+bot/services/referral_service.py` — 0 предупреждений (этот код не был
+однострочным `if: pass`, так что ruff его и раньше не отмечал; удаление —
+чисто по критерию «не влияет на возвращаемое значение», см. `AUDIT.md §10.4`).
 
 ---
 
@@ -431,7 +438,7 @@ git log -- bot.py
 | A.1 Убрать opencode.json | ✅ | низкий | — | нет |
 | A.2 Логи в .gitignore | ✅ | низкий | — | нет |
 | A.3 pyproject.toml deps | ✅ | низкий | — | нет |
-| A.4 Удалить no-op цикл | 🔲 | низкий | 0.1 | нет |
+| A.4 Удалить no-op цикл | ✅ | низкий | 0.1 | нет |
 | B.1 Решение об источнике истины | 🔲 | нет | — | желательно |
 | B.2 Таблица расхождений | 🔲 | нет | B.1 | желательно |
 | B.3 Заморозка bot.py | 🔲 | нет | B.1 | желательно |
