@@ -1,16 +1,17 @@
-"""Baseline-фиксирующие тесты для пяти независимых копий форматирования чисел
-(AUDIT.md §7.1 п.2): ocr_service._fmt, embeds._fmt, admin_cmds._fmt,
-analytics._fmt, transactions._amount_str.
+"""Baseline-фиксирующие тесты для форматирования чисел (AUDIT.md §7.1 п.2):
+ocr_service._fmt (единственный источник после Этапа C.1, переиспользуется в
+admin_cmds/analytics), embeds._fmt_thousands (переименована в Этапе C.4, была
+embeds._fmt), transactions._amount_str.
 
-Один и тот же набор входов прогоняется через все пять функций, чтобы явно
+Один и тот же набор входов прогоняется через эти функции, чтобы явно
 зафиксировать тестами уже существующее расхождение поведения — это НЕ
 унификация, а документирование текущего состояния (см. REFACTORING_PLAN.md,
-Этап 0.1 и Этап C.1/C.3).
+Этап 0.1 и Этап C.1/C.3/C.4).
 """
 import math
 
 from bot.services.ocr_service import _fmt as ocr_fmt
-from bot.utils.embeds import _fmt as embeds_fmt
+from bot.utils.embeds import _fmt_thousands as embeds_fmt
 from bot.cogs.admin_cmds import _fmt as admin_fmt
 from bot.cogs.analytics import _fmt as analytics_fmt
 from bot.cogs.transactions import _amount_str
@@ -57,7 +58,7 @@ def test_identical_fmt_family_crashes_on_non_finite_input():
             pass
 
 
-# --- embeds._fmt -------------------------------------------------------
+# --- embeds._fmt_thousands ----------------------------------------------
 # Единственная версия, добавляющая разделители тысяч (пробел). Числа в
 # /profile выглядят иначе, чем в /logs, /day, /week, /month.
 
@@ -80,7 +81,7 @@ def test_embeds_fmt_adds_thousands_separator():
 
 
 def test_embeds_fmt_diverges_from_identical_fmt_family_on_fraction():
-    # 1500000.567 форматируется по-разному: embeds._fmt не округляет
+    # 1500000.567 форматируется по-разному: embeds._fmt_thousands не округляет
     # дробную часть до двух знаков, остальные три _fmt — округляют.
     assert embeds_fmt(1500000.567) == "1 500 000.567"
     assert ocr_fmt(1500000.567) == "1500000.57"
