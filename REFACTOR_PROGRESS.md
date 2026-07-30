@@ -504,7 +504,7 @@ python -c "import bot.cogs.tickets"
 проводился — нет доступа к серверу.
 
 ### F.2 — Вынести слой персистентности JSON
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Зависит от: F.1
 Критерии завершения:
 - `FormDataStore` и функции работы с `published_requests.json`/`deal_reports/` перенесены в `bot/cogs/tickets/storage.py` без изменений тела.
@@ -513,6 +513,23 @@ python -c "import bot.cogs.tickets"
 python -c "from bot.cogs.tickets.storage import FormDataStore"
 ```
 (+ ручной прогон полного цикла тикета + редактирования заявки)
+Результат: создан `bot/cogs/tickets/storage.py` со всеми 8 объектами из
+карточки этапа (`FormDataStore`, `form_store`, `REQUESTS_FILE`,
+`_save_request_meta_sync`, `_save_request_meta`, `_load_request_meta`,
+`_load_request_meta_by_channel`, `_delete_request_meta`,
+`_save_deal_report`, `DEAL_REPORTS_DIR`), тела не менялись. В `__init__.py`
+реально использовались только 5 из них — именно они импортированы обратно
+(`form_store`, `_save_request_meta`, `_load_request_meta`,
+`_load_request_meta_by_channel`, `_save_deal_report`); `FormDataStore`
+как класс, `REQUESTS_FILE`, `_save_request_meta_sync`, `DEAL_REPORTS_DIR`
+остались только внутри `storage.py`. Побочно обнаружено (новая находка,
+не в `AUDIT.md`): `_delete_request_meta` нигде не вызывается — мёртвый
+код; перенесён как есть, не удалён (вне охвата «move code, don't
+rewrite»). Импорты `json`/`os` в `__init__.py` стали неиспользуемыми
+именно из-за переноса — это следствие моей правки, а не старый долг,
+поэтому убрал сразу (в отличие от пред-существующих ruff-находок, которые
+не трогаю). `py_compile`/импорт/`84 passed`/`ruff` на всём пакете
+`tickets/` — только 2 старых F841, ничего нового.
 
 ### F.3 — Вынести построение embed'ов
 Статус: 🔲 не начато
@@ -628,7 +645,7 @@ git log -- bot.py
 | E.3 items.py → SheetsService | ✅ | низкий | E.1 | нет |
 | E.4 analytics.py → SheetsService | ✅ | низкий | E.1 | нет |
 | F.1 tickets.py → пакет | ✅ | низкий | 0.1, 0.2 | нет |
-| F.2 Storage-слой | 🔲 | низкий | F.1 | нет |
+| F.2 Storage-слой | ✅ | низкий | F.1 | нет |
 | F.3 Embeds-слой | 🔲 | низкий | F.1 | нет |
 | F.4a–F.4d Views/Modals | 🔲 | средний | F.1–F.3 | нет |
 | F.5 Тонкий Cog | 🔲 | низкий | F.1–F.4 | нет |
