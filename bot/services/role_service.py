@@ -143,8 +143,11 @@ class RoleService:
             if role_obj and role_obj in member.roles:
                 try:
                     await member.remove_roles(role_obj, reason=f"Auto {group_label} sync")
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    logger.warning(
+                        "Не удалось снять роль %s (group=%s) у %s: %s",
+                        role_obj.name, group_label, member, e,
+                    )
 
         # Надеваем новую роль (если есть)
         role_obj = member.guild.get_role(target_id) if target_id else None

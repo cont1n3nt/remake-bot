@@ -91,8 +91,8 @@ class SheetsRepository:
                     class FakeCell:
                         row = i + 1
                     return FakeCell()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("_find_cell_icase failed for column %s, value %r: %s", column, value, e)
         return None
 
     def _find_all_icase(self, value: str, column: int) -> list:
@@ -105,8 +105,8 @@ class SheetsRepository:
                     class FakeCell:
                         row = i + 1
                     result.append(FakeCell())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("_find_all_icase failed for column %s, value %r: %s", column, value, e)
         return result
 
     @_retry
@@ -447,8 +447,8 @@ class SheetsRepository:
                 for col_idx, val in enumerate(row):
                     if val.strip().lower() == item_name.lower():
                         return (row_idx + 1, col_idx + 1)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("_find_item_cell_in_sheet failed for %r on sheet %s: %s", item_name, ws, e)
         return (None, None)
 
     def _collect_sheet_names(self, ws, column_pairs, max_rows) -> set:
@@ -465,8 +465,8 @@ class SheetsRepository:
                     n = val.strip().lower()
                     if n:
                         names.add(n)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("_collect_sheet_names failed for sheet %s: %s", ws, e)
         return names
 
     @_retry
