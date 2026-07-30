@@ -550,7 +550,7 @@ python -c "from bot.cogs.tickets.embeds import _build_request_card_embed"
 F841 (`label_prefix`, `line_total`), новых находок нет.
 
 ### F.4a–F.4d — Разбить Views/Modals по логическим шагам визарда
-Статус: 🟡 в работе — F.4a ✅, F.4b ✅ (2026-07-30), F.4c/F.4d 🔲
+Статус: 🟡 в работе — F.4a ✅, F.4b ✅, F.4c ✅ (2026-07-30), F.4d 🔲
 Зависит от: F.1–F.3
 Критерии завершения:
 - Классы перенесены в `views_delivery.py`, `views_boosts.py`, `views_screenshot.py`, `views_edit.py` без изменения `custom_id`.
@@ -609,6 +609,15 @@ delivery→screenshot, edit→boosts) — обычные импорты в ша�
 который уже уехал в F.4a/F.4b). `py_compile`/импорт (без ошибок
 циклического импорта)/`84 passed`/`ruff` (F401/F821 — чисто, только 2
 старых F841) — всё зелёное.
+
+**F.4c (screenshot) — результат:** `ScreenshotPromptView` перенесена в
+`views_screenshot.py` — единственный модуль пакета без зависимостей от
+соседей. В `views_delivery.py` ребро к `ScreenshotPromptView` разделено
+из общей отложенной строки (`EditRequestView, ScreenshotPromptView`) и
+повышено до обычного импорта в шапке; `EditRequestView` остаётся
+отложенным до F.4d. `py_compile`/импорт (без ошибок циклического
+импорта)/`84 passed`/`ruff` (F401/F821 — чисто, только 2 старых F841) —
+всё зелёное.
 
 ### F.5 — Финальный тонкий `TicketCog`
 Статус: 🔲 не начато

@@ -11,9 +11,9 @@
 views_edit.py: `BoostQuantityView` в views_boosts.py, в свою очередь,
 нужен `BoostOrderModal` отсюда и `EditRequestView` из views_edit.py — эти
 два обратных ребра остаются отложенными навсегда (см. REFACTOR_PROGRESS.md,
-Фаза F, F.4a, для полной схемы зависимостей). `BoostSelectionView` уже
-можно импортировать в шапке — `views_boosts.py` не импортирует этот файл
-на уровне модуля."""
+Фаза F, F.4a, для полной схемы зависимостей). `BoostSelectionView` и
+`ScreenshotPromptView` уже можно импортировать в шапке — ни один из этих
+модулей не импортирует этот файл на уровне модуля."""
 
 from typing import Optional
 
@@ -22,6 +22,7 @@ import discord
 from bot.config.constants import CATEGORY_CHANNELS
 from bot.cogs.tickets.embeds import _build_request_card_embed
 from bot.cogs.tickets.views_boosts import BoostSelectionView
+from bot.cogs.tickets.views_screenshot import ScreenshotPromptView
 from bot.cogs.tickets.storage import form_store, _save_request_meta, _save_deal_report
 
 
@@ -117,7 +118,7 @@ class BaseOrderModal(discord.ui.Modal):
             await self._publish(interaction)
 
     async def _publish(self, interaction: discord.Interaction):
-        from bot.cogs.tickets import EditRequestView, ScreenshotPromptView
+        from bot.cogs.tickets import EditRequestView
 
         store = form_store.get(interaction.user.id)
         text_data = store.get("text_data", {})
