@@ -1,3 +1,4 @@
+import logging
 import time
 import functools
 from typing import Optional
@@ -19,6 +20,8 @@ from bot.config.constants import (
     SYNC_COLUMN_PAIRS_FULL, SYNC_COLUMN_PAIRS_HALF,
     SYNC_MAX_ROWS_SKUP, SYNC_MAX_ROWS_BOOST, SYNC_MAX_ROWS_SKUP_BOOST,
 )
+
+logger = logging.getLogger("bot")
 
 
 def _retry(func):
@@ -225,8 +228,8 @@ class SheetsRepository:
                     }
                 }]
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("_ensure_jrow failed for %s: %s", nickname, e)
 
     @_retry
     def ensure_user(self, nickname: str) -> bool:

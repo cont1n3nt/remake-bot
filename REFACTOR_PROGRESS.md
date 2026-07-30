@@ -667,7 +667,7 @@ python -m bot
 ## Фаза G — Логирование вместо немого проглатывания ошибок
 
 ### G.1 — `SheetsRepository._ensure_jrow`
-Статус: 🔲 не начато
+Статус: ✅ сделано (2026-07-30)
 Критерии завершения:
 - `except Exception: pass` заменён на `except Exception as e: logger.warning(...)`, control flow и возвращаемое значение не изменились.
 Команды проверки:
@@ -675,6 +675,17 @@ python -m bot
 pytest tests/ -v
 ```
 (+ намеренно смоделировать ошибку и убедиться, что поведение `/add` не изменилось, а в логе появилось предупреждение)
+Результат: у `bot/repositories/sheets_repository.py` вообще не было
+логгера — добавил `import logging` и `logger = logging.getLogger("bot")`
+(тот же паттерн, что везде в `bot/`). `except Exception: pass` заменён на
+`except Exception as e: logger.warning("_ensure_jrow failed for %s: %s",
+nickname, e)`. Смоделировал ошибку напрямую (создал `SheetsRepository`
+через `__new__` в обход `__init__`, который требует живых credentials, и
+подменил `_find_cell_icase` на мок, кидающий `RuntimeError`) —
+подтвердил: возвращаемое значение осталось `None`, control flow не
+изменился, а в лог попало `_ensure_jrow failed for test_nick: simulated
+Sheets API failure`. `84 passed`, `ruff` — 4 старых предупреждения (те же,
+что в `BASELINE.md`), ничего нового.
 
 ### G.2 — Остальные немые `except` в `bot/`
 Статус: 🔲 не начато
@@ -746,7 +757,7 @@ git log -- bot.py
 | F.3 Embeds-слой | ✅ | низкий | F.1 | нет |
 | F.4a–F.4d Views/Modals | ✅ | средний | F.1–F.3 | нет |
 | F.5 Тонкий Cog | ✅ | низкий | F.1–F.4 | нет |
-| G.1 Логирование _ensure_jrow | 🔲 | низкий | — | нет |
+| G.1 Логирование _ensure_jrow | ✅ | низкий | — | нет |
 | G.2 Остальные except | 🔲 | низкий | G.1 | нет |
 | H.1 Финальная сверка | 🔲 | нет | A–G | да |
 | H.2 Удаление bot.py | 🔲 | деструктивно | H.1 | **да, обязательно** |
