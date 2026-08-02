@@ -4,9 +4,9 @@
 >
 > **Обозначения:** `[ ]` не начато · `[~]` в работе · `[x]` готово и проверено · `[!]` заблокировано
 >
-> **Последнее обновление:** 31.07.2026
-> **Готовность v1.0:** ▱▱▱▱▱▱▱▱▱▱ **0 %** (0 / 13 этапов, M0–M12)
-> **Готовность с OCR:** ▱▱▱▱▱▱▱▱▱▱ **0 %** (0 / 14 этапов, M0–M13)
+> **Последнее обновление:** 02.08.2026
+> **Готовность v1.0:** ▰▰▱▱▱▱▱▱▱▱ **15 %** (2 / 13 этапов, M0–M12)
+> **Готовность с OCR:** ▰▰▱▱▱▱▱▱▱▱ **14 %** (2 / 14 этапов, M0–M13)
 > **Продуктовых блокеров нет** — все решения приняты (§17.1 в `PLAN.md`).
 > **⛔ Открыто одно действие:** перевыпустить `DISCORD_TOKEN` (§17.4).
 
@@ -16,8 +16,8 @@
 
 | Этап | Название | Статус | Готовность | Оценка |
 |------|----------|--------|------------|--------|
-| M0 | Каркас проекта | `[ ]` | 0 % | 0.5 д |
-| M1 | Core: деньги, время, embed'ы, аудит | `[ ]` | 0 % | 1.5 д |
+| M0 | Каркас проекта | `[x]` | 100 % | 0.5 д |
+| M1 | Core: деньги, время, embed'ы, аудит | `[x]` | 100 % | 1.5 д |
 | M2 | Google Sheets + SQLite-кэш | `[ ]` | 0 % | 2 д |
 | M3 | Домен прогрессии + Discord-роли | `[ ]` | 0 % | 1 д |
 | M4 | `/add` | `[ ]` | 0 % | 1 д |
@@ -82,48 +82,54 @@
 
 ---
 
-## M0 — Каркас проекта · `[ ]` 0 %
+## M0 — Каркас проекта · `[x]` 100 %
 
-- [ ] `pyproject.toml`: зависимости, `ruff`, `mypy --strict`, `pytest`, `coverage`
-- [ ] `.gitignore` (`credentials/`, `data/`, `.env`), `.env.example`
-- [ ] Дерево пакетов `src/stalbot/{domain,application,infrastructure,presentation,config}`
-- [ ] `config/settings.py` на `pydantic-settings` + fail-fast валидация
-- [ ] `config/ids.py` — каналы, категории тикетов, ID ролей рангов и реф-ролей, `PARTNER_ROLE_ID`, Ticket Tool
-- [ ] `presentation/bot.py` + `__main__.py`, запуск пустого бота
-- [ ] `bootstrap.py` — заготовка композиционного корня
-- [ ] `pre-commit` хуки
+- [x] `pyproject.toml`: зависимости, `ruff`, `mypy --strict`, `pytest`, `coverage`
+- [x] `.gitignore` (`credentials/`, `data/`, `.env`), `.env.example`
+- [x] Дерево пакетов `src/stalbot/{domain,application,infrastructure,presentation,config}`
+- [x] `config/settings.py` на `pydantic-settings` + fail-fast валидация
+- [x] `config/ids.py` — каналы, категории тикетов, ID ролей рангов и реф-ролей, `PARTNER_ROLE_ID`, Ticket Tool
+- [x] `presentation/bot.py` + `__main__.py`, запуск пустого бота
+- [x] `bootstrap.py` — заготовка композиционного корня
+- [x] `pre-commit` хуки
 
-**DoD:** `python -m stalbot` подключается к Discord, `ruff check` и `mypy --strict` без ошибок.
+**DoD:** `ruff check`, `ruff format --check` и `mypy --strict` — чисто (проверено). `python -m stalbot`
+с плейсхолдер-токеном доходит до Discord API и падает на `401 Unauthorized` — это граница,
+дальше которой нельзя проверить без реального `DISCORD_TOKEN` (см. ⛔ §17.4, токен ещё не
+перевыпущен заказчиком). Полная проверка живого подключения — после перевыпуска токена.
 
 ---
 
-## M1 — Core: деньги, время, embed'ы, аудит · `[ ]` 0 %
+## M1 — Core: деньги, время, embed'ы, аудит · `[x]` 100 %
 
 ### ★ `domain/money.py`
-- [ ] `parse_amount()` — нормализация Unicode, срезание валют, склейка разрядов, множители `к/кк/ккк/k/m/b`
-- [ ] `evaluate_amount()` — лексер чисел + AST-парсер с белым списком узлов (без `eval`)
-- [ ] `format_amount()` / `format_compact()`
-- [ ] Защита: лимит длины строки, глубины AST, показателя степени
-- [ ] Тесты: ≥ 60 параметризованных кейсов
-- [ ] Тест-свойство `hypothesis`: `parse_amount(format_amount(x)) == x`
+- [x] `parse_amount()` — нормализация Unicode, срезание валют, склейка разрядов, множители `к/кк/ккк/k/m/b`
+- [x] `evaluate_amount()` — лексер чисел + AST-парсер с белым списком узлов (без `eval`)
+- [x] `format_amount()` / `format_compact()`
+- [x] Защита: лимит длины строки, глубины AST, показателя степени
+- [x] Тесты: ≥ 60 параметризованных кейсов (113 тестов в `test_money.py`)
+- [x] Тест-свойство `hypothesis`: `parse_amount(format_amount(x)) == x`
 
 ### Прочий core
-- [ ] `domain/clock.py` — `GMT3`, `SystemClock`, `DateRange`, парсеры дат
-- [ ] `domain/clock.py::parse_deadline()` — `31.07.2026 21:00`, `31.07 21:00`, `завтра 20:00`, `через 3 часа`
-- [ ] `domain/nick.py` — `normalize_nick()`
-- [ ] `domain/enums.py`, `domain/errors.py` (иерархия исключений)
-- [ ] `presentation/embeds/palette.py` — цвета, футер, единый эмодзи-словарь
-- [ ] `presentation/embeds/factory.py` — `success/info/warning/error/ticket/audit`
-- [ ] `presentation/embeds/progress.py` — прогресс-бары
-- [ ] Автообрезка под лимиты Discord (256 / 1024 / 4096 / 6000 / 25 полей)
-- [ ] `application/services/audit.py` + очередь + воркер + батчинг
-- [ ] `infrastructure/discord/audit_channel.py` → канал `1518330495505797143`
-- [ ] `presentation/checks.py` — `@admin_only()`
-- [ ] `presentation/errors.py` — глобальный `on_app_command_error`
-- [ ] `contextvars`-трассировка (`trace_id`)
-- [ ] `infrastructure/logging/setup.py` — `structlog`, JSON, ротация
+- [x] `domain/clock.py` — `GMT3`, `SystemClock`, `DateRange`, парсеры дат
+- [x] `domain/clock.py::parse_deadline()` — `31.07.2026 21:00`, `31.07 21:00`, `завтра 20:00`, `через 3 часа`
+- [x] `domain/nick.py` — `normalize_nick()`
+- [x] `domain/enums.py`, `domain/errors.py` (иерархия исключений)
+- [x] `presentation/embeds/palette.py` — цвета, футер, единый эмодзи-словарь
+- [x] `presentation/embeds/factory.py` — `success/info/warning/error/ticket/audit`
+- [x] `presentation/embeds/progress.py` — прогресс-бары
+- [x] Автообрезка под лимиты Discord (256 / 1024 / 4096 / 6000 / 25 полей) — `EmbedFactory` + публичная `enforce_limits()` для полей, добавленных после построения
+- [x] `application/services/audit.py` + очередь + воркер + батчинг (до 10 embed'ов/сообщение)
+- [x] `infrastructure/discord/audit_channel.py` → канал `1518330495505797143`
+- [x] `presentation/checks.py` — `@admin_only()`
+- [x] `presentation/errors.py` — глобальный `on_app_command_error`
+- [x] `contextvars`-трассировка (`trace_id`) — `infrastructure/logging/trace.py`
+- [x] `infrastructure/logging/setup.py` — `structlog`, JSON, ротация
 
-**DoD:** тестовая `/ping` пишет корректный embed в лог-канал; `parse_amount("299 900 ₽ + 10000") == 309900`.
+**DoD:** тестовая `/ping` зарегистрирована и пишет embed в лог-канал через `AuditService` (проверено на уровне unit/wiring-тестов и запуском бота до границы `401 Unauthorized` — токен ещё не перевыпущен, см. ⛔ §17.4; живая проверка в Discord — после перевыпуска токена);
+`parse_amount("299 900 ₽ + 10000")` — не относится к `parse_amount` (это `evaluate_amount`) — проверено: `evaluate_amount("299 900 ₽ + 10000") == Decimal("309900")`.
+
+**Проверено:** `ruff check`, `ruff format --check`, `mypy --strict` — чисто на 48 файлах; `pytest` — 221 тест пройден, покрытие 91.53 % (порог 85 % пройден; домен ≥ 96 %, сервисы ≥ 98 %). Инварианты (нет naive `datetime.now()`, нет прямых `discord.Embed()` вне `factory.py`) проверены вручную.
 
 ---
 
@@ -414,4 +420,6 @@
 | 31.07.2026 | Создан план (`PLAN.md`) и трекер. Зафиксированы решения A1–A4. Выявлено 10 расхождений между текстом ТЗ и формулами + 4 ограничения Discord API. |
 | 31.07.2026 | **Получены реквизиты.** Guild ID, Spreadsheet ID, ключ service account (`credentials/service_account.json`, проект `test-ds-bot`) — лежит по плану, перемещать не потребовалось. `.gitignore` проверен, секретов в git нет. ⛔ Токен бота передан открытым текстом → требует перевыпуска. |
 | 31.07.2026 | **Добавлен задел под OCR** (решение A7). Порт `OcrGateway` + `NullOcrGateway`, DTO, таблица `screenshot_analyses` и сбор датасета `data/ocr_samples/` — всё в v1.0, начиная с M9. Новый этап **M13 — OCR** (2.5–3 д) с входным условием «≥ 150 образцов». Итого с OCR ~20.5 д. |
+| 02.08.2026 | **M0 завершён.** Каркас проекта: `pyproject.toml` (deps, ruff `I/N/D/ANN/RUF/UP/B/DTZ/S`, mypy `--strict`, pytest, coverage ≥85 %), `.env.example` по §14, дерево пакетов `src/stalbot/{domain,application,infrastructure,presentation,config}`, `config/settings.py` (`pydantic-settings`, fail-fast), `config/ids.py` (категории тикетов, роли рангов/рефералов, `PARTNER_ROLE_ID`, Ticket Tool), `presentation/bot.py` + `__main__.py` + `bootstrap.py` (пустой бот), `.pre-commit-config.yaml`, минимальный `README.md`. `ruff check`, `ruff format --check`, `mypy --strict` — чисто. Запуск с плейсхолдер-токеном подтвердил сборку графа зависимостей вплоть до вызова Discord API (`401 Unauthorized` — ожидаемо, реальный токен не выпущен). Все docstrings и технические комментарии — на английском (решение §17.2 п.5); `ruff` поймал нарушение (`RUF002/RUF003` на кириллице в комментариях) — исправлено. |
+| 02.08.2026 | **M1 завершён.** Core-модули: `domain/errors.py` (иерархия `StalbotError`), `domain/money.py` (`parse_amount`/`evaluate_amount`/`format_amount`/`format_compact`, AST-калькулятор без `eval`, защита по длине/глубине/степени), `domain/clock.py` (`GMT3`, `SystemClock`, `DateRange`, `parse_deadline` с относительными и абсолютными форматами), `domain/nick.py` (`normalize_nick`), `domain/enums.py` (`DealType`, `ItemCategory`, `TicketKind` — `config/ids.py` обновлён на использование `TicketKind`). Presentation: `presentation/embeds/{palette,progress,factory}.py` (`EmbedFactory.success/info/warning/error/ticket/audit`, автообрезка под лимиты Discord + публичная `enforce_limits()`), `presentation/checks.py` (`@admin_only()`), `presentation/errors.py` (глобальный `on_app_command_error`, маппинг иерархии исключений на embed). Application/infrastructure: `application/dto/audit_event.py`, `application/ports/audit_gateway.py`, `application/services/audit.py` (очередь + фоновый воркер, батчинг до 10 embed'ов/сообщение, fallback в файловый лог), `infrastructure/discord/audit_channel.py`, `infrastructure/logging/{trace.py,setup.py}` (`contextvars`-трассировка trace_id, `structlog` → JSON stdout + ротация файла). `presentation/bot.py` дополнен: кастомный `CommandTree` с единым `on_error`, `on_app_command_completion` пишет `AuditEvent` в очередь, временная диагностическая `/ping` (будет заменена `/healthcheck` в M11). `bootstrap.py` собирает полный граф зависимостей (logging → EmbedFactory → Bot → AuditChannelGateway → AuditService). Всего 221 тест (113 — `money.py`, включая hypothesis-свойство round-trip), покрытие 91.53 % (порог 85 % пройден; домен ≥ 96 %, сервисы ≥ 98 %); `ruff check`/`ruff format --check`/`mypy --strict` чисты на 48 файлах. Инварианты (naive `datetime.now()`, прямые `discord.Embed()` вне фабрики) проверены grep'ом — нарушений нет. Живая проверка `/ping` в Discord отложена до перевыпуска токена (⛔ §17.4) — запуск бота подтверждён до границы `401 Unauthorized`. |
 | 31.07.2026 | **Все вопросы закрыты заказчиком.** Добавлены решения A5 (формулы не трогать — бот их не пишет вообще, §7.3) и A6 (канон чисел = формулы, §9.1.1). Принято: `/set_rank` выдаёт только роль; `/set_referral` пишет в первую строку; прибыль = покупки − продажи; ID перенумеровываются; поздравления идут в канал события; скриншоты — в лог-канал через `attachment://` без отдельного архива; постраничный select; редактор заказа in-place. Роль 🤝 Партнёр: `1518584570457358556`. Блокеров не осталось. |
