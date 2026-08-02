@@ -71,6 +71,22 @@ class TransactionsCacheRepository:
         )
         return [_row_to_record(row) async for row in cursor]
 
+    async def get_by_row(self, sheet_row: int) -> TransactionRecord | None:
+        """Look up a single transaction by its sheet row.
+
+        Used to replay an idempotent write: on a repeated `idempotency_key`,
+        `TransactionService` reconstructs the original response from here
+        instead of writing again.
+
+        Args:
+            sheet_row: The row to look up.
+        """
+        cursor = await self._conn.execute(
+            f"{_SELECT_WITH_DISPLAY} WHERE t.sheet_row = ?", (sheet_row,)
+        )
+        row = await cursor.fetchone()
+        return _row_to_record(row) if row is not None else None
+
     async def upsert_many(self, records: Sequence[TransactionRecord]) -> None:
         """Insert or update transaction rows (full or incremental sync).
 

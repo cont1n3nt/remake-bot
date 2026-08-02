@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)
 #: User-facing text per domain exception type. Anything not listed falls
 #: back to `str(exc)` if it is non-empty, else a generic message.
 _DOMAIN_MESSAGES: dict[type[StalbotError], str] = {
-    AmountParseError: "Не удалось распознать сумму. Проверьте формат ввода.",
+    AmountParseError: (
+        "Не удалось распознать сумму. Примеры корректного ввода: "
+        "`299900`, `299 900 ₽`, `1.5кк`, `250к`, `299 900 + 10000`."
+    ),
     DeadlineParseError: "Не удалось распознать дату.",
     NickNotBoundError: "Этот игровой ник не привязан к Discord-аккаунту.",
     ItemNotFoundError: "Предмет не найден в базе.",

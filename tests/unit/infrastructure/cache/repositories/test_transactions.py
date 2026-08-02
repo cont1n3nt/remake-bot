@@ -41,6 +41,21 @@ async def test_last_row_is_zero_when_empty(connection: aiosqlite.Connection) -> 
     assert await repo.last_row() == 0
 
 
+async def test_get_by_row_returns_the_matching_record(connection: aiosqlite.Connection) -> None:
+    repo = TransactionsCacheRepository(connection)
+    await repo.upsert_many([_record(3, amount=Decimal(100)), _record(4, amount=Decimal(200))])
+
+    record = await repo.get_by_row(4)
+
+    assert record is not None
+    assert record.amount == Decimal(200)
+
+
+async def test_get_by_row_returns_none_when_absent(connection: aiosqlite.Connection) -> None:
+    repo = TransactionsCacheRepository(connection)
+    assert await repo.get_by_row(999) is None
+
+
 async def test_upsert_many_updates_existing_row(connection: aiosqlite.Connection) -> None:
     repo = TransactionsCacheRepository(connection)
     await repo.upsert_many([_record(3, amount=Decimal(100))])

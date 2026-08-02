@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 #: Bumped whenever `schema.sql` gains a column/table that old rows do not
 #: have and a real migration (not just re-running the idempotent DDL) is
 #: needed to backfill them.
-#: v2 (M3): `progression_state.manual_rank_role`. No migration logic yet —
-#: the project has not shipped v1.0, so there is no deployed data to backfill.
-SCHEMA_VERSION: Final = 2
+#: v2 (M3): `progression_state.manual_rank_role`. v3 (M4): `write_idempotency`.
+#: No migration logic yet — the project has not shipped v1.0, so there is no
+#: deployed data to backfill.
+SCHEMA_VERSION: Final = 3
 
 _SCHEMA_PATH: Final = Path(__file__).with_name("schema.sql")
 _SCHEMA_VERSION_KEY: Final = "schema_version"

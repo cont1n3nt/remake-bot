@@ -123,3 +123,13 @@ CREATE TABLE IF NOT EXISTS sync_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Write idempotency (M4, PLAN.md §7.4 step 5): keyed by e.g. a Discord
+-- interaction id or a ticket's channel_id+message_id+user_id, so a retried
+-- write (not a deliberate second /add) cannot create a duplicate Тикеты row.
+-- Shared by TransactionService.register() for both /add and ticket confirmation.
+CREATE TABLE IF NOT EXISTS write_idempotency (
+    idempotency_key TEXT PRIMARY KEY,
+    sheet_row INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);

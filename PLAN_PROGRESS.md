@@ -5,8 +5,8 @@
 > **Обозначения:** `[ ]` не начато · `[~]` в работе · `[x]` готово и проверено · `[!]` заблокировано
 >
 > **Последнее обновление:** 02.08.2026
-> **Готовность v1.0:** ▰▰▰▰▱▱▱▱▱▱ **31 %** (4 / 13 этапов, M0–M12)
-> **Готовность с OCR:** ▰▰▰▱▱▱▱▱▱▱ **29 %** (4 / 14 этапов, M0–M13)
+> **Готовность v1.0:** ▰▰▰▰▰▱▱▱▱▱ **38 %** (5 / 13 этапов, M0–M12)
+> **Готовность с OCR:** ▰▰▰▰▱▱▱▱▱▱ **36 %** (5 / 14 этапов, M0–M13)
 > **Продуктовых блокеров нет** — все решения приняты (§17.1 в `PLAN.md`).
 > **⛔ Открыто одно действие:** перевыпустить `DISCORD_TOKEN` (§17.4).
 
@@ -20,7 +20,7 @@
 | M1 | Core: деньги, время, embed'ы, аудит | `[x]` | 100 % | 1.5 д |
 | M2 | Google Sheets + SQLite-кэш | `[x]` | 100 % | 2 д |
 | M3 | Домен прогрессии + Discord-роли | `[x]` | 100 % | 1 д |
-| M4 | `/add` | `[ ]` | 0 % | 1 д |
+| M4 | `/add` | `[x]` | 100 % | 1 д |
 | M5 | `/profile`, `/referrals` | `[ ]` | 0 % | 1 д |
 | M6 | База предметов и цены | `[ ]` | 0 % | 2.5 д |
 | M7 | Статистика | `[ ]` | 0 % | 1.5 д |
@@ -231,20 +231,41 @@
 
 ---
 
-## M4 — `/add` · `[ ]` 0 %
+## M4 — `/add` · `[x]` 100 %
 
-- [ ] `application/services/transactions.py` — `register()` (общий для команды и тикетов)
-- [ ] Идемпотентность через ключ в SQLite
-- [ ] Валидации: реферал ≠ игрок, конфликт привязки Discord ↔ ник (один к одному)
-- [ ] Запись строки `A, B, C, D, E, H` — **без `F`/`G`**
-- [ ] Привязка Discord ID в колонку `I`
-- [ ] Ожидание пересчёта `F`/`G` перед показом начисленных 🪙 / ⚡
-- [ ] Точечный рефреш кэша + `ProgressionService.sync(..., announce_to=interaction.channel)`
-- [ ] Эфемерный embed «Сделка зафиксирована»
-- [ ] Публичное сообщение + напоминание об отзыве (канал `1490342809075716237`)
-- [ ] Аудит-событие
+- [x] `application/services/transactions.py` — `register()` (общий для команды и тикетов)
+- [x] Идемпотентность через ключ в SQLite — новая таблица `write_idempotency`
+      (`SCHEMA_VERSION` 2→3), ключ = `str(interaction.id)`; повтор возвращает закэшированную запись
+      без повторной записи в Sheets
+- [x] Валидации: реферал ≠ игрок (блокирует), конфликт привязки Discord ↔ ник — один к одному
+      (эфемерный `ConfirmView` с кнопками Подтвердить/Отмена, автор-заблокирован, таймаут 60с)
+- [x] Запись строки `A, B, C, D, E, H` — **без `F`/`G`**. `H` (реферал) пишется **только на первой
+      сделке игрока** — иначе `СЧЁТЕСЛИ($H:$H; ник)` в колонке `P` задвоил бы счётчик рефералов
+      при каждом повторном `/add` с тем же рефералом (не описано явно в §10.1, но необходимо для
+      целостности данных; `/set_referral`, M8, по той же причине пишет только в первую строку)
+- [x] Привязка Discord ID в колонку `I` — только если ещё не привязан или подтверждена перепривязка
+- [x] Ожидание пересчёта `F`/`G` перед показом начисленных 🪙 / ⚡ — `read_until` (3×0.7с), при
+      неудаче резервный `copyPaste(PASTE_FORMULA)` от последней формульной строки и повторное ожидание;
+      если формулы так и не посчитались — эфемерный embed сообщает «ожидает пересчёта», не выдумывает 0
+- [x] Точечный рефреш кэша (`CacheSync.sync_users_and_transactions()`) +
+      `ProgressionService.sync([ник, реферал], announce_to=interaction.channel)`
+- [x] Эфемерный embed «Сделка зафиксирована»: тип, ник, Discord, сумма, 🪙/⚡, реферал, дата, строка
+- [x] Публичное сообщение + напоминание об отзыве (канал `1490342809075716237`, уже в `Settings` с M0)
+- [x] Аудит-событие — не потребовало нового кода: `on_app_command_completion` (M1) уже логирует
+      каждую успешную команду в лог-канал автоматически
 
-**DoD:** сделка в таблице, формулы посчитались, кэш и роли обновлены, повтор не создаёт дубль.
+**DoD:** покрыто тестами (510 тестов, 94.71 % покрытия; `ruff`/`mypy --strict` чисты): запись строки,
+read-back верификация, ожидание/резервное копирование формул, точечный рефреш и синк ролей, повтор с
+тем же `idempotency_key` не создаёт вторую запись. Smoke-тест подтвердил, что `TransactionsCog`
+регистрируется в `bot.add_cog()` и `/add` реально появляется в дереве команд (без реального
+подключения к Discord — токен всё ещё не перевыпущен, ⛔ §17.4).
+
+**Найдено и исправлено в процессе:** имена тестовых файлов `test_transactions.py` дважды
+конфликтовали между разными директориями (`tests/unit/infrastructure/cache/repositories/`,
+`tests/unit/application/services/`, `tests/unit/presentation/cogs/`) — в `tests/` не было
+`__init__.py`, из-за чего pytest/mypy резолвили все тестовые файлы как единое плоское пространство
+имён. Исправлено раз и навсегда: добавлены `__init__.py` во все директории `tests/`, а не точечным
+переименованием (как было сделано в M2 для похожей, тогда ещё не вскрытой, причины).
 
 ---
 
@@ -465,6 +486,7 @@
 | 31.07.2026 | **Получены реквизиты.** Guild ID, Spreadsheet ID, ключ service account (`credentials/service_account.json`, проект `test-ds-bot`) — лежит по плану, перемещать не потребовалось. `.gitignore` проверен, секретов в git нет. ⛔ Токен бота передан открытым текстом → требует перевыпуска. |
 | 31.07.2026 | **Добавлен задел под OCR** (решение A7). Порт `OcrGateway` + `NullOcrGateway`, DTO, таблица `screenshot_analyses` и сбор датасета `data/ocr_samples/` — всё в v1.0, начиная с M9. Новый этап **M13 — OCR** (2.5–3 д) с входным условием «≥ 150 образцов». Итого с OCR ~20.5 д. |
 | 02.08.2026 | **M0 завершён.** Каркас проекта: `pyproject.toml` (deps, ruff `I/N/D/ANN/RUF/UP/B/DTZ/S`, mypy `--strict`, pytest, coverage ≥85 %), `.env.example` по §14, дерево пакетов `src/stalbot/{domain,application,infrastructure,presentation,config}`, `config/settings.py` (`pydantic-settings`, fail-fast), `config/ids.py` (категории тикетов, роли рангов/рефералов, `PARTNER_ROLE_ID`, Ticket Tool), `presentation/bot.py` + `__main__.py` + `bootstrap.py` (пустой бот), `.pre-commit-config.yaml`, минимальный `README.md`. `ruff check`, `ruff format --check`, `mypy --strict` — чисто. Запуск с плейсхолдер-токеном подтвердил сборку графа зависимостей вплоть до вызова Discord API (`401 Unauthorized` — ожидаемо, реальный токен не выпущен). Все docstrings и технические комментарии — на английском (решение §17.2 п.5); `ruff` поймал нарушение (`RUF002/RUF003` на кириллице в комментариях) — исправлено. |
+| 02.08.2026 | **M4 завершён.** `application/services/transactions.py` — `TransactionService.register()`: идемпотентность через новую таблицу `write_idempotency` (`SCHEMA_VERSION` 2→3, ключ `str(interaction.id)`), поиск свободной строки в `Тикеты` по кэшу с однократной верификацией чтением (ограниченный ретрай при гонке), `write_verified` для `A:E`+`H` (без `F`/`G`), `H` пишется только на первой сделке игрока (иначе `СЧЁТЕСЛИ` в `P` задвоил бы рефералов), `read_until` с резервным `copyPaste(PASTE_FORMULA)` при выходе за протянутый диапазон формул, точечный рефреш через `CacheSync.sync_users_and_transactions()`, привязка Discord ID в `I` (с флагом принудительной перепривязки). `presentation/views/confirm.py` — переиспользуемый `ConfirmView` (Подтвердить/Отмена, заблокирован на автора, таймаут). `presentation/cogs/transactions.py` — первый настоящий cog проекта: `/add` (choice тип, ник, `discord` через `@app_commands.rename` — Python-параметр `discord_member`, чтобы не затенять модуль `discord`), валидация «реферал ≠ игрок», предупреждение при реферале без Discord, подтверждение конфликта привязки через `ConfirmView`, эфемерный отчёт и публичное сообщение с напоминанием об отзыве. Аудит-событие не потребовало нового кода — `on_app_command_completion` (M1) уже логирует любую успешную команду. `presentation/bot.py`/`bootstrap` дополнены сборкой `TransactionService` и регистрацией `TransactionsCog` в `setup_hook` до `tree.sync()`. Всего 510 тестов, покрытие 94.71 % (`ruff`/`mypy --strict` чисты на 132 файлах). Smoke-тест подтвердил регистрацию `/add` в дереве команд без реального подключения к Discord. **Найдено и исправлено:** конфликт имён тестовых модулей `test_transactions.py` (уже возникавший в M2 и «залатанный» переименованием) корневым образом устранён добавлением `__init__.py` во все директории `tests/`, а не точечными переименованиями. |
 | 02.08.2026 | **M3 завершён.** `domain/progression/{ladder,ranks,referrals,perks}.py` — общий generic `Ladder[TierT]` (current/next/progress/perks_of/by_label/by_role_id/role_ids), `RankTier`/`RANKS` (пороги 50/300/1200/3500/7000 из `config.ids.RANK_ROLE_IDS`), `ReferralTier`/`REFERRAL_ROLES` (пороги 1/3/7/20/50), `perks.py` — только формуло-подтверждённые числа (разовые бонусы рангов/реф-ролей, бонус за крупную сделку, буст-бонус, XP-порог 250). Контрактный тест `test_ladder_matches_sheet_formula.py` сверяет пороги с замороженным снимком реальных формул `DataBase!R3`/`S3`. `application/ports/role_gateway.py` (`RoleSet`/`RoleDiff`/`RoleGateway`) + `infrastructure/discord/role_gateway.py` (`DiscordRoleGateway`, взаимоисключение внутри лестницы через `RoleSet.universe`, устойчив к `NotFound`/`Forbidden`/недоступной гильдии). `application/services/progression.py` — `ProgressionService.sync(nicks, *, announce_to=None)`: сверка ролей всегда, повышение объявляется только если предыдущее состояние существовало и новый тир строго выше (защита от даунгрейда/спама при первом синке), состояние пишется до отправки, поздравление — в `announce_to` или в лог-канал через `AuditGateway`, плюс запись в аудит. Флаг `manual_rank_role` (новая колонка в `progression_state`, `SCHEMA_VERSION` 1→2) — поллер полностью исключает ранговую лестницу из `sync_roles`, пока флаг не снят (готово к `/set_rank` в M8). `sync_booster_flag()` пишет колонку `Q` через уже защищённый `SheetsClient.batch_update` и пересинкает игрока. `presentation/bot.py`: `on_member_update` детектит смену буста, третий `tasks.loop` (`PROGRESSION_POLL_SECONDS=300`) гоняет фоновый поллер по всей базе. Всего 479 тестов, покрытие 94.81 % (`ruff`/`mypy --strict` чисты на 101 файле). Самопроверка нашла и исправила: (1) неверный AST-инвариант-тест из M2, ложно запрещавший легитимные вызовы `SheetsClient.batch_update()` извне — переписан на реальный риск (сырой `values_batch_update` gspread в обход защиты); (2) пропущенный в первом проходе пункт чек-листа `manual_rank_role`. Осознанно не реализовано: выдача роли 🤝 Партнёр по совокупному обороту рефералов (агрегация, не привязанная к чек-листу текущего этапа — отложена до M5/`/referrals`, которому нужен тот же реверс-индекс). |
 | 02.08.2026 | **M2 завершён.** Sheets: `infrastructure/sheets/{a1,protection,ratelimit,client,layouts}.py` — A1-нотация (позиционная и квотированная, юникод-имена листов), `ensure_writable()` с исчерпывающим тестом по всем колонкам `DataBase` + AST-скан на посторонние вызовы `batch_update`, token-bucket рейт-лимитер с retry+backoff, `SheetsClient` (`batch_get`/`batch_update`/`write_verified`/`read_until`/`read_formula_extent`/`copy_formula_down`/`validate_layout`), `SYNC_LAYOUTS` и карта блоков `DataBase` с заголовками, снятыми **вживую** с реальной таблицы (реальное имя листа — `Мейн скуп`, не `Мейн Скуп`, как в тексте плана). Кэш: `infrastructure/cache/{schema.sql,db.py}` (полная схема §8.1, версия схемы в `sync_meta`), репозитории `items`/`users`/`transactions`/`progression_state`/`ticket_sessions`/`boost_order_lines`, `sync.py` (`CacheSync.run_startup_sync/sync_items/sync_users_and_transactions/ensure_fresh`, парсинг с устойчивостью к «грязным» историческим строкам). `presentation/bot.py`/`bootstrap.py` дополнены: `setup_hook` открывает кэш и обязательно синкает **до** регистрации команд, два `tasks.loop` с интервалами из `Settings`, предупреждения о нехватке формул уходят в лог-канал через `EmbedFactory`. Добавлены `domain/clock.py::parse_sheet_datetime()`, `domain/entities/{item,transaction,user_profile}.py`, `application/ports/clock.py`, `application/dto/{progression_state,ticket_session,boost_order_line}.py`, `SheetStructureError`/`ProtectedRangeWriteError` в иерархию исключений. Всего 418 тестов, покрытие 94.29 % (`ruff`/`mypy --strict` чисты). **Проверено вживую** (только чтение) против реальной таблицы: `validate_layout()` проходит, `run_startup_sync()` кладёт в SQLite 219 предметов / 237 пользователей / 64 сделки (554 исторические строки без даты корректно пропущены). Живая проверка поймала и позволила исправить два реальных бага: (1) `SheetsClient.batch_get` сопоставлял результат по эхо-строке `range`, а Google нормализует открытые диапазоны (`"A3:H"` → `"A3:H1598"`) — синк тихо писал 0 записей, юнит-тесты с фейком этого не ловили; исправлено на позиционное сопоставление; (2) мёртвый код в `_parse_items` (`_to_int()` никогда не возвращает `None`) пропускал проверку на пустой `id`. Также обнаружено (не баг бота, а реальное состояние таблицы): формулы `F`/`G` уже не покрывают весь диапазон сделок — бот корректно предупреждает, задокументировано как открытое действие заказчика. |
 | 02.08.2026 | **M1 завершён.** Core-модули: `domain/errors.py` (иерархия `StalbotError`), `domain/money.py` (`parse_amount`/`evaluate_amount`/`format_amount`/`format_compact`, AST-калькулятор без `eval`, защита по длине/глубине/степени), `domain/clock.py` (`GMT3`, `SystemClock`, `DateRange`, `parse_deadline` с относительными и абсолютными форматами), `domain/nick.py` (`normalize_nick`), `domain/enums.py` (`DealType`, `ItemCategory`, `TicketKind` — `config/ids.py` обновлён на использование `TicketKind`). Presentation: `presentation/embeds/{palette,progress,factory}.py` (`EmbedFactory.success/info/warning/error/ticket/audit`, автообрезка под лимиты Discord + публичная `enforce_limits()`), `presentation/checks.py` (`@admin_only()`), `presentation/errors.py` (глобальный `on_app_command_error`, маппинг иерархии исключений на embed). Application/infrastructure: `application/dto/audit_event.py`, `application/ports/audit_gateway.py`, `application/services/audit.py` (очередь + фоновый воркер, батчинг до 10 embed'ов/сообщение, fallback в файловый лог), `infrastructure/discord/audit_channel.py`, `infrastructure/logging/{trace.py,setup.py}` (`contextvars`-трассировка trace_id, `structlog` → JSON stdout + ротация файла). `presentation/bot.py` дополнен: кастомный `CommandTree` с единым `on_error`, `on_app_command_completion` пишет `AuditEvent` в очередь, временная диагностическая `/ping` (будет заменена `/healthcheck` в M11). `bootstrap.py` собирает полный граф зависимостей (logging → EmbedFactory → Bot → AuditChannelGateway → AuditService). Всего 221 тест (113 — `money.py`, включая hypothesis-свойство round-trip), покрытие 91.53 % (порог 85 % пройден; домен ≥ 96 %, сервисы ≥ 98 %); `ruff check`/`ruff format --check`/`mypy --strict` чисты на 48 файлах. Инварианты (naive `datetime.now()`, прямые `discord.Embed()` вне фабрики) проверены grep'ом — нарушений нет. Живая проверка `/ping` в Discord отложена до перевыпуска токена (⛔ §17.4) — запуск бота подтверждён до границы `401 Unauthorized`. |

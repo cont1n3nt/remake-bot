@@ -98,6 +98,10 @@ ignore = [
 # the docstring quotes PLAN.md verbatim.
 "src/stalbot/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
+# Slash-command option names/descriptions and every user-facing string here
+# are literal Russian UI content (PLAN.md §10).
+"src/stalbot/presentation/cogs/**" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/presentation/cogs/**" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

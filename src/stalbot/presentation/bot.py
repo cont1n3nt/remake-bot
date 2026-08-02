@@ -10,9 +10,11 @@ from discord.ext import commands, tasks
 from stalbot.application.dto.audit_event import AuditEvent
 from stalbot.application.services.audit import AuditService
 from stalbot.application.services.progression import ProgressionService
+from stalbot.application.services.transactions import TransactionService
 from stalbot.config.settings import Settings
 from stalbot.domain.clock import SystemClock
 from stalbot.infrastructure.cache.db import CacheDb
+from stalbot.infrastructure.cache.repositories.idempotency import IdempotencyRepository
 from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
 from stalbot.infrastructure.cache.repositories.progression_state import ProgressionStateRepository
 from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
@@ -22,6 +24,7 @@ from stalbot.infrastructure.discord.audit_channel import AuditChannelGateway
 from stalbot.infrastructure.discord.role_gateway import DiscordRoleGateway
 from stalbot.infrastructure.logging.trace import current_trace_id
 from stalbot.infrastructure.sheets.client import SheetsClient
+from stalbot.presentation.cogs.transactions import TransactionsCog
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.errors import on_app_command_error
 
@@ -101,11 +104,12 @@ class StalbotBot(commands.Bot):
 
     async def _setup_cache(self) -> None:
         connection = await self.cache_db.connect()
+        transactions_repo = TransactionsCacheRepository(connection)
         cache_sync = CacheSync(
             self.sheets_client,
             items=ItemsCacheRepository(connection),
             users=UsersCacheRepository(connection),
-            transactions=TransactionsCacheRepository(connection),
+            transactions=transactions_repo,
             clock=SystemClock(),
         )
         self.cache_sync = cache_sync
@@ -123,6 +127,24 @@ class StalbotBot(commands.Bot):
             self.embed_factory,
             sheets=self.sheets_client,
             clock=SystemClock(),
+        )
+
+        transaction_service = TransactionService(
+            self.sheets_client,
+            transactions_repo,
+            UsersCacheRepository(connection),
+            IdempotencyRepository(connection),
+            cache_sync,
+            clock=SystemClock(),
+        )
+        await self.add_cog(
+            TransactionsCog(
+                transaction_service,
+                self.progression_service,
+                UsersCacheRepository(connection),
+                self.embed_factory,
+                self.settings,
+            )
         )
 
         # Loop intervals are per-deployment (`Settings`), so the loops are
