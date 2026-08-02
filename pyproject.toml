@@ -85,6 +85,15 @@ ignore = [
 # User-facing Russian error messages are the actual UI content.
 "src/stalbot/presentation/errors.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/presentation/test_errors.py" = ["RUF001", "RUF002", "RUF003"]
+# Sheet/column names and header text are literal spreadsheet content in Russian.
+"src/stalbot/infrastructure/sheets/layouts.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/infrastructure/sheets/test_layouts.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/infrastructure/sheets/test_protection.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/infrastructure/sheets/test_client.py" = ["RUF001", "RUF002", "RUF003"]
+# Item names, sheet cell content, ranks and referral-role labels in test
+# fixtures are literal Russian data mirroring the real spreadsheet.
+"tests/unit/infrastructure/cache/**" = ["RUF001", "RUF002", "RUF003"]
+"src/stalbot/infrastructure/cache/sync.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -102,7 +111,7 @@ files = ["src", "tests"]
 plugins = []
 
 [[tool.mypy.overrides]]
-module = ["gspread.*", "aiosqlite.*"]
+module = ["gspread.*", "aiosqlite.*", "google.oauth2.*"]
 ignore_missing_imports = true
 
 # --- pytest / coverage ------------------------------------------------------

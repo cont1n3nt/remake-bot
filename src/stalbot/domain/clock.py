@@ -26,8 +26,7 @@ _MAX_DEADLINE_DAYS_AHEAD: Final = 90
 class SystemClock:
     """Time source backed by the real wall clock, pinned to `GMT3`.
 
-    Structurally matches the future `application.ports.Clock` protocol
-    (added in M2) without needing any changes once that port exists.
+    Structurally satisfies `application.ports.clock.Clock`.
     """
 
     def now(self) -> datetime:
@@ -204,3 +203,38 @@ def _combine(day: date, hour: int, minute: int) -> datetime:
         return datetime(day.year, day.month, day.day, hour, minute, tzinfo=GMT3)
     except ValueError as exc:
         raise DeadlineParseError(_DEADLINE_HINT) from exc
+
+
+def parse_sheet_datetime(raw: str) -> datetime | None:
+    """Parse a `Дата` cell from the `Тикеты` block into a tz-aware datetime.
+
+    Unlike `parse_deadline`, this never raises and applies no future/range
+    validation — a transaction date is a historical fact, not a deadline.
+    Some legacy rows have the column blank (it was only backfilled
+    recently); this returns `None` for those so `CacheSync` can skip them
+    without failing the whole sync, rather than inventing a fake date.
+
+    Args:
+        raw: The cell's text, e.g. `"31.07.26 02:56"`.
+
+    Returns:
+        A tz-aware `datetime` in `GMT3`, or `None` if `raw` is blank or does
+        not match the `Д.М.ГГ[ГГ] [Ч:М]` shape (year required, unlike
+        `parse_deadline`, since there is no "current year" to default to
+        for a historical row).
+    """
+    text = raw.strip()
+    if not text:
+        return None
+    match = _ABSOLUTE_RE.match(text)
+    if match is None or match.group("year") is None:
+        return None
+    day, month = int(match.group("day")), int(match.group("month"))
+    year = _expand_year(int(match.group("year")))
+    hour_text, minute_text = match.group("hour"), match.group("minute")
+    hour = int(hour_text) if hour_text is not None else 0
+    minute = int(minute_text) if minute_text is not None else 0
+    try:
+        return datetime(year, month, day, hour, minute, tzinfo=GMT3)
+    except ValueError:
+        return None

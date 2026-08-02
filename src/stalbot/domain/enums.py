@@ -26,3 +26,10 @@ class TicketKind(StrEnum):
     SELL_ITEMS = "sell_items"
     SELL_BOOSTS = "sell_boosts"
     ORDER_BOOSTS = "order_boosts"
+
+
+class PriceField(StrEnum):
+    """Which `Item` price a `SheetLayout` block feeds (see PLAN.md §6.2)."""
+
+    BUY = "buy"
+    SELL = "sell"

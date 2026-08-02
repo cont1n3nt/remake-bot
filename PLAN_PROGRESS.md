@@ -5,8 +5,8 @@
 > **Обозначения:** `[ ]` не начато · `[~]` в работе · `[x]` готово и проверено · `[!]` заблокировано
 >
 > **Последнее обновление:** 02.08.2026
-> **Готовность v1.0:** ▰▰▱▱▱▱▱▱▱▱ **15 %** (2 / 13 этапов, M0–M12)
-> **Готовность с OCR:** ▰▰▱▱▱▱▱▱▱▱ **14 %** (2 / 14 этапов, M0–M13)
+> **Готовность v1.0:** ▰▰▰▱▱▱▱▱▱▱ **23 %** (3 / 13 этапов, M0–M12)
+> **Готовность с OCR:** ▰▰▰▱▱▱▱▱▱▱ **21 %** (3 / 14 этапов, M0–M13)
 > **Продуктовых блокеров нет** — все решения приняты (§17.1 в `PLAN.md`).
 > **⛔ Открыто одно действие:** перевыпустить `DISCORD_TOKEN` (§17.4).
 
@@ -18,7 +18,7 @@
 |------|----------|--------|------------|--------|
 | M0 | Каркас проекта | `[x]` | 100 % | 0.5 д |
 | M1 | Core: деньги, время, embed'ы, аудит | `[x]` | 100 % | 1.5 д |
-| M2 | Google Sheets + SQLite-кэш | `[ ]` | 0 % | 2 д |
+| M2 | Google Sheets + SQLite-кэш | `[x]` | 100 % | 2 д |
 | M3 | Домен прогрессии + Discord-роли | `[ ]` | 0 % | 1 д |
 | M4 | `/add` | `[ ]` | 0 % | 1 д |
 | M5 | `/profile`, `/referrals` | `[ ]` | 0 % | 1 д |
@@ -133,36 +133,63 @@
 
 ---
 
-## M2 — Google Sheets + SQLite-кэш · `[ ]` 0 %
+## M2 — Google Sheets + SQLite-кэш · `[x]` 100 %
 
 ### Sheets
-- [ ] `infrastructure/sheets/a1.py` — колонки ↔ индексы, диапазоны
-- [ ] `infrastructure/sheets/client.py` — `batch_get` / `batch_update`, `to_thread`
-- [ ] `infrastructure/sheets/ratelimit.py` — token bucket 60/мин, backoff+jitter, блокировки записи
-- [ ] ★ `infrastructure/sheets/protection.py` — `READ_ONLY_RANGES` + `ProtectedRangeWriteError`
-- [ ] ★ Юнит-тест: перебрать все места записи в проекте, убедиться что формульные колонки не задеты
-- [ ] ★ `valueInputOption=RAW` жёстко зашит, `USER_ENTERED` отсутствует в коде (проверка тестом)
-- [ ] `infrastructure/sheets/layouts.py` — `SYNC_LAYOUTS`, карта блоков листа `DataBase`
-- [ ] Проверка «докуда протянуты формулы `F`/`G`» + предупреждение в лог при остатке < 50 строк
-- [ ] Резервный `copyPaste(pasteType=PASTE_FORMULA)` для строк без формул
-- [ ] Валидация структуры листа при старте (заголовки на месте)
-- [ ] Read-back верификация записи + компенсация при расхождении
-- [ ] Read-back с retry для `F`/`G` (ожидание пересчёта формул)
+- [x] `infrastructure/sheets/a1.py` — колонки ↔ индексы, диапазоны
+- [x] `infrastructure/sheets/client.py` — `batch_get` / `batch_update`, `to_thread`
+- [x] `infrastructure/sheets/ratelimit.py` — token bucket 60/мин, backoff+jitter, блокировки записи
+- [x] ★ `infrastructure/sheets/protection.py` — `READ_ONLY_RANGES` + `ProtectedRangeWriteError`
+- [x] ★ Юнит-тест: перебрать все места записи в проекте, убедиться что формульные колонки не задеты
+      (исчерпывающий перебор колонок `A…S`, `AA…AG` + AST-скан на посторонние вызовы `batch_update`/`write_verified`)
+- [x] ★ `valueInputOption=RAW` жёстко зашит, `USER_ENTERED` отсутствует в коде (проверка тестом)
+- [x] `infrastructure/sheets/layouts.py` — `SYNC_LAYOUTS`, карта блоков листа `DataBase`
+- [x] Проверка «докуда протянуты формулы `F`/`G`» + предупреждение в лог при остатке < 50 строк
+- [x] Резервный `copyPaste(pasteType=PASTE_FORMULA)` для строк без формул
+- [x] Валидация структуры листа при старте (заголовки на месте)
+- [x] Read-back верификация записи + компенсация при расхождении
+- [x] Read-back с retry для `F`/`G` (ожидание пересчёта формул)
 
 ### Кэш
-- [ ] `infrastructure/cache/schema.sql` + миграции + версия схемы
-- [ ] ★ Таблица `screenshot_analyses` + колонки `ocr_status` / `ocr_analysis_id`
+- [x] `infrastructure/cache/schema.sql` + миграции + версия схемы
+- [x] ★ Таблица `screenshot_analyses` + колонки `ocr_status` / `ocr_analysis_id`
       в `ticket_sessions` — **создаются сразу**, чтобы M13 не требовал миграции
-- [ ] Репозитории: `items`, `users`, `transactions`, `progression_state`, `ticket_sessions`, `boost_order_lines`
-- [ ] Хранение денег как `TEXT` → `Decimal`
-- [ ] `infrastructure/cache/sync.py` — полный и инкрементальный синк
-- [ ] Фоновые задачи (`tasks.loop`) с настраиваемыми интервалами
-- [ ] Inline-рефреш при устаревших данных (`STALE_AFTER`)
-- [ ] Обязательный полный синк при старте до регистрации команд
-- [ ] Метрики синка в лог
+- [x] Репозитории: `items`, `users`, `transactions`, `progression_state`, `ticket_sessions`, `boost_order_lines`
+- [x] Хранение денег как `TEXT` → `Decimal`
+- [x] `infrastructure/cache/sync.py` — полный и инкрементальный синк
+      (`sync_items` — 1 запрос/цикл каждые `SYNC_ITEMS_INTERVAL_SECONDS`; `sync_users_and_transactions` —
+      2 запроса/цикл каждые `SYNC_USERS_INTERVAL_SECONDS`, включая проверку формул)
+- [x] Фоновые задачи (`tasks.loop`) с настраиваемыми интервалами — в `presentation/bot.py::_setup_cache`
+- [x] Inline-рефреш при устаревших данных (`STALE_AFTER`) — `CacheSync.ensure_fresh(max_age_seconds=...)`
+- [x] Обязательный полный синк при старте до регистрации команд — `setup_hook` → `run_startup_sync()` → `tree.sync()`
+- [x] Метрики синка в лог — `SyncReport` + `logger.info` на каждый цикл
 
-**DoD:** после старта SQLite содержит все предметы/пользователей/сделки; цикл синка ≤ 2 запроса к API;
-попытка записи в формульную колонку падает с `ProtectedRangeWriteError` до обращения к API.
+**DoD:** проверено **вживую** против реальной таблицы (только операции чтения — `credentials/service_account.json`
+уже даёт этого достаточно; доступ «Редактор» для записи по-прежнему не подтверждён, см. ⛔ §17.4):
+`validate_layout()` проходит без расхождений; `run_startup_sync()` кладёт в SQLite
+219 предметов, 237 пользователей, 64 валидные сделки (554 исторические строки без даты корректно
+пропущены и залогированы — колонка «Дата» реально пуста у старых записей); `sync_users_and_transactions`
+укладывается в 2 запроса, `sync_items` — в 1; попытка записи в `F`/`G`/`J`…`P`/`R`/`S` падает с
+`ProtectedRangeWriteError` до сети (протестировано exhaustively). Живая проверка также поймала реальную
+проблему таблицы: формулы `F`/`G` уже не покрывают весь диапазон данных (0 свободных строк) — бот
+корректно предупреждает, это открытое действие для заказчика (§17.5), не баг бота.
+
+**Важные находки в процессе (задокументированы прямо в коде):**
+- Реальное имя листа — `Мейн скуп` (строчная «с»), а не `Мейн Скуп`, как в тексте плана; `layouts.py`
+  и все заголовки `DATABASE_BLOCKS` собраны по факту из живой таблицы, а не по глоссам из PLAN.md.
+- `UserProfile`/`TransactionRecord` не хранят `nick_display` в кэш-таблице `users`/`transactions`
+  по схеме §8.1 «как есть» — `nick_display` для транзакций восстанавливается `LEFT JOIN users`
+  (репозиторий транзакций), а для `users` передаётся отдельным параметром `nick_displays`, который
+  `CacheSync` строит из исходной (не приведённой к нижнему регистру) колонки `B`.
+- **Найден и исправлен баг в `SheetsClient.batch_get`**: Google Sheets API возвращает `range` в
+  ответе в нормализованном виде (`"DataBase!A3:H1598"` вместо запрошенного `"DataBase!A3:H"`), из-за
+  чего сопоставление по эхо-строке всегда давало пустой результат для открытых диапазонов — синк
+  тихо писал 0 записей. Пойман только живой проверкой (юнит-тесты с фейковым клиентом эту ошибку не
+  ловили, так как фейк эхировал точную строку запроса). Исправлено на позиционное сопоставление
+  (Google гарантирует порядок `valueRanges` == порядку `ranges` в запросе).
+- **Найден и исправлен мёртвый код в `_parse_items`**: `_to_int()` всегда возвращает `int` (0 по
+  умолчанию), поэтому проверка `item_id is None` никогда не срабатывала — строка с пустым `id`
+  получала `id=0` вместо пропуска. Пойман тестом `test_parse_items_skips_row_missing_id`.
 
 ---
 
@@ -421,5 +448,6 @@
 | 31.07.2026 | **Получены реквизиты.** Guild ID, Spreadsheet ID, ключ service account (`credentials/service_account.json`, проект `test-ds-bot`) — лежит по плану, перемещать не потребовалось. `.gitignore` проверен, секретов в git нет. ⛔ Токен бота передан открытым текстом → требует перевыпуска. |
 | 31.07.2026 | **Добавлен задел под OCR** (решение A7). Порт `OcrGateway` + `NullOcrGateway`, DTO, таблица `screenshot_analyses` и сбор датасета `data/ocr_samples/` — всё в v1.0, начиная с M9. Новый этап **M13 — OCR** (2.5–3 д) с входным условием «≥ 150 образцов». Итого с OCR ~20.5 д. |
 | 02.08.2026 | **M0 завершён.** Каркас проекта: `pyproject.toml` (deps, ruff `I/N/D/ANN/RUF/UP/B/DTZ/S`, mypy `--strict`, pytest, coverage ≥85 %), `.env.example` по §14, дерево пакетов `src/stalbot/{domain,application,infrastructure,presentation,config}`, `config/settings.py` (`pydantic-settings`, fail-fast), `config/ids.py` (категории тикетов, роли рангов/рефералов, `PARTNER_ROLE_ID`, Ticket Tool), `presentation/bot.py` + `__main__.py` + `bootstrap.py` (пустой бот), `.pre-commit-config.yaml`, минимальный `README.md`. `ruff check`, `ruff format --check`, `mypy --strict` — чисто. Запуск с плейсхолдер-токеном подтвердил сборку графа зависимостей вплоть до вызова Discord API (`401 Unauthorized` — ожидаемо, реальный токен не выпущен). Все docstrings и технические комментарии — на английском (решение §17.2 п.5); `ruff` поймал нарушение (`RUF002/RUF003` на кириллице в комментариях) — исправлено. |
+| 02.08.2026 | **M2 завершён.** Sheets: `infrastructure/sheets/{a1,protection,ratelimit,client,layouts}.py` — A1-нотация (позиционная и квотированная, юникод-имена листов), `ensure_writable()` с исчерпывающим тестом по всем колонкам `DataBase` + AST-скан на посторонние вызовы `batch_update`, token-bucket рейт-лимитер с retry+backoff, `SheetsClient` (`batch_get`/`batch_update`/`write_verified`/`read_until`/`read_formula_extent`/`copy_formula_down`/`validate_layout`), `SYNC_LAYOUTS` и карта блоков `DataBase` с заголовками, снятыми **вживую** с реальной таблицы (реальное имя листа — `Мейн скуп`, не `Мейн Скуп`, как в тексте плана). Кэш: `infrastructure/cache/{schema.sql,db.py}` (полная схема §8.1, версия схемы в `sync_meta`), репозитории `items`/`users`/`transactions`/`progression_state`/`ticket_sessions`/`boost_order_lines`, `sync.py` (`CacheSync.run_startup_sync/sync_items/sync_users_and_transactions/ensure_fresh`, парсинг с устойчивостью к «грязным» историческим строкам). `presentation/bot.py`/`bootstrap.py` дополнены: `setup_hook` открывает кэш и обязательно синкает **до** регистрации команд, два `tasks.loop` с интервалами из `Settings`, предупреждения о нехватке формул уходят в лог-канал через `EmbedFactory`. Добавлены `domain/clock.py::parse_sheet_datetime()`, `domain/entities/{item,transaction,user_profile}.py`, `application/ports/clock.py`, `application/dto/{progression_state,ticket_session,boost_order_line}.py`, `SheetStructureError`/`ProtectedRangeWriteError` в иерархию исключений. Всего 418 тестов, покрытие 94.29 % (`ruff`/`mypy --strict` чисты). **Проверено вживую** (только чтение) против реальной таблицы: `validate_layout()` проходит, `run_startup_sync()` кладёт в SQLite 219 предметов / 237 пользователей / 64 сделки (554 исторические строки без даты корректно пропущены). Живая проверка поймала и позволила исправить два реальных бага: (1) `SheetsClient.batch_get` сопоставлял результат по эхо-строке `range`, а Google нормализует открытые диапазоны (`"A3:H"` → `"A3:H1598"`) — синк тихо писал 0 записей, юнит-тесты с фейком этого не ловили; исправлено на позиционное сопоставление; (2) мёртвый код в `_parse_items` (`_to_int()` никогда не возвращает `None`) пропускал проверку на пустой `id`. Также обнаружено (не баг бота, а реальное состояние таблицы): формулы `F`/`G` уже не покрывают весь диапазон сделок — бот корректно предупреждает, задокументировано как открытое действие заказчика. |
 | 02.08.2026 | **M1 завершён.** Core-модули: `domain/errors.py` (иерархия `StalbotError`), `domain/money.py` (`parse_amount`/`evaluate_amount`/`format_amount`/`format_compact`, AST-калькулятор без `eval`, защита по длине/глубине/степени), `domain/clock.py` (`GMT3`, `SystemClock`, `DateRange`, `parse_deadline` с относительными и абсолютными форматами), `domain/nick.py` (`normalize_nick`), `domain/enums.py` (`DealType`, `ItemCategory`, `TicketKind` — `config/ids.py` обновлён на использование `TicketKind`). Presentation: `presentation/embeds/{palette,progress,factory}.py` (`EmbedFactory.success/info/warning/error/ticket/audit`, автообрезка под лимиты Discord + публичная `enforce_limits()`), `presentation/checks.py` (`@admin_only()`), `presentation/errors.py` (глобальный `on_app_command_error`, маппинг иерархии исключений на embed). Application/infrastructure: `application/dto/audit_event.py`, `application/ports/audit_gateway.py`, `application/services/audit.py` (очередь + фоновый воркер, батчинг до 10 embed'ов/сообщение, fallback в файловый лог), `infrastructure/discord/audit_channel.py`, `infrastructure/logging/{trace.py,setup.py}` (`contextvars`-трассировка trace_id, `structlog` → JSON stdout + ротация файла). `presentation/bot.py` дополнен: кастомный `CommandTree` с единым `on_error`, `on_app_command_completion` пишет `AuditEvent` в очередь, временная диагностическая `/ping` (будет заменена `/healthcheck` в M11). `bootstrap.py` собирает полный граф зависимостей (logging → EmbedFactory → Bot → AuditChannelGateway → AuditService). Всего 221 тест (113 — `money.py`, включая hypothesis-свойство round-trip), покрытие 91.53 % (порог 85 % пройден; домен ≥ 96 %, сервисы ≥ 98 %); `ruff check`/`ruff format --check`/`mypy --strict` чисты на 48 файлах. Инварианты (naive `datetime.now()`, прямые `discord.Embed()` вне фабрики) проверены grep'ом — нарушений нет. Живая проверка `/ping` в Discord отложена до перевыпуска токена (⛔ §17.4) — запуск бота подтверждён до границы `401 Unauthorized`. |
 | 31.07.2026 | **Все вопросы закрыты заказчиком.** Добавлены решения A5 (формулы не трогать — бот их не пишет вообще, §7.3) и A6 (канон чисел = формулы, §9.1.1). Принято: `/set_rank` выдаёт только роль; `/set_referral` пишет в первую строку; прибыль = покупки − продажи; ID перенумеровываются; поздравления идут в канал события; скриншоты — в лог-канал через `attachment://` без отдельного архива; постраничный select; редактор заказа in-place. Роль 🤝 Партнёр: `1518584570457358556`. Блокеров не осталось. |

@@ -56,5 +56,22 @@ class CacheStaleError(InfrastructureError):
     """Cached data is older than the configured staleness threshold."""
 
 
+class ProtectedRangeWriteError(InfrastructureError):
+    """Code attempted to write a formula-owned Sheets column.
+
+    Raised by `infrastructure.sheets.protection` before any network call is
+    made, so a bug can never overwrite a formula (see PLAN.md §7.3).
+    """
+
+
+class SheetStructureError(InfrastructureError):
+    """The spreadsheet's sheets/headers do not match what the bot expects.
+
+    Raised at startup and on each full sync (PLAN.md §16: "Ручные правки
+    таблицы ломают структуру" — the bot refuses to run against a sheet whose
+    layout it can no longer trust).
+    """
+
+
 class PermissionError(StalbotError):
     """A user without sufficient rights invoked an admin-only action."""
