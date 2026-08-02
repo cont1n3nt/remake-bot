@@ -18,3 +18,7 @@ class ProgressionState:
     last_rank: str | None
     last_referral_role: str | None
     announced_at: datetime | None
+    #: Set by `/set_rank` (M8); while true, the background poller leaves the
+    #: rank ladder alone entirely — it neither grants the sheet-computed
+    #: rank role nor revokes the manually-assigned one (PLAN.md §10.12).
+    manual_rank_role: bool = False

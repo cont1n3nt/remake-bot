@@ -39,17 +39,20 @@ class ProgressionStateRepository:
         """
         await self._conn.execute(
             """
-            INSERT INTO progression_state (nick_norm, last_rank, last_referral_role, announced_at)
-            VALUES (:nick_norm, :last_rank, :last_referral_role, :announced_at)
+            INSERT INTO progression_state
+                (nick_norm, last_rank, last_referral_role, manual_rank_role, announced_at)
+            VALUES (:nick_norm, :last_rank, :last_referral_role, :manual_rank_role, :announced_at)
             ON CONFLICT (nick_norm) DO UPDATE SET
                 last_rank = excluded.last_rank,
                 last_referral_role = excluded.last_referral_role,
+                manual_rank_role = excluded.manual_rank_role,
                 announced_at = excluded.announced_at
             """,
             {
                 "nick_norm": state.nick,
                 "last_rank": state.last_rank,
                 "last_referral_role": state.last_referral_role,
+                "manual_rank_role": int(state.manual_rank_role),
                 "announced_at": state.announced_at.isoformat() if state.announced_at else None,
             },
         )
@@ -61,5 +64,6 @@ def _row_to_state(row: aiosqlite.Row) -> ProgressionState:
         nick=NormalizedNick(row["nick_norm"]),
         last_rank=row["last_rank"],
         last_referral_role=row["last_referral_role"],
+        manual_rank_role=bool(row["manual_rank_role"]),
         announced_at=datetime.fromisoformat(row["announced_at"]) if row["announced_at"] else None,
     )

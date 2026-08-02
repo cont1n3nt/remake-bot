@@ -9,13 +9,17 @@ from discord.ext import commands, tasks
 
 from stalbot.application.dto.audit_event import AuditEvent
 from stalbot.application.services.audit import AuditService
+from stalbot.application.services.progression import ProgressionService
 from stalbot.config.settings import Settings
 from stalbot.domain.clock import SystemClock
 from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
+from stalbot.infrastructure.cache.repositories.progression_state import ProgressionStateRepository
 from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
 from stalbot.infrastructure.cache.repositories.users import UsersCacheRepository
 from stalbot.infrastructure.cache.sync import CacheSync
+from stalbot.infrastructure.discord.audit_channel import AuditChannelGateway
+from stalbot.infrastructure.discord.role_gateway import DiscordRoleGateway
 from stalbot.infrastructure.logging.trace import current_trace_id
 from stalbot.infrastructure.sheets.client import SheetsClient
 from stalbot.presentation.embeds.factory import EmbedFactory
@@ -74,8 +78,11 @@ class StalbotBot(commands.Bot):
         self.audit_service: AuditService | None = None
         #: Built by `setup_hook` once the cache connection is open.
         self.cache_sync: CacheSync | None = None
+        #: Built by `setup_hook` alongside `cache_sync`.
+        self.progression_service: ProgressionService | None = None
         self._users_sync_loop: tasks.Loop[Any] | None = None
         self._items_sync_loop: tasks.Loop[Any] | None = None
+        self._progression_loop: tasks.Loop[Any] | None = None
         self._startup_warnings: tuple[str, ...] = ()
 
     async def setup_hook(self) -> None:
@@ -106,6 +113,18 @@ class StalbotBot(commands.Bot):
         report = await cache_sync.run_startup_sync()
         self._startup_warnings = report.warnings
 
+        assert self.audit_service is not None  # noqa: S101 - set synchronously in bootstrap.build_bot
+        self.progression_service = ProgressionService(
+            UsersCacheRepository(connection),
+            ProgressionStateRepository(connection),
+            DiscordRoleGateway(self, self.settings.guild_id),
+            AuditChannelGateway(self, self.settings.log_channel_id),
+            self.audit_service,
+            self.embed_factory,
+            sheets=self.sheets_client,
+            clock=SystemClock(),
+        )
+
         # Loop intervals are per-deployment (`Settings`), so the loops are
         # built here rather than with `@tasks.loop(...)` at class scope.
         # `.start()` fires an immediate first tick on top of the sync just
@@ -118,8 +137,12 @@ class StalbotBot(commands.Bot):
         self._items_sync_loop = tasks.loop(seconds=self.settings.sync_items_interval_seconds)(
             self._run_items_sync
         )
+        self._progression_loop = tasks.loop(seconds=self.settings.progression_poll_seconds)(
+            self._run_progression_poll
+        )
         self._users_sync_loop.start()
         self._items_sync_loop.start()
+        self._progression_loop.start()
 
     async def _run_users_sync(self) -> None:
         if self.cache_sync is None:
@@ -131,6 +154,18 @@ class StalbotBot(commands.Bot):
         if self.cache_sync is None:
             return
         await self.cache_sync.sync_items()
+
+    async def _run_progression_poll(self) -> None:
+        """Background poll over the whole player base (PLAN.md §9.2), no event channel."""
+        if self.progression_service is None:
+            return
+        await self.progression_service.sync()
+
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        """Detect a server-boost transition and record it in column `Q` (PLAN.md §9.2)."""
+        if before.premium_since == after.premium_since or self.progression_service is None:
+            return
+        await self.progression_service.sync_booster_flag(after.id, after.premium_since is not None)
 
     async def _send_warnings(self, warnings: tuple[str, ...]) -> None:
         if not warnings:
@@ -186,6 +221,8 @@ class StalbotBot(commands.Bot):
             self._users_sync_loop.cancel()
         if self._items_sync_loop is not None:
             self._items_sync_loop.cancel()
+        if self._progression_loop is not None:
+            self._progression_loop.cancel()
         await self.cache_db.close()
         await super().close()
 

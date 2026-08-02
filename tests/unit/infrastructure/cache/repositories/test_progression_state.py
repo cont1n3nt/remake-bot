@@ -60,3 +60,35 @@ async def test_announced_at_none_round_trips(connection: aiosqlite.Connection) -
 
     assert result is not None
     assert result.announced_at is None
+
+
+async def test_manual_rank_role_defaults_to_false(connection: aiosqlite.Connection) -> None:
+    repo = ProgressionStateRepository(connection)
+    nick = NormalizedNick("scaryyyyy")
+    await repo.upsert(
+        ProgressionState(nick=nick, last_rank=None, last_referral_role=None, announced_at=None)
+    )
+
+    result = await repo.get(nick)
+
+    assert result is not None
+    assert result.manual_rank_role is False
+
+
+async def test_manual_rank_role_true_round_trips(connection: aiosqlite.Connection) -> None:
+    repo = ProgressionStateRepository(connection)
+    nick = NormalizedNick("scaryyyyy")
+    await repo.upsert(
+        ProgressionState(
+            nick=nick,
+            last_rank="💎 Elite",
+            last_referral_role=None,
+            announced_at=None,
+            manual_rank_role=True,
+        )
+    )
+
+    result = await repo.get(nick)
+
+    assert result is not None
+    assert result.manual_rank_role is True

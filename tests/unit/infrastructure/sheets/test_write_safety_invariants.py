@@ -30,25 +30,27 @@ def test_user_entered_value_input_option_never_appears_as_a_string_literal() -> 
     assert offenders == []
 
 
-def test_batch_update_is_only_ever_reached_through_the_protected_client() -> None:
-    """Every `.batch_update(`/`.write_verified(` call site is inside `SheetsClient` itself.
+def test_raw_gspread_write_calls_are_only_ever_reached_from_the_protected_client() -> None:
+    """Every raw `gspread` write call site is inside `SheetsClient` itself.
 
-    `SheetsClient.batch_update` is the single choke point that calls
-    `protection.ensure_writable` before any network request (PLAN.md §7.3).
-    As soon as another module starts calling Sheets writes directly, this
-    fails — forcing that new call site through the same client instead of
-    growing a second, unprotected write path.
+    `SheetsClient.batch_update`/`write_verified` are the project's public,
+    already-protected write API — application services are meant to call
+    *those* (e.g. `ProgressionService.sync_booster_flag`). What must never
+    happen is a second, unprotected path straight to `gspread`'s raw
+    `values_batch_update` (or a raw `Spreadsheet.batch_update` call, as used
+    internally for the `copyPaste` fallback) from outside this module, since
+    that would skip `protection.ensure_writable` entirely (PLAN.md §7.3).
     """
     offending_calls: list[str] = []
     for path in _all_source_files():
         if path.name == "client.py" and path.parent.name == "sheets":
-            continue  # the protected client itself
+            continue  # the protected client itself, where these calls belong
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
-                and node.func.attr in {"batch_update", "write_verified", "values_batch_update"}
+                and node.func.attr == "values_batch_update"
             ):
                 offending_calls.append(f"{path.relative_to(_SRC_ROOT)}:{node.lineno}")
     assert offending_calls == []

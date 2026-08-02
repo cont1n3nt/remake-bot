@@ -5,8 +5,8 @@
 > **Обозначения:** `[ ]` не начато · `[~]` в работе · `[x]` готово и проверено · `[!]` заблокировано
 >
 > **Последнее обновление:** 02.08.2026
-> **Готовность v1.0:** ▰▰▰▱▱▱▱▱▱▱ **23 %** (3 / 13 этапов, M0–M12)
-> **Готовность с OCR:** ▰▰▰▱▱▱▱▱▱▱ **21 %** (3 / 14 этапов, M0–M13)
+> **Готовность v1.0:** ▰▰▰▰▱▱▱▱▱▱ **31 %** (4 / 13 этапов, M0–M12)
+> **Готовность с OCR:** ▰▰▰▱▱▱▱▱▱▱ **29 %** (4 / 14 этапов, M0–M13)
 > **Продуктовых блокеров нет** — все решения приняты (§17.1 в `PLAN.md`).
 > **⛔ Открыто одно действие:** перевыпустить `DISCORD_TOKEN` (§17.4).
 
@@ -19,7 +19,7 @@
 | M0 | Каркас проекта | `[x]` | 100 % | 0.5 д |
 | M1 | Core: деньги, время, embed'ы, аудит | `[x]` | 100 % | 1.5 д |
 | M2 | Google Sheets + SQLite-кэш | `[x]` | 100 % | 2 д |
-| M3 | Домен прогрессии + Discord-роли | `[ ]` | 0 % | 1 д |
+| M3 | Домен прогрессии + Discord-роли | `[x]` | 100 % | 1 д |
 | M4 | `/add` | `[ ]` | 0 % | 1 д |
 | M5 | `/profile`, `/referrals` | `[ ]` | 0 % | 1 д |
 | M6 | База предметов и цены | `[ ]` | 0 % | 2.5 д |
@@ -193,24 +193,41 @@
 
 ---
 
-## M3 — Домен прогрессии + Discord-роли · `[ ]` 0 %
+## M3 — Домен прогрессии + Discord-роли · `[x]` 100 %
 
-- [ ] `domain/progression/ranks.py` — `RANKS` с порогами **50 / 300 / 1200 / 3500 / 7000**
-- [ ] `domain/progression/referrals.py` — `REFERRAL_ROLES` с порогами **1 / 3 / 7 / 20 / 50**
-- [ ] `PARTNER_ROLE_ID = 1518584570457358556` (3-й этап реферальной системы)
-- [ ] `domain/progression/perks.py` — тексты бонусов **по канону §9.1.1** (1 500 000 ₽ за Coin, буст = ⚡ 30, и т. д.)
-- [ ] Ревизия: старые числа из текстового описания не встречаются нигде в UI
-- [ ] Контрактный тест: пороги в коде == пороги в формулах `R` / `S`
-- [ ] `infrastructure/discord/role_gateway.py` — выдача/снятие, взаимоисключение внутри лестницы
-- [ ] `application/services/progression.py` — `sync(nicks, *, announce_to=None)`
-- [ ] Маршрутизация поздравлений: канал события → лог-канал для фонового поллера
-- [ ] Флаг `manual_rank_role` — поллер не снимает роли, выданные через `/set_rank`
-- [ ] Защита от повторных поздравлений (запись состояния до отправки)
-- [ ] Фоновый поллер `tasks.loop(minutes=5)` по всей базе
-- [ ] `on_member_update` → детект буста сервера → запись флага в колонку `Q`
-- [ ] Публичное поздравление с текущими 🪙 / ⚡ и списком новых бонусов
+- [x] `domain/progression/ranks.py` — `RANKS` с порогами **50 / 300 / 1200 / 3500 / 7000**
+- [x] `domain/progression/referrals.py` — `REFERRAL_ROLES` с порогами **1 / 3 / 7 / 20 / 50**
+- [x] `PARTNER_ROLE_ID = 1518584570457358556` (3-й этап реферальной системы) — уже был в `config/ids.py`
+      с M0, переэкспортирован из `domain/progression/referrals.py`. ⚠️ Сама выдача роли по совокупному
+      обороту рефералов (SUMIF по H/O) **не реализована** — это агрегация по всем рефералам конкретного
+      игрока, не привязанная ни к одному чек-листу текущего этапа; отложено до конкретной задачи
+      (вероятно, вместе с M5 `/referrals`, которому нужен тот же реверс-индекс «кто кого пригласил»).
+- [x] `domain/progression/perks.py` — тексты бонусов **по канону §9.1.1** (1 500 000 ₽ за Coin, буст = ⚡ 30, и т. д.)
+      — только формуло-подтверждённые числа (разовые бонусы, бонус за крупную сделку, буст, XP-порог 250).
+      Текстовые «скидка/наценка» и «приоритет в очереди» из мокапа `/profile` (§10.2) не формуло-подтверждены
+      ни для одного ранга кроме примера Elite — сознательно не выдуманы, оставлены на M5.
+- [x] Ревизия: старые числа из текстового описания не встречаются нигде в UI (проверено grep'ом)
+- [x] Контрактный тест: пороги в коде == пороги в формулах `R` / `S` — сверено с замороженным снимком
+      реальных формул `DataBase!R3`/`DataBase!S3`, снятых вживую в этой сессии
+- [x] `infrastructure/discord/role_gateway.py` — выдача/снятие, взаимоисключение внутри лестницы
+      (через `RoleSet.universe`, единая логика для обеих лестниц одновременно)
+- [x] `application/services/progression.py` — `sync(nicks, *, announce_to=None)`
+- [x] Маршрутизация поздравлений: канал события → лог-канал для фонового поллера
+      (через `AuditGateway.send_batch`, когда `announce_to=None`)
+- [x] Флаг `manual_rank_role` — поллер не снимает роли, выданные через `/set_rank`. Добавлена колонка
+      `progression_state.manual_rank_role` (миграция схемы, `SCHEMA_VERSION` 1→2 — реальных данных для
+      бэкфилла ещё нет, проект не в проде). Сама команда `/set_rank`, выставляющая флаг, — задача M8;
+      здесь готова инфраструктура + `ProgressionService.sync()` уже уважает флаг.
+- [x] Защита от повторных поздравлений (запись состояния до отправки)
+- [x] Фоновый поллер `tasks.loop(minutes=5)` по всей базе — `PROGRESSION_POLL_SECONDS=300` (уже был в `Settings` с M0)
+- [x] `on_member_update` → детект буста сервера → запись флага в колонку `Q`
+- [x] Публичное поздравление с текущими 🪙 / ⚡ и списком новых бонусов
 
-**DoD:** правка XP в таблице → в течение 5 мин роль выдана, поздравление ушло в лог-канал, дублей нет.
+**DoD:** покрыто юнит-тестами (479 тестов, 94.81 % покрытия; `ruff`/`mypy --strict` чисты): смена ранга
+в кэше → роль выдана и снята предыдущая (лестница), поздравление отправлено ровно один раз, состояние
+записано *до* отправки, повторный синк без изменений не дублирует. Живая проверка «5 минут» и реальной
+выдачи роли в Discord невозможна до перевыпуска `DISCORD_TOKEN` (⛔ §17.4) — интервал `tasks.loop`
+подтверждён равным `PROGRESSION_POLL_SECONDS` (300 с) через unit-тест на сам конструктор луп'а.
 
 ---
 
@@ -448,6 +465,7 @@
 | 31.07.2026 | **Получены реквизиты.** Guild ID, Spreadsheet ID, ключ service account (`credentials/service_account.json`, проект `test-ds-bot`) — лежит по плану, перемещать не потребовалось. `.gitignore` проверен, секретов в git нет. ⛔ Токен бота передан открытым текстом → требует перевыпуска. |
 | 31.07.2026 | **Добавлен задел под OCR** (решение A7). Порт `OcrGateway` + `NullOcrGateway`, DTO, таблица `screenshot_analyses` и сбор датасета `data/ocr_samples/` — всё в v1.0, начиная с M9. Новый этап **M13 — OCR** (2.5–3 д) с входным условием «≥ 150 образцов». Итого с OCR ~20.5 д. |
 | 02.08.2026 | **M0 завершён.** Каркас проекта: `pyproject.toml` (deps, ruff `I/N/D/ANN/RUF/UP/B/DTZ/S`, mypy `--strict`, pytest, coverage ≥85 %), `.env.example` по §14, дерево пакетов `src/stalbot/{domain,application,infrastructure,presentation,config}`, `config/settings.py` (`pydantic-settings`, fail-fast), `config/ids.py` (категории тикетов, роли рангов/рефералов, `PARTNER_ROLE_ID`, Ticket Tool), `presentation/bot.py` + `__main__.py` + `bootstrap.py` (пустой бот), `.pre-commit-config.yaml`, минимальный `README.md`. `ruff check`, `ruff format --check`, `mypy --strict` — чисто. Запуск с плейсхолдер-токеном подтвердил сборку графа зависимостей вплоть до вызова Discord API (`401 Unauthorized` — ожидаемо, реальный токен не выпущен). Все docstrings и технические комментарии — на английском (решение §17.2 п.5); `ruff` поймал нарушение (`RUF002/RUF003` на кириллице в комментариях) — исправлено. |
+| 02.08.2026 | **M3 завершён.** `domain/progression/{ladder,ranks,referrals,perks}.py` — общий generic `Ladder[TierT]` (current/next/progress/perks_of/by_label/by_role_id/role_ids), `RankTier`/`RANKS` (пороги 50/300/1200/3500/7000 из `config.ids.RANK_ROLE_IDS`), `ReferralTier`/`REFERRAL_ROLES` (пороги 1/3/7/20/50), `perks.py` — только формуло-подтверждённые числа (разовые бонусы рангов/реф-ролей, бонус за крупную сделку, буст-бонус, XP-порог 250). Контрактный тест `test_ladder_matches_sheet_formula.py` сверяет пороги с замороженным снимком реальных формул `DataBase!R3`/`S3`. `application/ports/role_gateway.py` (`RoleSet`/`RoleDiff`/`RoleGateway`) + `infrastructure/discord/role_gateway.py` (`DiscordRoleGateway`, взаимоисключение внутри лестницы через `RoleSet.universe`, устойчив к `NotFound`/`Forbidden`/недоступной гильдии). `application/services/progression.py` — `ProgressionService.sync(nicks, *, announce_to=None)`: сверка ролей всегда, повышение объявляется только если предыдущее состояние существовало и новый тир строго выше (защита от даунгрейда/спама при первом синке), состояние пишется до отправки, поздравление — в `announce_to` или в лог-канал через `AuditGateway`, плюс запись в аудит. Флаг `manual_rank_role` (новая колонка в `progression_state`, `SCHEMA_VERSION` 1→2) — поллер полностью исключает ранговую лестницу из `sync_roles`, пока флаг не снят (готово к `/set_rank` в M8). `sync_booster_flag()` пишет колонку `Q` через уже защищённый `SheetsClient.batch_update` и пересинкает игрока. `presentation/bot.py`: `on_member_update` детектит смену буста, третий `tasks.loop` (`PROGRESSION_POLL_SECONDS=300`) гоняет фоновый поллер по всей базе. Всего 479 тестов, покрытие 94.81 % (`ruff`/`mypy --strict` чисты на 101 файле). Самопроверка нашла и исправила: (1) неверный AST-инвариант-тест из M2, ложно запрещавший легитимные вызовы `SheetsClient.batch_update()` извне — переписан на реальный риск (сырой `values_batch_update` gspread в обход защиты); (2) пропущенный в первом проходе пункт чек-листа `manual_rank_role`. Осознанно не реализовано: выдача роли 🤝 Партнёр по совокупному обороту рефералов (агрегация, не привязанная к чек-листу текущего этапа — отложена до M5/`/referrals`, которому нужен тот же реверс-индекс). |
 | 02.08.2026 | **M2 завершён.** Sheets: `infrastructure/sheets/{a1,protection,ratelimit,client,layouts}.py` — A1-нотация (позиционная и квотированная, юникод-имена листов), `ensure_writable()` с исчерпывающим тестом по всем колонкам `DataBase` + AST-скан на посторонние вызовы `batch_update`, token-bucket рейт-лимитер с retry+backoff, `SheetsClient` (`batch_get`/`batch_update`/`write_verified`/`read_until`/`read_formula_extent`/`copy_formula_down`/`validate_layout`), `SYNC_LAYOUTS` и карта блоков `DataBase` с заголовками, снятыми **вживую** с реальной таблицы (реальное имя листа — `Мейн скуп`, не `Мейн Скуп`, как в тексте плана). Кэш: `infrastructure/cache/{schema.sql,db.py}` (полная схема §8.1, версия схемы в `sync_meta`), репозитории `items`/`users`/`transactions`/`progression_state`/`ticket_sessions`/`boost_order_lines`, `sync.py` (`CacheSync.run_startup_sync/sync_items/sync_users_and_transactions/ensure_fresh`, парсинг с устойчивостью к «грязным» историческим строкам). `presentation/bot.py`/`bootstrap.py` дополнены: `setup_hook` открывает кэш и обязательно синкает **до** регистрации команд, два `tasks.loop` с интервалами из `Settings`, предупреждения о нехватке формул уходят в лог-канал через `EmbedFactory`. Добавлены `domain/clock.py::parse_sheet_datetime()`, `domain/entities/{item,transaction,user_profile}.py`, `application/ports/clock.py`, `application/dto/{progression_state,ticket_session,boost_order_line}.py`, `SheetStructureError`/`ProtectedRangeWriteError` в иерархию исключений. Всего 418 тестов, покрытие 94.29 % (`ruff`/`mypy --strict` чисты). **Проверено вживую** (только чтение) против реальной таблицы: `validate_layout()` проходит, `run_startup_sync()` кладёт в SQLite 219 предметов / 237 пользователей / 64 сделки (554 исторические строки без даты корректно пропущены). Живая проверка поймала и позволила исправить два реальных бага: (1) `SheetsClient.batch_get` сопоставлял результат по эхо-строке `range`, а Google нормализует открытые диапазоны (`"A3:H"` → `"A3:H1598"`) — синк тихо писал 0 записей, юнит-тесты с фейком этого не ловили; исправлено на позиционное сопоставление; (2) мёртвый код в `_parse_items` (`_to_int()` никогда не возвращает `None`) пропускал проверку на пустой `id`. Также обнаружено (не баг бота, а реальное состояние таблицы): формулы `F`/`G` уже не покрывают весь диапазон сделок — бот корректно предупреждает, задокументировано как открытое действие заказчика. |
 | 02.08.2026 | **M1 завершён.** Core-модули: `domain/errors.py` (иерархия `StalbotError`), `domain/money.py` (`parse_amount`/`evaluate_amount`/`format_amount`/`format_compact`, AST-калькулятор без `eval`, защита по длине/глубине/степени), `domain/clock.py` (`GMT3`, `SystemClock`, `DateRange`, `parse_deadline` с относительными и абсолютными форматами), `domain/nick.py` (`normalize_nick`), `domain/enums.py` (`DealType`, `ItemCategory`, `TicketKind` — `config/ids.py` обновлён на использование `TicketKind`). Presentation: `presentation/embeds/{palette,progress,factory}.py` (`EmbedFactory.success/info/warning/error/ticket/audit`, автообрезка под лимиты Discord + публичная `enforce_limits()`), `presentation/checks.py` (`@admin_only()`), `presentation/errors.py` (глобальный `on_app_command_error`, маппинг иерархии исключений на embed). Application/infrastructure: `application/dto/audit_event.py`, `application/ports/audit_gateway.py`, `application/services/audit.py` (очередь + фоновый воркер, батчинг до 10 embed'ов/сообщение, fallback в файловый лог), `infrastructure/discord/audit_channel.py`, `infrastructure/logging/{trace.py,setup.py}` (`contextvars`-трассировка trace_id, `structlog` → JSON stdout + ротация файла). `presentation/bot.py` дополнен: кастомный `CommandTree` с единым `on_error`, `on_app_command_completion` пишет `AuditEvent` в очередь, временная диагностическая `/ping` (будет заменена `/healthcheck` в M11). `bootstrap.py` собирает полный граф зависимостей (logging → EmbedFactory → Bot → AuditChannelGateway → AuditService). Всего 221 тест (113 — `money.py`, включая hypothesis-свойство round-trip), покрытие 91.53 % (порог 85 % пройден; домен ≥ 96 %, сервисы ≥ 98 %); `ruff check`/`ruff format --check`/`mypy --strict` чисты на 48 файлах. Инварианты (naive `datetime.now()`, прямые `discord.Embed()` вне фабрики) проверены grep'ом — нарушений нет. Живая проверка `/ping` в Discord отложена до перевыпуска токена (⛔ §17.4) — запуск бота подтверждён до границы `401 Unauthorized`. |
 | 31.07.2026 | **Все вопросы закрыты заказчиком.** Добавлены решения A5 (формулы не трогать — бот их не пишет вообще, §7.3) и A6 (канон чисел = формулы, §9.1.1). Принято: `/set_rank` выдаёт только роль; `/set_referral` пишет в первую строку; прибыль = покупки − продажи; ID перенумеровываются; поздравления идут в канал события; скриншоты — в лог-канал через `attachment://` без отдельного архива; постраничный select; редактор заказа in-place. Роль 🤝 Партнёр: `1518584570457358556`. Блокеров не осталось. |

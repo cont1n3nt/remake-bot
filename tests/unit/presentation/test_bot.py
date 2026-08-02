@@ -146,18 +146,23 @@ async def test_setup_cache_runs_startup_sync_before_starting_loops(
     bot.cache_db = CacheDb(tmp_path / "cache.sqlite3")
     fake_client = _FakeSheetsClient()
     bot.sheets_client = fake_client  # type: ignore[assignment]
+    bot.audit_service = MagicMock(spec=AuditService)
 
     await bot._setup_cache()
 
     assert fake_client.validate_calls == 1
     assert bot.cache_sync is not None
+    assert bot.progression_service is not None
     assert bot._users_sync_loop is not None
     assert bot._users_sync_loop.is_running()
     assert bot._items_sync_loop is not None
     assert bot._items_sync_loop.is_running()
+    assert bot._progression_loop is not None
+    assert bot._progression_loop.is_running()
 
     bot._users_sync_loop.cancel()
     bot._items_sync_loop.cancel()
+    bot._progression_loop.cancel()
     await bot.cache_db.close()
 
 
@@ -196,6 +201,75 @@ async def test_run_items_sync_delegates_to_cache_sync(monkeypatch: pytest.Monkey
     await bot._run_items_sync()
 
     cache_sync.sync_items.assert_awaited_once()
+
+
+async def test_run_progression_poll_delegates_to_progression_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    progression_service = MagicMock()
+    progression_service.sync = AsyncMock(return_value=[])
+    bot.progression_service = progression_service
+
+    await bot._run_progression_poll()
+
+    progression_service.sync.assert_awaited_once_with()
+
+
+async def test_run_progression_poll_is_a_no_op_before_progression_service_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+
+    await bot._run_progression_poll()  # must not raise
+
+
+async def test_on_member_update_syncs_booster_flag_on_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    progression_service = MagicMock()
+    progression_service.sync_booster_flag = AsyncMock()
+    bot.progression_service = progression_service
+
+    before = SimpleNamespace(premium_since=None)
+    after = SimpleNamespace(premium_since=datetime.now(UTC), id=42)
+
+    await bot.on_member_update(before, after)  # type: ignore[arg-type]
+
+    progression_service.sync_booster_flag.assert_awaited_once_with(42, True)
+
+
+async def test_on_member_update_is_a_no_op_when_boost_status_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    progression_service = MagicMock()
+    progression_service.sync_booster_flag = AsyncMock()
+    bot.progression_service = progression_service
+
+    same_time = datetime.now(UTC)
+    before = SimpleNamespace(premium_since=same_time)
+    after = SimpleNamespace(premium_since=same_time, id=42)
+
+    await bot.on_member_update(before, after)  # type: ignore[arg-type]
+
+    progression_service.sync_booster_flag.assert_not_called()
+
+
+async def test_on_member_update_is_a_no_op_before_progression_service_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    before = SimpleNamespace(premium_since=None)
+    after = SimpleNamespace(premium_since=datetime.now(UTC), id=42)
+
+    await bot.on_member_update(before, after)  # type: ignore[arg-type]  # must not raise
 
 
 async def test_send_warnings_is_a_no_op_for_empty_warnings(monkeypatch: pytest.MonkeyPatch) -> None:

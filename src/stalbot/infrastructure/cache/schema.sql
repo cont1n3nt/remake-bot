@@ -48,10 +48,13 @@ CREATE INDEX IF NOT EXISTS ix_tx_nick ON transactions (nick_norm);
 
 -- Drives promotion detection: the last-announced rank/referral role per
 -- player, so ProgressionService (M3) never sends the same congratulation twice.
+-- manual_rank_role: set by /set_rank (M8) — while true, the background
+-- poller leaves the rank ladder alone entirely (PLAN.md §10.12).
 CREATE TABLE IF NOT EXISTS progression_state (
     nick_norm TEXT PRIMARY KEY,
     last_rank TEXT,
     last_referral_role TEXT,
+    manual_rank_role INTEGER NOT NULL DEFAULT 0,
     announced_at TEXT
 );
 

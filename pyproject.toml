@@ -94,6 +94,10 @@ ignore = [
 # fixtures are literal Russian data mirroring the real spreadsheet.
 "tests/unit/infrastructure/cache/**" = ["RUF001", "RUF002", "RUF003"]
 "src/stalbot/infrastructure/cache/sync.py" = ["RUF001", "RUF002", "RUF003"]
+# Rank/referral-role labels and perk copy are literal Russian UI content;
+# the docstring quotes PLAN.md verbatim.
+"src/stalbot/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
