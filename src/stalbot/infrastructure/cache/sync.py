@@ -99,6 +99,11 @@ class CacheSync:
         self._users = users
         self._transactions = transactions
         self._clock = clock
+        #: Surfaced by `/healthcheck` and the per-minute metrics log (M11).
+        self.last_users_report: SyncReport | None = None
+        self.last_items_report: SyncReport | None = None
+        self._fresh_reads = 0
+        self._stale_refreshes = 0
 
     async def run_startup_sync(self) -> SyncReport:
         """Validate the sheet's structure, then run both sync cycles once.
@@ -164,13 +169,14 @@ class CacheSync:
             report.formula_free_rows,
             report.duration_seconds,
         )
+        self.last_users_report = report
         return report
 
     async def sync_items(self) -> SyncReport:
         """Refresh the item database cache."""
         started = time.monotonic()
         result = await self._sheets.batch_get([_ITEMS_RANGE])
-        items = _parse_items(result.get(_ITEMS_RANGE, []))
+        items = parse_items_block(result.get(_ITEMS_RANGE, []))
         await self._items.replace_all(items)
         report = SyncReport(
             items_synced=len(items),
@@ -178,7 +184,18 @@ class CacheSync:
             duration_seconds=time.monotonic() - started,
         )
         logger.info("items sync: %d items, %.2fs", report.items_synced, report.duration_seconds)
+        self.last_items_report = report
         return report
+
+    @property
+    def cache_hit_rate(self) -> float | None:
+        """Fraction of `ensure_fresh` calls that found the cache already fresh.
+
+        `None` until `ensure_fresh` has been called at least once — reported
+        by `/healthcheck` and the per-minute metrics log (PLAN.md §12, M11).
+        """
+        total = self._fresh_reads + self._stale_refreshes
+        return self._fresh_reads / total if total > 0 else None
 
     async def ensure_fresh(self, *, max_age_seconds: float) -> bool:
         """Trigger an inline users/transactions refresh if the cache is stale.
@@ -197,7 +214,9 @@ class CacheSync:
         if last_synced is not None:
             age = (self._clock.now() - last_synced).total_seconds()
             if age <= max_age_seconds:
+                self._fresh_reads += 1
                 return False
+        self._stale_refreshes += 1
         await self.sync_users_and_transactions()
         return True
 
@@ -347,7 +366,17 @@ def _parse_users(rows: CellGrid) -> list[UserProfile]:
     return profiles
 
 
-def _parse_items(rows: CellGrid) -> list[Item]:
+def parse_items_block(rows: CellGrid) -> list[Item]:
+    """Parse the item database block's raw cell grid into `Item`s.
+
+    Public (not `_`-prefixed) because `CatalogService.delete_item` (M6)
+    also needs to parse a fresh read of the same block to renumber it —
+    duplicating this row-shape knowledge would be the kind of drift PLAN.md
+    §1.3 rules out.
+
+    Args:
+        rows: Cell grid read from the `item database` block's A1 range.
+    """
     items: list[Item] = []
     for offset, raw_row in enumerate(rows):
         sheet_row = DATA_START_ROW + offset

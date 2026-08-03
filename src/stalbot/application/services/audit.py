@@ -45,6 +45,15 @@ class AuditService:
         """Enqueue *event* for delivery. Never blocks and never raises."""
         self._queue.put_nowait(event)
 
+    def queue_size(self) -> int:
+        """Return the number of events waiting to be delivered.
+
+        Surfaced by `/healthcheck` and the per-minute metrics log
+        (PLAN.md §12, M11) — a growing queue means the audit channel can't
+        keep up (or delivery is failing and events are piling up).
+        """
+        return self._queue.qsize()
+
     def start(self) -> None:
         """Start the background worker.
 

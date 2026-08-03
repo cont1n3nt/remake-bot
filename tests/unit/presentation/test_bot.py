@@ -312,3 +312,57 @@ async def test_on_ready_flushes_startup_warnings_once(monkeypatch: pytest.Monkey
 
     bot._send_warnings.assert_awaited_once_with(("⚠️ test",))
     assert len(bot._startup_warnings) == 0
+
+
+async def test_on_ready_refreshes_emoji_cache_when_guild_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    emoji = MagicMock(name="topot")
+    guild = SimpleNamespace(emojis=[emoji])
+    monkeypatch.setattr(bot, "get_guild", MagicMock(return_value=guild))
+
+    await bot.on_ready()
+
+    assert bot.emoji_resolver._by_name  # populated from guild.emojis
+
+
+async def test_on_ready_leaves_emoji_cache_empty_without_a_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    monkeypatch.setattr(bot, "get_guild", MagicMock(return_value=None))
+
+    await bot.on_ready()  # must not raise
+
+    assert bot.emoji_resolver._by_name == {}
+
+
+async def test_on_guild_emojis_update_refreshes_the_matching_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    guild = SimpleNamespace(id=settings.guild_id)
+    emoji = MagicMock()
+    emoji.name = "tail"
+
+    await bot.on_guild_emojis_update(guild, [], [emoji])  # type: ignore[arg-type]
+
+    assert bot.emoji_resolver.resolve("tail") is not None
+
+
+async def test_on_guild_emojis_update_ignores_other_guilds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    other_guild = SimpleNamespace(id=settings.guild_id + 1)
+    emoji = MagicMock()
+    emoji.name = "tail"
+
+    await bot.on_guild_emojis_update(other_guild, [], [emoji])  # type: ignore[arg-type]
+
+    assert bot.emoji_resolver.resolve("tail") is None

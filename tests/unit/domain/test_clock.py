@@ -4,7 +4,15 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from stalbot.domain.clock import GMT3, DateRange, format_date, format_datetime, parse_deadline
+from stalbot.domain.clock import (
+    GMT3,
+    DateRange,
+    format_date,
+    format_datetime,
+    format_duration,
+    parse_date,
+    parse_deadline,
+)
 from stalbot.domain.errors import DeadlineParseError, InvalidPeriodError
 
 NOW: datetime = datetime(2026, 7, 31, 21, 45, tzinfo=GMT3)
@@ -17,6 +25,24 @@ def test_format_date() -> None:
 def test_format_datetime_converts_to_gmt3() -> None:
     utc_value = datetime(2026, 7, 31, 18, 45, tzinfo=UTC)
     assert format_datetime(utc_value) == "31.07.2026 21:45"
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0, "0 с"),
+        (42, "42 с"),
+        (59, "59 с"),
+        (60, "1 мин"),
+        (90, "1 мин"),
+        (3600, "1 ч"),
+        (3665, "1 ч 1 мин"),
+        (86400, "1 д"),
+        (86400 + 3600 * 3 + 60 * 15, "1 д 3 ч 15 мин"),
+    ],
+)
+def test_format_duration(seconds: int, expected: str) -> None:
+    assert format_duration(seconds) == expected
 
 
 class TestDateRange:
@@ -91,3 +117,35 @@ class TestParseDeadline:
     def test_invalid(self, raw: str) -> None:
         with pytest.raises(DeadlineParseError):
             parse_deadline(raw, now=NOW)
+
+
+class TestParseDate:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("31.07.2026", date(2026, 7, 31)),
+            ("01.01.2026", date(2026, 1, 1)),
+            ("  31.07.2026  ", date(2026, 7, 31)),
+            ("29.02.2028", date(2028, 2, 29)),  # leap year
+        ],
+    )
+    def test_valid(self, raw: str, expected: date) -> None:
+        assert parse_date(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "",
+            "not a date",
+            "31.07.26",  # two-digit year not accepted, unlike parse_deadline
+            "31.07",  # missing year
+            "31/07/2026",  # wrong separator, unlike parse_deadline
+            "32.07.2026",  # invalid day
+            "31.13.2026",  # invalid month
+            "29.02.2026",  # not a leap year
+            "31.07.2026 21:00",  # no time component accepted
+        ],
+    )
+    def test_invalid(self, raw: str) -> None:
+        with pytest.raises(InvalidPeriodError):
+            parse_date(raw)

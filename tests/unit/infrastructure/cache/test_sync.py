@@ -21,11 +21,11 @@ from stalbot.infrastructure.cache.repositories.users import UsersCacheRepository
 from stalbot.infrastructure.cache.sync import (
     LOW_FREE_ROWS_THRESHOLD,
     CacheSync,
-    _parse_items,
     _parse_tickets,
     _parse_users,
     _to_decimal,
     _to_int,
+    parse_items_block,
 )
 
 # --- pure helpers ------------------------------------------------------
@@ -133,13 +133,15 @@ def test_parse_users_blank_rank_becomes_none() -> None:
     assert profile.referral_role is None
 
 
-def test_parse_items_skips_row_with_unknown_category(caplog: pytest.LogCaptureFixture) -> None:
-    items = _parse_items([[1, "Топот", "unknown_category", 250000, "", "topot", ""]])
+def test_parse_items_block_skips_row_with_unknown_category(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    items = parse_items_block([[1, "Топот", "unknown_category", 250000, "", "topot", ""]])
     assert items == []
 
 
-def test_parse_items_parses_a_valid_row() -> None:
-    (item,) = _parse_items(
+def test_parse_items_block_parses_a_valid_row() -> None:
+    (item,) = parse_items_block(
         [[1, "Хвост тушкана", "resource", 18000, "", "tail", "29.07.2026 09:10"]]
     )
     assert item.id == 1
@@ -151,8 +153,8 @@ def test_parse_items_parses_a_valid_row() -> None:
     assert item.updated_at == datetime(2026, 7, 29, 9, 10, tzinfo=GMT3)
 
 
-def test_parse_items_skips_row_missing_id() -> None:
-    assert _parse_items([["", "Топот", "boost", "", 300000, "topot", ""]]) == []
+def test_parse_items_block_skips_row_missing_id() -> None:
+    assert parse_items_block([["", "Топот", "boost", "", 300000, "topot", ""]]) == []
 
 
 # --- CacheSync orchestration --------------------------------------------
@@ -321,3 +323,47 @@ async def test_ensure_fresh_refreshes_when_cache_never_synced(
     refreshed = await cache_sync.ensure_fresh(max_age_seconds=3600)
 
     assert refreshed is True
+
+
+async def test_cache_hit_rate_is_none_before_any_ensure_fresh_call(
+    connection: aiosqlite.Connection,
+) -> None:
+    client = _FakeSheetsClient()
+    clock = _FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    cache_sync = _cache_sync(connection, client, clock)
+
+    assert cache_sync.cache_hit_rate is None
+
+
+async def test_cache_hit_rate_reflects_fresh_vs_stale_calls(
+    connection: aiosqlite.Connection,
+) -> None:
+    client = _FakeSheetsClient(tickets=[_TICKET_ROW], users=[_USER_ROW])
+    clock = _FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    cache_sync = _cache_sync(connection, client, clock)
+    await cache_sync.ensure_fresh(max_age_seconds=3600)  # stale (never synced)
+    await cache_sync.ensure_fresh(max_age_seconds=3600)  # fresh
+    await cache_sync.ensure_fresh(max_age_seconds=3600)  # fresh
+
+    assert cache_sync.cache_hit_rate == 2 / 3
+
+
+async def test_last_reports_are_none_before_any_sync(connection: aiosqlite.Connection) -> None:
+    client = _FakeSheetsClient()
+    clock = _FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    cache_sync = _cache_sync(connection, client, clock)
+
+    assert cache_sync.last_users_report is None
+    assert cache_sync.last_items_report is None
+
+
+async def test_last_reports_are_stored_after_each_sync(connection: aiosqlite.Connection) -> None:
+    client = _FakeSheetsClient(tickets=[_TICKET_ROW], users=[_USER_ROW], items=[_ITEM_ROW])
+    clock = _FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    cache_sync = _cache_sync(connection, client, clock)
+
+    users_report = await cache_sync.sync_users_and_transactions()
+    items_report = await cache_sync.sync_items()
+
+    assert cache_sync.last_users_report == users_report
+    assert cache_sync.last_items_report == items_report

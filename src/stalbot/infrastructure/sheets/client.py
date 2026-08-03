@@ -61,6 +61,10 @@ class SheetsClient:
         self._rate_limiter = rate_limiter or SheetsRateLimiter()
         self._client: gspread.Client | None = None
         self._spreadsheet: gspread.Spreadsheet | None = None
+        #: Cumulative request counts since process start, surfaced by
+        #: `/healthcheck` and the per-minute metrics log (PLAN.md §12, M11).
+        self.read_request_count = 0
+        self.write_request_count = 0
 
     async def batch_get(self, ranges: Sequence[str]) -> dict[str, CellGrid]:
         """Read multiple A1 ranges in a single API request.
@@ -94,7 +98,9 @@ class SheetsClient:
                 if index < len(value_ranges)
             }
 
-        return await retry_with_backoff(_do)
+        result = await retry_with_backoff(_do)
+        self.read_request_count += 1
+        return result
 
     async def batch_update(self, data: Mapping[str, CellGrid]) -> None:
         """Write multiple A1 ranges in a single API request.
@@ -126,6 +132,7 @@ class SheetsClient:
                 await asyncio.to_thread(spreadsheet.values_batch_update, body)
 
             await retry_with_backoff(_do)
+        self.write_request_count += 1
 
     async def write_verified(self, data: Mapping[str, CellGrid]) -> None:
         """Write cells, then read them back to confirm the write took.

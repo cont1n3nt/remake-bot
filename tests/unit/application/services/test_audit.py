@@ -102,3 +102,13 @@ async def test_stop_before_start_is_a_no_op(factory: EmbedFactory) -> None:
     service = AuditService(gateway, factory)
     await service.stop()
     assert gateway.batches == []
+
+
+def test_queue_size_reflects_unconsumed_events(factory: EmbedFactory) -> None:
+    service = AuditService(_FakeGateway(), factory)
+    assert service.queue_size() == 0
+
+    service.record(_make_event("t1"))
+    service.record(_make_event("t2"))
+
+    assert service.queue_size() == 2

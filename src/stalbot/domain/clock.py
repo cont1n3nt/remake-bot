@@ -59,6 +59,32 @@ def format_datetime(value: datetime) -> str:
     return value.astimezone(GMT3).strftime(_DATETIME_FORMAT)
 
 
+def format_duration(seconds: float) -> str:
+    """Format a duration compactly: `"2 д 3 ч 15 мин"`, `"5 мин"`, `"42 с"`.
+
+    Used for `/healthcheck`'s uptime and cache-age fields (PLAN.md §12, M11)
+    — plain seconds are unreadable at bot-uptime scale.
+
+    Args:
+        seconds: A non-negative duration in seconds.
+    """
+    total = int(seconds)
+    days, remainder = divmod(total, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days} д")
+    if hours:
+        parts.append(f"{hours} ч")
+    if minutes:
+        parts.append(f"{minutes} мин")
+    if not parts:
+        parts.append(f"{secs} с")
+    return " ".join(parts)
+
+
 @dataclass(frozen=True, slots=True)
 class DateRange:
     """An inclusive `[start, end]` date range."""
@@ -203,6 +229,36 @@ def _combine(day: date, hour: int, minute: int) -> datetime:
         return datetime(day.year, day.month, day.day, hour, minute, tzinfo=GMT3)
     except ValueError as exc:
         raise DeadlineParseError(_DEADLINE_HINT) from exc
+
+
+def parse_date(raw: str) -> date:
+    """Parse a strict `ДД.ММ.ГГГГ` date, as typed into `/day`, `/week` (PLAN.md §10.11).
+
+    Unlike `parse_deadline`, this accepts no relative phrases, defaults no
+    missing year, and applies no future/range validation — those bounds
+    differ per command and are the caller's job.
+
+    Args:
+        raw: Text typed by the user, e.g. `"31.07.2026"`.
+
+    Raises:
+        InvalidPeriodError: If the text does not match `ДД.ММ.ГГГГ` or names
+            a calendar date that does not exist.
+    """
+    text = raw.strip()
+    parts = text.split(".")
+    hint = f"не удалось распознать дату «{raw}», ожидается формат ДД.ММ.ГГГГ"
+    if len(parts) != 3:
+        raise InvalidPeriodError(hint)
+    day_text, month_text, year_text = parts
+    if not (day_text.isdigit() and month_text.isdigit() and year_text.isdigit()):
+        raise InvalidPeriodError(hint)
+    if len(year_text) != 4:
+        raise InvalidPeriodError(hint)
+    try:
+        return date(int(year_text), int(month_text), int(day_text))
+    except ValueError as exc:
+        raise InvalidPeriodError(hint) from exc
 
 
 def parse_sheet_datetime(raw: str) -> datetime | None:

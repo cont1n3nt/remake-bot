@@ -83,6 +83,38 @@ async def test_batch_update_sends_raw_value_input_option() -> None:
     ]
 
 
+async def test_batch_get_increments_the_read_request_counter() -> None:
+    spreadsheet = _fake_spreadsheet()
+    spreadsheet.values_batch_get.return_value = _value_ranges({})
+    client = _client_with_fake_spreadsheet(spreadsheet)
+
+    await client.batch_get(["DataBase!A3:H"])
+    await client.batch_get(["DataBase!A3:H"])
+
+    assert client.read_request_count == 2
+    assert client.write_request_count == 0
+
+
+async def test_batch_update_increments_the_write_request_counter() -> None:
+    spreadsheet = _fake_spreadsheet()
+    client = _client_with_fake_spreadsheet(spreadsheet)
+
+    await client.batch_update({"DataBase!A3:E3": [["31.07.2026", "nick", True, False, 100]]})
+
+    assert client.write_request_count == 1
+    assert client.read_request_count == 0
+
+
+async def test_rejected_write_does_not_increment_the_write_request_counter() -> None:
+    spreadsheet = _fake_spreadsheet()
+    client = _client_with_fake_spreadsheet(spreadsheet)
+
+    with pytest.raises(ProtectedRangeWriteError):
+        await client.batch_update({"DataBase!F3": [[1]]})
+
+    assert client.write_request_count == 0
+
+
 async def test_write_verified_succeeds_when_readback_matches() -> None:
     spreadsheet = _fake_spreadsheet()
     written = {"DataBase!I3": [[123]]}
