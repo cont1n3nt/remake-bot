@@ -18,6 +18,7 @@ from decimal import Decimal
 
 import aiosqlite
 
+from stalbot.application.dto.log_entry import LogEntry
 from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType
 from stalbot.domain.nick import NormalizedNick
@@ -26,6 +27,19 @@ _SELECT_WITH_DISPLAY = """
     SELECT t.*, COALESCE(u.nick_display, t.nick_norm) AS nick_display
     FROM transactions t
     LEFT JOIN users u ON u.nick_norm = t.nick_norm
+"""
+
+_SELECT_NUMBERED_PAGE = """
+    WITH numbered AS (
+        SELECT t.*, COALESCE(u.nick_display, t.nick_norm) AS nick_display,
+               u.discord_id AS discord_id,
+               ROW_NUMBER() OVER (
+                   PARTITION BY date(t.occurred_at) ORDER BY t.sheet_row
+               ) AS day_number
+        FROM transactions t
+        LEFT JOIN users u ON u.nick_norm = t.nick_norm
+    )
+    SELECT * FROM numbered ORDER BY occurred_at DESC, day_number DESC LIMIT ? OFFSET ?
 """
 
 
@@ -70,6 +84,44 @@ class TransactionsCacheRepository:
             f"{_SELECT_WITH_DISPLAY} WHERE t.nick_norm = ? ORDER BY t.sheet_row", (nick,)
         )
         return [_row_to_record(row) async for row in cursor]
+
+    async def list_referral_targets(self, referrer: NormalizedNick) -> Sequence[NormalizedNick]:
+        """Return the nicks of every player this referrer brought in.
+
+        `referrer_norm` is only ever written on a referred player's very
+        first transaction (PLAN.md §7.4, §10.12), so a distinct scan gives
+        each referral exactly once regardless of how many deals followed.
+
+        Args:
+            referrer: Normalized nick of the player who did the referring.
+        """
+        cursor = await self._conn.execute(
+            "SELECT DISTINCT nick_norm FROM transactions"
+            " WHERE referrer_norm = ? ORDER BY nick_norm",
+            (referrer,),
+        )
+        return [NormalizedNick(row["nick_norm"]) async for row in cursor]
+
+    async def count_all(self) -> int:
+        """Return the total number of cached transactions (`/logs` pagination, PLAN.md §10.10)."""
+        cursor = await self._conn.execute("SELECT COUNT(*) AS n FROM transactions")
+        row = await cursor.fetchone()
+        return int(row["n"]) if row is not None else 0
+
+    async def list_numbered_page(self, *, offset: int, limit: int) -> Sequence[LogEntry]:
+        """Return one page of `/logs`, newest first, numbered within each day.
+
+        `day_number` is computed by a window function over the whole table
+        before pagination is applied, so it stays correct no matter which
+        page is requested — the first deal after `00:00 GMT+3` is always
+        `#1`, regardless of which page it lands on (PLAN.md §10.10).
+
+        Args:
+            offset: Rows to skip, newest-first.
+            limit: Maximum rows to return.
+        """
+        cursor = await self._conn.execute(_SELECT_NUMBERED_PAGE, (limit, offset))
+        return [_row_to_log_entry(row) async for row in cursor]
 
     async def get_by_row(self, sheet_row: int) -> TransactionRecord | None:
         """Look up a single transaction by its sheet row.
@@ -124,6 +176,12 @@ def _record_to_params(record: TransactionRecord) -> dict[str, object]:
         "xp": record.xp,
         "referrer_norm": record.referrer,
     }
+
+
+def _row_to_log_entry(row: aiosqlite.Row) -> LogEntry:
+    return LogEntry(
+        day_number=row["day_number"], transaction=_row_to_record(row), discord_id=row["discord_id"]
+    )
 
 
 def _row_to_record(row: aiosqlite.Row) -> TransactionRecord:

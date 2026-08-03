@@ -134,3 +134,125 @@ async def test_referrer_round_trips(connection: aiosqlite.Connection) -> None:
     record = (await repo.list_by_nick(NormalizedNick("scaryyyyy")))[0]
 
     assert record.referrer == "othernick"
+
+
+async def test_list_referral_targets_returns_distinct_nicks(
+    connection: aiosqlite.Connection,
+) -> None:
+    repo = TransactionsCacheRepository(connection)
+    await repo.upsert_many(
+        [
+            _record(3, nick="alice", referrer=NormalizedNick("scaryyyyy")),
+            _record(4, nick="alice", referrer=None),
+            _record(5, nick="bob", referrer=NormalizedNick("scaryyyyy")),
+            _record(6, nick="carol", referrer=NormalizedNick("someoneelse")),
+        ]
+    )
+
+    targets = await repo.list_referral_targets(NormalizedNick("scaryyyyy"))
+
+    assert list(targets) == ["alice", "bob"]
+
+
+async def test_list_referral_targets_returns_empty_when_none(
+    connection: aiosqlite.Connection,
+) -> None:
+    repo = TransactionsCacheRepository(connection)
+    assert await repo.list_referral_targets(NormalizedNick("scaryyyyy")) == []
+
+
+async def test_count_all_is_zero_when_empty(connection: aiosqlite.Connection) -> None:
+    repo = TransactionsCacheRepository(connection)
+    assert await repo.count_all() == 0
+
+
+async def test_count_all_counts_every_row(connection: aiosqlite.Connection) -> None:
+    repo = TransactionsCacheRepository(connection)
+    await repo.upsert_many([_record(3), _record(4), _record(5)])
+
+    assert await repo.count_all() == 3
+
+
+async def test_list_numbered_page_orders_newest_first(connection: aiosqlite.Connection) -> None:
+    repo = TransactionsCacheRepository(connection)
+    await repo.upsert_many(
+        [
+            _record(3, at=datetime(2026, 7, 30, 12, 0, tzinfo=UTC)),
+            _record(4, at=datetime(2026, 7, 31, 9, 0, tzinfo=UTC)),
+            _record(5, at=datetime(2026, 7, 31, 21, 0, tzinfo=UTC)),
+        ]
+    )
+
+    page = await repo.list_numbered_page(offset=0, limit=25)
+
+    assert [entry.transaction.row for entry in page] == [5, 4, 3]
+
+
+async def test_list_numbered_page_numbers_reset_per_day(connection: aiosqlite.Connection) -> None:
+    repo = TransactionsCacheRepository(connection)
+    await repo.upsert_many(
+        [
+            _record(3, at=datetime(2026, 7, 30, 9, 0, tzinfo=UTC)),
+            _record(4, at=datetime(2026, 7, 30, 21, 0, tzinfo=UTC)),
+            _record(5, at=datetime(2026, 7, 31, 9, 0, tzinfo=UTC)),
+        ]
+    )
+
+    page = await repo.list_numbered_page(offset=0, limit=25)
+    by_row = {entry.transaction.row: entry.day_number for entry in page}
+
+    assert by_row == {3: 1, 4: 2, 5: 1}
+
+
+async def test_list_numbered_page_respects_offset_and_limit(
+    connection: aiosqlite.Connection,
+) -> None:
+    repo = TransactionsCacheRepository(connection)
+    await repo.upsert_many([_record(row) for row in range(3, 8)])
+
+    page = await repo.list_numbered_page(offset=2, limit=2)
+
+    assert [entry.transaction.row for entry in page] == [5, 4]
+
+
+async def test_list_numbered_page_resolves_discord_id_from_users(
+    connection: aiosqlite.Connection, synced_at: str
+) -> None:
+    users_repo = UsersCacheRepository(connection)
+    await users_repo.replace_all(
+        [
+            UserProfile(
+                row=3,
+                nick=NormalizedNick("scaryyyyy"),
+                discord_id=555,
+                coins=0,
+                xp=0,
+                buy_turnover=Decimal(0),
+                sell_turnover=Decimal(0),
+                total_turnover=Decimal(0),
+                referrals_count=0,
+                is_booster=False,
+                rank=None,
+                referral_role=None,
+            )
+        ],
+        nick_displays={NormalizedNick("scaryyyyy"): "Scaryyyyy"},
+        synced_at=synced_at,
+    )
+    tx_repo = TransactionsCacheRepository(connection)
+    await tx_repo.upsert_many([_record(3, nick="scaryyyyy")])
+
+    page = await tx_repo.list_numbered_page(offset=0, limit=25)
+
+    assert page[0].discord_id == 555
+
+
+async def test_list_numbered_page_discord_id_none_when_unbound(
+    connection: aiosqlite.Connection,
+) -> None:
+    repo = TransactionsCacheRepository(connection)
+    await repo.upsert_many([_record(3)])
+
+    page = await repo.list_numbered_page(offset=0, limit=25)
+
+    assert page[0].discord_id is None

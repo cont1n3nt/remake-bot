@@ -102,6 +102,16 @@ ignore = [
 # are literal Russian UI content (PLAN.md §10).
 "src/stalbot/presentation/cogs/**" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/presentation/cogs/**" = ["RUF001", "RUF002", "RUF003"]
+# /give_price's TXT header comments and column labels are literal Russian
+# file content the bot writes and re-parses (PLAN.md §10.5, §10.6).
+"src/stalbot/application/services/pricing.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/application/services/test_pricing.py" = ["RUF001", "RUF002", "RUF003"]
+# Attribute docstrings quote the sheet's own "у меня"/"мне" deal-direction
+# wording verbatim (PLAN.md §6.1, §10.11).
+"src/stalbot/application/dto/period_report.py" = ["RUF001", "RUF002", "RUF003"]
+# `/logs`'s "🔢 К странице" button label is literal Russian UI content
+# (PLAN.md §10.10).
+"src/stalbot/presentation/views/logs_pager.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
