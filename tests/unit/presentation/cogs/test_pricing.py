@@ -124,7 +124,7 @@ async def test_setprice_autocomplete_scopes_to_resources() -> None:
     cog, _pricing, _items = _cog(by_category={ItemCategory.RESOURCE: resources})
     interaction = _interaction()
 
-    autocomplete: Any = cog._setprice_autocomplete
+    autocomplete: Any = getattr(cog, "_setprice_autocomplete")  # noqa: B009
     choices = await autocomplete(interaction, "хво")
 
     assert [c.value for c in choices] == [1]
@@ -135,7 +135,7 @@ async def test_setboost_autocomplete_scopes_to_boosts() -> None:
     cog, _pricing, _items = _cog(by_category={ItemCategory.BOOST: boosts})
     interaction = _interaction()
 
-    autocomplete: Any = cog._setboost_autocomplete
+    autocomplete: Any = getattr(cog, "_setboost_autocomplete")  # noqa: B009
     choices = await autocomplete(interaction, "топ")
 
     assert [c.value for c in choices] == [2]

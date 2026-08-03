@@ -144,7 +144,7 @@ async def test_del_item_autocomplete_delegates_to_item_choices() -> None:
     cog, _catalog, _pricing, _items_repo = _cog(all_items=items)
     interaction = _interaction()
 
-    autocomplete: Any = cog._del_item_autocomplete
+    autocomplete: Any = getattr(cog, "_del_item_autocomplete")  # noqa: B009
     choices = await autocomplete(interaction, "топ")
 
     assert [c.value for c in choices] == [1]
