@@ -68,6 +68,53 @@ class BoostOrderLinesRepository:
         )
         await self._conn.commit()
 
+    async def reassign_item_id(
+        self, *, old_item_id: int, new_item_id: int, name_norm: str, category: ItemCategory
+    ) -> None:
+        """Repoint draft lines to a renumbered item id after `/del_item` (PLAN.md §10.9).
+
+        `/del_item` renumbers every surviving item's `id`; a draft line
+        still identifies its item by `item_name_norm`/`category`, so this
+        just needs to catch `item_id` up to the new number.
+
+        Args:
+            old_item_id: The id the line currently has.
+            new_item_id: The id the surviving item was renumbered to.
+            name_norm: Normalized item name the line was drafted against.
+            category: The item's category.
+        """
+        if old_item_id == new_item_id:
+            return
+        await self._conn.execute(
+            "UPDATE boost_order_lines SET item_id = ? WHERE item_name_norm = ? AND category = ?",
+            (new_item_id, name_norm, category.value),
+        )
+        await self._conn.commit()
+
+    async def delete_by_name(self, *, name_norm: str, category: ItemCategory) -> Sequence[int]:
+        """Remove every draft line referencing a permanently deleted item.
+
+        Args:
+            name_norm: Normalized name of the deleted item.
+            category: The deleted item's category.
+
+        Returns:
+            The distinct channel ids that had a line removed, so the caller
+            can consider notifying those drafts' authors.
+        """
+        cursor = await self._conn.execute(
+            "SELECT DISTINCT channel_id FROM boost_order_lines"
+            " WHERE item_name_norm = ? AND category = ?",
+            (name_norm, category.value),
+        )
+        channel_ids = [row["channel_id"] async for row in cursor]
+        await self._conn.execute(
+            "DELETE FROM boost_order_lines WHERE item_name_norm = ? AND category = ?",
+            (name_norm, category.value),
+        )
+        await self._conn.commit()
+        return channel_ids
+
     async def clear_channel(self, channel_id: int) -> None:
         """Remove every line for a channel (order confirmed or cancelled).
 

@@ -42,6 +42,16 @@ class ItemsCacheRepository:
         )
         return [_row_to_item(row) async for row in cursor]
 
+    async def get_by_id(self, item_id: int) -> Item | None:
+        """Look up one item by its catalog id.
+
+        Args:
+            item_id: The catalog id.
+        """
+        cursor = await self._conn.execute("SELECT * FROM items WHERE id = ?", (item_id,))
+        row = await cursor.fetchone()
+        return _row_to_item(row) if row is not None else None
+
     async def find(self, name: str, category: ItemCategory | None) -> Item | None:
         """Look up one item by name, optionally scoped to a category.
 
@@ -66,6 +76,26 @@ class ItemsCacheRepository:
             )
         row = await cursor.fetchone()
         return _row_to_item(row) if row is not None else None
+
+    async def save_delete_backup(self, payload: str) -> None:
+        """Persist a pre-mutation snapshot of the catalog block before `/del_item` rewrites it.
+
+        A safety net, not automatic rollback (PLAN.md §7.5): if the
+        subsequent `batchUpdate`/read-back fails partway, this snapshot
+        lets an operator manually restore the block instead of the bot
+        silently having wiped it.
+
+        Args:
+            payload: A JSON-serialized snapshot of the block before the write.
+        """
+        await self._conn.execute(
+            """
+            INSERT INTO sync_meta (key, value) VALUES ('item_delete_backup', ?)
+            ON CONFLICT (key) DO UPDATE SET value = excluded.value
+            """,
+            (payload,),
+        )
+        await self._conn.commit()
 
     async def replace_all(self, items: Sequence[Item]) -> None:
         """Atomically replace the entire cached catalog (full sync).
