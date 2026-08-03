@@ -5,7 +5,7 @@ from datetime import datetime
 import aiosqlite
 
 from stalbot.application.dto.ticket_session import TicketSession
-from stalbot.domain.enums import TicketKind
+from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
 
 
 class TicketSessionsRepository:
@@ -43,12 +43,14 @@ class TicketSessionsRepository:
                 channel_id, kind, author_id, status, delivery_method, game_nick,
                 referrer_nick, referrer_discord_id, deadline, screenshot_url,
                 screenshot_message_id, summary_message_id, panel_message_id,
-                ocr_status, ocr_analysis_id, idempotency_key, created_at, updated_at
+                ocr_status, ocr_analysis_id, idempotency_key, created_at, updated_at,
+                active_order_item_id
             ) VALUES (
                 :channel_id, :kind, :author_id, :status, :delivery_method, :game_nick,
                 :referrer_nick, :referrer_discord_id, :deadline, :screenshot_url,
                 :screenshot_message_id, :summary_message_id, :panel_message_id,
-                :ocr_status, :ocr_analysis_id, :idempotency_key, :created_at, :updated_at
+                :ocr_status, :ocr_analysis_id, :idempotency_key, :created_at, :updated_at,
+                :active_order_item_id
             )
             ON CONFLICT (channel_id) DO UPDATE SET
                 kind = excluded.kind,
@@ -66,7 +68,8 @@ class TicketSessionsRepository:
                 ocr_status = excluded.ocr_status,
                 ocr_analysis_id = excluded.ocr_analysis_id,
                 idempotency_key = excluded.idempotency_key,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                active_order_item_id = excluded.active_order_item_id
             """,
             _session_to_params(session),
         )
@@ -92,8 +95,8 @@ def _session_to_params(session: TicketSession) -> dict[str, object]:
         "channel_id": session.channel_id,
         "kind": session.kind.value,
         "author_id": session.author_id,
-        "status": session.status,
-        "delivery_method": session.delivery_method,
+        "status": session.status.value,
+        "delivery_method": session.delivery_method.value if session.delivery_method else None,
         "game_nick": session.game_nick,
         "referrer_nick": session.referrer_nick,
         "referrer_discord_id": session.referrer_discord_id,
@@ -107,6 +110,7 @@ def _session_to_params(session: TicketSession) -> dict[str, object]:
         "idempotency_key": session.idempotency_key,
         "created_at": session.created_at.isoformat(),
         "updated_at": session.updated_at.isoformat(),
+        "active_order_item_id": session.active_order_item_id,
     }
 
 
@@ -115,8 +119,8 @@ def _row_to_session(row: aiosqlite.Row) -> TicketSession:
         channel_id=row["channel_id"],
         kind=TicketKind(row["kind"]),
         author_id=row["author_id"],
-        status=row["status"],
-        delivery_method=row["delivery_method"],
+        status=TicketStatus(row["status"]),
+        delivery_method=DeliveryMethod(row["delivery_method"]) if row["delivery_method"] else None,
         game_nick=row["game_nick"],
         referrer_nick=row["referrer_nick"],
         referrer_discord_id=row["referrer_discord_id"],
@@ -130,4 +134,5 @@ def _row_to_session(row: aiosqlite.Row) -> TicketSession:
         idempotency_key=row["idempotency_key"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+        active_order_item_id=row["active_order_item_id"],
     )

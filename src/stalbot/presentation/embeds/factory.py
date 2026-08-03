@@ -86,9 +86,20 @@ class EmbedFactory:
         """Build an error embed (`#ED4245`)."""
         return self._build(Color.ERROR, title, description)
 
-    def ticket(self, kind: TicketKind, description: str | None = None) -> discord.Embed:
-        """Build a ticket panel embed (`#2B2D31`) with the title fixed by *kind*."""
-        return self._build(Color.TICKET, TICKET_TITLES[kind], description)
+    def ticket(
+        self, kind: TicketKind, description: str | None = None, *, title: str | None = None
+    ) -> discord.Embed:
+        """Build a ticket-colored embed (`#2B2D31`).
+
+        Args:
+            kind: Selects the default title (`TICKET_TITLES[kind]`).
+            description: Embed body.
+            title: Overrides the default title — the boost-order editor
+                (PLAN.md §11.6) uses `"🧾 Редактор заказа"` instead of the
+                panel's `"🎫 Заявка на заказ бустов"`, but still wants the
+                same ticket color.
+        """
+        return self._build(Color.TICKET, title or TICKET_TITLES[kind], description)
 
     def audit(self, event: AuditEvent) -> discord.Embed:
         """Build the one audit-log embed format (`#9B59B6`, PLAN.md §5.4)."""

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import aiosqlite
 
 from stalbot.application.dto.ticket_session import TicketSession
-from stalbot.domain.enums import TicketKind
+from stalbot.domain.enums import TicketKind, TicketStatus
 from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
 
 
@@ -15,7 +15,7 @@ def _session(channel_id: int = 111, **overrides: object) -> TicketSession:
         "channel_id": channel_id,
         "kind": TicketKind.SELL_ITEMS,
         "author_id": 222,
-        "status": "awaiting_tool",
+        "status": TicketStatus.AWAITING_TOOL,
         "delivery_method": None,
         "game_nick": None,
         "referrer_nick": None,
@@ -52,13 +52,13 @@ async def test_upsert_then_get_round_trips(connection: aiosqlite.Connection) -> 
 
 async def test_upsert_overwrites_existing_session(connection: aiosqlite.Connection) -> None:
     repo = TicketSessionsRepository(connection)
-    await repo.upsert(_session(status="awaiting_tool"))
-    await repo.upsert(_session(status="confirmed"))
+    await repo.upsert(_session(status=TicketStatus.AWAITING_TOOL))
+    await repo.upsert(_session(status=TicketStatus.CONFIRMED))
 
     result = await repo.get(111)
 
     assert result is not None
-    assert result.status == "confirmed"
+    assert result.status is TicketStatus.CONFIRMED
 
 
 async def test_delete_removes_the_session(connection: aiosqlite.Connection) -> None:

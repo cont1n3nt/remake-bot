@@ -57,6 +57,13 @@ def test_ticket_title_is_fixed_by_kind(factory: EmbedFactory) -> None:
     assert embed.color.value == Color.TICKET
 
 
+def test_ticket_title_override_keeps_the_ticket_color(factory: EmbedFactory) -> None:
+    embed = factory.ticket(TicketKind.ORDER_BOOSTS, title="🧾 Редактор заказа")
+    assert embed.title == "🧾 Редактор заказа"
+    assert embed.color is not None
+    assert embed.color.value == Color.TICKET
+
+
 def test_title_is_truncated(factory: EmbedFactory) -> None:
     embed = factory.info("x" * 300)
     assert embed.title is not None

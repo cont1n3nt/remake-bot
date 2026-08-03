@@ -1,16 +1,15 @@
 """`TicketSession` — persistent ticket-flow state (PLAN.md §8.1, §11.7).
 
-Has no Sheets counterpart. Ticket flow logic lands in M9/M10; for now this
-is a thin, schema-shaped record so the cache repository has something
-concrete to return. `status`/`delivery_method` stay plain `str` here — M9
-will introduce the enums that constrain their values once the ticket flow
-itself is designed.
+Has no Sheets counterpart. `boost_order_lines` (M10) holds the actual
+selected boosts/quantities per channel; `active_order_item_id` here is just
+a pointer into that list — which line the editor's quantity/delete controls
+currently act on (PLAN.md §11.6).
 """
 
 from dataclasses import dataclass
 from datetime import datetime
 
-from stalbot.domain.enums import TicketKind
+from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,8 +19,8 @@ class TicketSession:
     channel_id: int
     kind: TicketKind
     author_id: int
-    status: str
-    delivery_method: str | None
+    status: TicketStatus
+    delivery_method: DeliveryMethod | None
     game_nick: str | None
     referrer_nick: str | None
     referrer_discord_id: int | None
@@ -35,3 +34,4 @@ class TicketSession:
     idempotency_key: str | None
     created_at: datetime
     updated_at: datetime
+    active_order_item_id: int | None = None

@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS ticket_sessions (
     ocr_analysis_id INTEGER,
     idempotency_key TEXT UNIQUE,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    active_order_item_id INTEGER
 );
 
 -- Boost-order draft lines (M10). item_name_norm + category let a line
