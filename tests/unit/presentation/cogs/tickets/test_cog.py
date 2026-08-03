@@ -1,0 +1,767 @@
+"""Tests for `stalbot.presentation.cogs.tickets.cog.TicketsCog` (PLAN.md §11).
+
+Services are mocked; Discord objects are `MagicMock(spec=...)`. Listener
+methods (`on_guild_channel_create`, `on_message`) are plain coroutines
+under the `@commands.Cog.listener()` decorator, so they're called directly
+— no `.callback` indirection needed (that's only for `app_commands.Command`).
+"""
+
+import asyncio
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import discord
+
+from stalbot.application.dto.boost_order_line import BoostOrderLine
+from stalbot.application.dto.ticket_session import TicketSession
+from stalbot.application.dto.transaction_request import TransactionRegistrationResult
+from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
+from stalbot.domain.entities.transaction import TransactionRecord
+from stalbot.domain.enums import DealType, DeliveryMethod, ItemCategory, TicketKind, TicketStatus
+from stalbot.presentation.cogs.tickets.cog import TicketsCog, _infer_author_id, _resolve_member
+from stalbot.presentation.embeds.factory import EmbedFactory
+
+_SELL_ITEMS_CATEGORY = next(
+    cid for cid, kind in TICKET_CATEGORIES.items() if kind is TicketKind.SELL_ITEMS
+)
+_ORDER_BOOSTS_CATEGORY = next(
+    cid for cid, kind in TICKET_CATEGORIES.items() if kind is TicketKind.ORDER_BOOSTS
+)
+
+
+def _session(**overrides: object) -> TicketSession:
+    now = datetime(2026, 7, 31, 21, 45, tzinfo=UTC)
+    defaults: dict[str, object] = {
+        "channel_id": 111,
+        "kind": TicketKind.SELL_ITEMS,
+        "author_id": 222,
+        "status": TicketStatus.AWAITING_TOOL,
+        "delivery_method": None,
+        "game_nick": None,
+        "referrer_nick": None,
+        "referrer_discord_id": None,
+        "deadline": None,
+        "screenshot_url": None,
+        "screenshot_message_id": None,
+        "summary_message_id": None,
+        "panel_message_id": None,
+        "ocr_status": "disabled",
+        "ocr_analysis_id": None,
+        "idempotency_key": None,
+        "created_at": now,
+        "updated_at": now,
+        "active_order_item_id": None,
+    }
+    defaults.update(overrides)
+    return TicketSession(**defaults)  # type: ignore[arg-type]
+
+
+def _fake_tickets(*, get_return: TicketSession | None = None) -> MagicMock:
+    tickets = MagicMock()
+    tickets.open_ticket = AsyncMock(return_value=get_return or _session())
+    tickets.get = AsyncMock(return_value=get_return)
+    tickets.set_author = AsyncMock(return_value=get_return)
+    tickets.record_panel = AsyncMock(return_value=get_return)
+    tickets.record_delivery_method = AsyncMock(return_value=get_return)
+    tickets.record_form = AsyncMock(return_value=get_return or _session())
+    tickets.record_summary_message = AsyncMock(return_value=get_return)
+    tickets.record_screenshot = AsyncMock(return_value=get_return or _session())
+    tickets.record_confirmed = AsyncMock(return_value=get_return)
+    tickets.set_active_order_item = AsyncMock(return_value=get_return)
+    return tickets
+
+
+def _fake_boost_orders() -> MagicMock:
+    boost_orders = MagicMock()
+    boost_orders.list_available_boosts = AsyncMock(return_value=[])
+    boost_orders.list_lines = AsyncMock(return_value=[])
+    boost_orders.list_lines_with_items = AsyncMock(return_value=[])
+    boost_orders.apply_page_selection = AsyncMock()
+    boost_orders.set_quantity = AsyncMock()
+    boost_orders.adjust_quantity = AsyncMock(return_value=1)
+    boost_orders.remove_line = AsyncMock()
+    boost_orders.compute_total = AsyncMock(return_value=Decimal(0))
+    boost_orders.clear = AsyncMock()
+    return boost_orders
+
+
+def _fake_screenshots() -> MagicMock:
+    screenshots = MagicMock()
+    screenshots.on_attached = AsyncMock()
+    screenshots.record_confirmed_amount = AsyncMock()
+    return screenshots
+
+
+def _fake_transactions(**overrides: object) -> MagicMock:
+    record_defaults: dict[str, object] = {
+        "row": 3,
+        "at": datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        "nick": "scaryyyyy",
+        "nick_display": "Scaryyyyy",
+        "deal_type": DealType.SALE,
+        "amount": Decimal(100000),
+        "coins": 1,
+        "xp": 10,
+        "referrer": None,
+    }
+    result = TransactionRegistrationResult(
+        record=TransactionRecord(**record_defaults),  # type: ignore[arg-type]
+        discord_bound=False,
+        formula_pending=False,
+    )
+    transactions = MagicMock()
+    transactions.register = AsyncMock(return_value=overrides.get("register_result", result))
+    return transactions
+
+
+def _fake_progression() -> MagicMock:
+    progression = MagicMock()
+    progression.sync = AsyncMock(return_value=[])
+    return progression
+
+
+def _cog(
+    *,
+    tickets: MagicMock | None = None,
+    screenshots: MagicMock | None = None,
+    boost_orders: MagicMock | None = None,
+    transactions: MagicMock | None = None,
+    progression: MagicMock | None = None,
+    tool_wait_timeout: float = 0.05,
+    log_channel_id: int = 555,
+) -> tuple[TicketsCog, MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
+    tickets = tickets or _fake_tickets()
+    screenshots = screenshots or _fake_screenshots()
+    boost_orders = boost_orders or _fake_boost_orders()
+    transactions = transactions or _fake_transactions()
+    progression = progression or _fake_progression()
+    settings = MagicMock(log_channel_id=log_channel_id)
+    cog = TicketsCog(
+        tickets,
+        screenshots,
+        boost_orders,
+        transactions,
+        progression,
+        EmbedFactory(),
+        settings,
+        tool_wait_timeout_seconds=tool_wait_timeout,
+    )
+    return cog, tickets, screenshots, boost_orders, transactions, progression
+
+
+def _text_channel(
+    *, channel_id: int = 111, category_id: int | None = _SELL_ITEMS_CATEGORY, overwrites: Any = None
+) -> MagicMock:
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = channel_id
+    channel.category_id = category_id
+    channel.overwrites = overwrites or {}
+    sent_message = MagicMock(spec=discord.Message)
+    sent_message.id = 999
+    sent_message.embeds = []
+    channel.send = AsyncMock(return_value=sent_message)
+    channel.fetch_message = AsyncMock(return_value=None)
+    return channel
+
+
+def _message(
+    *,
+    author_id: int,
+    channel: MagicMock | None = None,
+    is_bot: bool = False,
+    attachments: list[Any] | None = None,
+) -> MagicMock:
+    message = MagicMock(spec=discord.Message)
+    message.author = MagicMock(id=author_id, bot=is_bot)
+    message.channel = channel or _text_channel()
+    message.attachments = attachments or []
+    return message
+
+
+def _interaction(
+    *, channel: MagicMock | None = None, user_id: int = 42, guild: MagicMock | None = None
+) -> MagicMock:
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.channel = channel or _text_channel()
+    interaction.channel_id = interaction.channel.id
+    interaction.guild = guild
+    interaction.user = MagicMock(spec=discord.Member, id=user_id, display_name="Scaryyyyy")
+    interaction.user.guild_permissions = MagicMock(administrator=False)
+    interaction.response = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.response.send_modal = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.response.edit_message = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
+    return interaction
+
+
+# -- Channel lifecycle --------------------------------------------------
+
+
+async def test_on_guild_channel_create_ignores_untracked_categories() -> None:
+    cog, tickets, *_ = _cog()
+    channel = _text_channel(category_id=999999)
+
+    await cog.on_guild_channel_create(channel)
+
+    tickets.open_ticket.assert_not_called()
+
+
+async def test_on_guild_channel_create_handles_order_boosts_too() -> None:
+    cog, tickets, *_ = _cog(tool_wait_timeout=0.02)
+    channel = _text_channel(category_id=_ORDER_BOOSTS_CATEGORY)
+
+    await cog.on_guild_channel_create(channel)
+
+    tickets.open_ticket.assert_awaited_once()
+    (_channel_id, kind, _author_id), _ = tickets.open_ticket.call_args
+    assert kind is TicketKind.ORDER_BOOSTS
+
+
+async def test_on_guild_channel_create_posts_the_panel_after_the_timeout() -> None:
+    cog, tickets, *_ = _cog(tool_wait_timeout=0.02)
+    channel = _text_channel()
+
+    await cog.on_guild_channel_create(channel)
+
+    tickets.open_ticket.assert_awaited_once()
+    channel.send.assert_awaited_once()
+    tickets.record_panel.assert_awaited_once()
+
+
+async def test_on_guild_channel_create_posts_the_panel_as_soon_as_tool_speaks() -> None:
+    cog, tickets, *_ = _cog(tool_wait_timeout=5.0)
+    channel = _text_channel()
+
+    task = asyncio.create_task(cog.on_guild_channel_create(channel))
+    await asyncio.sleep(0)
+    await cog.on_message(_message(author_id=TICKET_TOOL_BOT_ID, channel=channel))
+    await asyncio.wait_for(task, timeout=1.0)
+
+    channel.send.assert_awaited_once()
+    tickets.open_ticket.assert_awaited_once()
+
+
+async def test_on_message_ignores_bot_authors_that_are_not_ticket_tool() -> None:
+    cog, tickets, *_ = _cog()
+
+    await cog.on_message(_message(author_id=1, is_bot=True, attachments=[MagicMock()]))
+
+    tickets.get.assert_not_called()
+
+
+async def test_on_message_ignores_messages_without_attachments_in_a_tracked_channel() -> None:
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session()))
+
+    await cog.on_message(_message(author_id=42))
+
+    tickets.get.assert_not_called()
+
+
+# -- Form flow ------------------------------------------------------------
+
+
+async def test_on_start_sets_the_author_when_still_unknown() -> None:
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session(author_id=0)))
+    interaction = _interaction(user_id=777)
+
+    await cog._on_start(interaction, TicketKind.SELL_ITEMS)
+
+    tickets.set_author.assert_awaited_once_with(interaction.channel_id, 777)
+    interaction.response.send_message.assert_awaited_once()
+    kwargs = interaction.response.send_message.call_args.kwargs
+    assert kwargs["ephemeral"] is True
+
+
+async def test_on_start_does_not_overwrite_a_known_author() -> None:
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session(author_id=555)))
+    interaction = _interaction(user_id=777)
+
+    await cog._on_start(interaction, TicketKind.SELL_ITEMS)
+
+    tickets.set_author.assert_not_called()
+
+
+async def test_on_delivery_selected_records_and_opens_the_form() -> None:
+    cog, tickets, *_ = _cog()
+    interaction = _interaction()
+
+    await cog._on_delivery_selected(interaction, DeliveryMethod.MAIL)
+
+    tickets.record_delivery_method.assert_awaited_once_with(
+        interaction.channel_id, DeliveryMethod.MAIL
+    )
+    interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_on_form_submitted_posts_a_new_summary_card() -> None:
+    session = _session(game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    channel = _text_channel()
+    interaction = _interaction(channel=channel)
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", None, None)
+
+    tickets.record_form.assert_awaited_once()
+    channel.send.assert_awaited_once()
+    tickets.record_summary_message.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+
+
+async def test_on_form_submitted_resolves_a_mentioned_referrer() -> None:
+    cog, tickets, *_ = _cog()
+    referrer_member = MagicMock(spec=discord.Member, id=888)
+    guild = MagicMock(spec=discord.Guild)
+    guild.members = [referrer_member]
+    guild.get_member = MagicMock(return_value=referrer_member)
+    interaction = _interaction(guild=guild)
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", "OtherNick", "<@888>")
+
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["referrer_discord_id"] == 888
+
+
+# -- Confirmation -----------------------------------------------------------
+
+
+async def test_confirm_button_rejects_non_admins() -> None:
+    cog, tickets, *_ = _cog()
+    interaction = _interaction()
+
+    await cog._on_confirm_button(interaction)
+
+    tickets.get.assert_not_called()
+    interaction.response.send_message.assert_awaited_once()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_confirm_button_rejects_an_unfilled_ticket() -> None:
+    cog, _tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session(game_nick=None)))
+    interaction = _interaction()
+    interaction.user.guild_permissions.administrator = True
+
+    await cog._on_confirm_button(interaction)
+
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "не заполнена" in (embed.description or "")
+
+
+async def test_confirm_button_rejects_an_already_confirmed_ticket() -> None:
+    session = _session(game_nick="Scaryyyyy", status=TicketStatus.CONFIRMED)
+    cog, _tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+    interaction.user.guild_permissions.administrator = True
+
+    await cog._on_confirm_button(interaction)
+
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "уже была подтверждена" in (embed.description or "")
+
+
+async def test_confirm_button_opens_the_amount_modal_for_a_filled_ticket() -> None:
+    session = _session(game_nick="Scaryyyyy")
+    cog, _tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+    interaction.user.guild_permissions.administrator = True
+
+    await cog._on_confirm_button(interaction)
+
+    interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_amount_submitted_registers_the_deal_and_confirms() -> None:
+    session = _session(game_nick="Scaryyyyy", referrer_nick="OtherNick")
+    cog, tickets, screenshots, _boost_orders, transactions, progression = _cog(
+        tickets=_fake_tickets(get_return=session)
+    )
+    channel = _text_channel()
+    interaction = _interaction(channel=channel)
+
+    await cog._on_amount_submitted(interaction, "100 000")
+
+    transactions.register.assert_awaited_once()
+    (request,), _ = transactions.register.call_args
+    assert request.nick == "Scaryyyyy"
+    assert request.deal_type is DealType.SALE
+    assert request.discord_id == session.author_id
+    tickets.record_confirmed.assert_awaited_once_with(session.channel_id)
+    screenshots.record_confirmed_amount.assert_awaited_once_with(
+        session.channel_id, Decimal(100000)
+    )
+    progression.sync.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    channel.send.assert_awaited_once()
+
+
+# -- Screenshot ---------------------------------------------------------
+
+
+async def test_screenshot_button_shows_the_requirements() -> None:
+    cog, *_ = _cog()
+    interaction = _interaction()
+
+    await cog._on_screenshot_button(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "8 МБ" in (embed.description or "")
+
+
+async def test_handle_screenshot_rejects_oversized_files() -> None:
+    cog, tickets, screenshots, *_ = _cog()
+    channel = _text_channel()
+    message = _message(author_id=1, channel=channel)
+    attachment = MagicMock(spec=discord.Attachment, size=9 * 1024 * 1024, content_type="image/png")
+
+    await cog._handle_screenshot(message, _session(), attachment)
+
+    channel.send.assert_awaited_once()
+    embed = channel.send.call_args.kwargs["embed"]
+    assert "слишком большой" in (embed.title or "")
+    tickets.record_screenshot.assert_not_called()
+    screenshots.on_attached.assert_not_called()
+
+
+async def test_handle_screenshot_archives_and_updates_the_card() -> None:
+    session = _session(summary_message_id=321)
+    cog, tickets, screenshots, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    log_channel = _text_channel(channel_id=555)
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_channel = MagicMock(return_value=log_channel)
+    ticket_channel = _text_channel()
+    ticket_channel.guild = guild
+    ticket_channel.fetch_message = AsyncMock(
+        return_value=MagicMock(spec=discord.Message, edit=AsyncMock())
+    )
+    message = _message(author_id=1, channel=ticket_channel)
+    message.guild = guild
+    message.attachments = []
+    attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+    attachment.read = AsyncMock(return_value=b"fake-bytes")
+
+    await cog._handle_screenshot(message, session, attachment)
+
+    log_channel.send.assert_awaited_once()
+    tickets.record_screenshot.assert_awaited_once()
+    screenshots.on_attached.assert_awaited_once()
+    ticket_channel.fetch_message.assert_awaited_once_with(321)
+
+
+# -- Order-boosts form & editor --------------------------------------------
+
+
+async def _call_on_start_order_boosts(cog: TicketsCog, interaction: MagicMock) -> None:
+    await cog._on_start(interaction, TicketKind.ORDER_BOOSTS)
+
+
+async def test_on_start_opens_the_order_form_modal_directly() -> None:
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=_session(kind=TicketKind.ORDER_BOOSTS)))
+    interaction = _interaction()
+
+    await _call_on_start_order_boosts(cog, interaction)
+
+    interaction.response.send_modal.assert_awaited_once()
+    interaction.response.send_message.assert_not_called()
+
+
+async def test_order_form_submitted_records_the_deadline_and_posts_the_editor() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    channel = _text_channel()
+    interaction = _interaction(channel=channel)
+
+    await cog._on_order_form_submitted(interaction, "Scaryyyyy", "через 3 часа", None, None)
+
+    tickets.record_form.assert_awaited_once()
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["deadline"] is not None
+    channel.send.assert_awaited_once()
+    tickets.record_summary_message.assert_awaited_once()
+
+
+async def test_order_form_submitted_reopens_the_modal_on_a_bad_deadline() -> None:
+    cog, tickets, *_ = _cog()
+    interaction = _interaction()
+
+    await cog._on_order_form_submitted(interaction, "Scaryyyyy", "not a date", "Ref", None)
+
+    tickets.record_form.assert_not_called()
+    interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_order_line_selected_stores_the_active_item_and_edits_in_place() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42)
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_line_selected(interaction, 42)
+
+    tickets.set_active_order_item.assert_awaited_once_with(session.channel_id, 42)
+    interaction.response.edit_message.assert_awaited_once()
+
+
+async def test_order_line_selected_rejects_a_non_participant() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=999)
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=42)
+
+    await cog._on_order_line_selected(interaction, 42)
+
+    tickets.set_active_order_item.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_adjust_quantity_warns_when_nothing_is_selected() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=None)
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_qty_plus(interaction)
+
+    boost_orders.adjust_quantity.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Ничего не выбрано" in (embed.title or "")
+
+
+async def test_adjust_quantity_delegates_to_the_service() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7)
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_qty_plus(interaction)
+
+    boost_orders.adjust_quantity.assert_awaited_once_with(session.channel_id, 7, 1)
+    interaction.response.edit_message.assert_awaited_once()
+
+
+async def test_qty_input_opens_the_modal_when_a_line_is_selected() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_qty_input(interaction)
+
+    interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_qty_submitted_rejects_an_unparseable_amount() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7)
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_qty_submitted(interaction, "not a number")
+
+    boost_orders.set_quantity.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "количество" in (embed.description or "")
+
+
+async def test_qty_submitted_rejects_an_out_of_range_amount() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7)
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_qty_submitted(interaction, "10000")
+
+    boost_orders.set_quantity.assert_not_called()
+
+
+async def test_qty_submitted_rejects_a_non_participant() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=999, active_order_item_id=7)
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=42)
+
+    await cog._on_order_qty_submitted(interaction, "5")
+
+    boost_orders.set_quantity.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_qty_submitted_sets_the_quantity_and_updates_the_editor() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7)
+    channel = _text_channel()
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(channel=channel)
+
+    await cog._on_order_qty_submitted(interaction, "5")
+
+    boost_orders.set_quantity.assert_awaited_once_with(session.channel_id, 7, 5)
+    channel.send.assert_awaited_once()
+
+
+async def test_delete_line_removes_and_clears_the_active_selection() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7)
+    cog, tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_delete_line(interaction)
+
+    boost_orders.remove_line.assert_awaited_once_with(session.channel_id, 7)
+    tickets.set_active_order_item.assert_awaited_once_with(session.channel_id, None)
+
+
+async def test_add_boosts_opens_the_multiselect_picker() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_add_boosts(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    kwargs = interaction.response.send_message.call_args.kwargs
+    assert kwargs["ephemeral"] is True
+
+
+async def test_add_boosts_passes_existing_quantities_to_the_picker() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42)
+    boost_orders = _fake_boost_orders()
+    boost_orders.list_lines = AsyncMock(
+        return_value=[
+            BoostOrderLine(
+                channel_id=111,
+                item_id=1,
+                item_name_norm="топот",
+                category=ItemCategory.BOOST,
+                quantity=3,
+            )
+        ]
+    )
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), boost_orders=boost_orders)
+    interaction = _interaction()
+
+    await cog._on_order_add_boosts(interaction)
+
+    view = interaction.response.send_message.call_args.kwargs["view"]
+    assert view._quantities == {1: 3}
+
+
+async def test_add_boosts_rejects_a_non_participant() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=999)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=42)
+
+    await cog._on_order_add_boosts(interaction)
+
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_add_boosts_allows_an_admin_who_is_not_the_author() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=999)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=42)
+    interaction.user.guild_permissions.administrator = True
+
+    await cog._on_order_add_boosts(interaction)
+
+    kwargs = interaction.response.send_message.call_args.kwargs
+    assert kwargs["ephemeral"] is True
+
+
+async def test_order_boosts_changed_applies_the_page_and_updates_the_editor() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS)
+    channel = _text_channel()
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(channel=channel)
+
+    await cog._on_order_boosts_changed(interaction, [], frozenset({1}))
+
+    boost_orders.apply_page_selection.assert_awaited_once_with(
+        session.channel_id, [], frozenset({1})
+    )
+    channel.send.assert_awaited_once()
+
+
+async def test_order_confirm_rejects_an_empty_order() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+    interaction.user.guild_permissions.administrator = True
+
+    await cog._on_order_confirm(interaction)
+
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "нет ни одной позиции" in (embed.description or "")
+
+
+async def test_order_confirm_opens_the_amount_modal_prefilled_with_the_total() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    boost_orders = _fake_boost_orders()
+    boost_orders.list_lines = AsyncMock(return_value=[MagicMock()])
+    boost_orders.compute_total = AsyncMock(return_value=Decimal(930000))
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), boost_orders=boost_orders)
+    interaction = _interaction()
+    interaction.user.guild_permissions.administrator = True
+
+    await cog._on_order_confirm(interaction)
+
+    interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_amount_submitted_clears_the_draft_for_order_boosts() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_amount_submitted(interaction, "930000")
+
+    boost_orders.clear.assert_awaited_once_with(session.channel_id)
+
+
+async def test_amount_submitted_does_not_clear_a_draft_for_sell_tickets() -> None:
+    session = _session(kind=TicketKind.SELL_ITEMS, game_nick="Scaryyyyy")
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_amount_submitted(interaction, "100000")
+
+    boost_orders.clear.assert_not_called()
+
+
+# -- Module-level helpers -------------------------------------------------
+
+
+def test_infer_author_id_finds_the_first_non_bot_member_overwrite() -> None:
+    member = MagicMock(spec=discord.Member, id=123, bot=False)
+    role = MagicMock(spec=discord.Role)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.overwrites = {role: MagicMock(), member: MagicMock()}
+
+    assert _infer_author_id(channel) == 123
+
+
+def test_infer_author_id_returns_zero_when_nobody_found() -> None:
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.overwrites = {}
+
+    assert _infer_author_id(channel) == 0
+
+
+def test_resolve_member_by_mention() -> None:
+    member = MagicMock(spec=discord.Member, id=456)
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_member = MagicMock(return_value=member)
+
+    assert _resolve_member(guild, "<@456>") is member
+
+
+def test_resolve_member_by_display_name() -> None:
+    member = MagicMock(spec=discord.Member)
+    member.name = "scary"
+    member.display_name = "Scaryyyyy"
+    guild = MagicMock(spec=discord.Guild)
+    guild.members = [member]
+
+    assert _resolve_member(guild, "scaryyyyy") is member
+
+
+def test_resolve_member_returns_none_without_a_guild() -> None:
+    assert _resolve_member(None, "anything") is None

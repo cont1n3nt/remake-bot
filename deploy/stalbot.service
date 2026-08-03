@@ -1,0 +1,43 @@
+# systemd unit for stalbot — alternative to Docker (see README.md §7).
+#
+# Install:
+#   sudo cp deploy/stalbot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now stalbot
+#
+# Before installing, edit the three paths/user below to match your host:
+#   - User/Group:        a dedicated non-root system user, e.g.
+#                         `sudo useradd --system --create-home stalbot`
+#   - WorkingDirectory:  absolute path to this repository checkout
+#   - ExecStart:         absolute path to the venv's python inside that checkout
+#
+# Logs: `journalctl -u stalbot -f`
+
+[Unit]
+Description=stalbot — Discord bot for Stalcraft (Stalzone) x Google Sheets
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stalbot
+Group=stalbot
+WorkingDirectory=/opt/stalbot
+ExecStart=/opt/stalbot/.venv/bin/python -m stalbot
+Restart=on-failure
+RestartSec=5s
+
+# .env is loaded by pydantic-settings from WorkingDirectory; EnvironmentFile
+# is not required, but kept here in case host-level overrides are needed.
+EnvironmentFile=-/opt/stalbot/.env
+
+# Hardening — the bot only needs to read its own directory and write to
+# data/ (SQLite cache, OCR samples) inside it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/stalbot/data
+
+[Install]
+WantedBy=multi-user.target

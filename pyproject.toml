@@ -1,21 +1,147 @@
 [project]
-name = "discord-trade-bot"
+name = "stalbot"
 version = "0.1.0"
-description = "Discord bot for tracking trades via Google Sheets"
+description = "Discord-бот для Stalcraft (Stalzone) × Google Sheets"
+readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "Proprietary" }
 dependencies = [
-    "discord.py>=2.4,<3.0",
-    "gspread>=6.0,<7.0",
-    "pydantic>=2.0,<3.0",
-    "pydantic-settings>=2.0,<3.0",
-    "google-auth>=2.0,<3.0",
-    "python-dotenv>=1.0,<2.0",
-    "easyocr>=1.7,<2.0",
-    "simpleeval>=1.0,<2.0",
-    "Pillow>=11.0,<12.0",
-    "numpy>=2.1,<3.0",
-    "opencv-python-headless>=4.10,<5.0",
+    "discord-py>=2.4",
+    "gspread>=6.1",
+    "google-auth>=2.32",
+    "aiosqlite>=0.20",
+    "pydantic-settings>=2.4",
+    "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+ocr = [
+    "opencv-python>=4.10",
+    "Pillow>=10.4",
+    "pytesseract>=0.3",
+]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "hypothesis>=6.111",
+    "pre-commit>=3.8",
 ]
 
 [project.scripts]
-bot = "bot.__main__:main"
+stalbot = "stalbot.__main__:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stalbot"]
+
+# --- ruff -------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",             # isort
+    "N",             # pep8-naming
+    "D",             # pydocstyle
+    "ANN",           # flake8-annotations
+    "RUF",           # ruff-specific
+    "UP",            # pyupgrade
+    "B",             # flake8-bugbear
+    "DTZ",           # flake8-datetimez — запрет naive datetime
+    "S",             # flake8-bandit
+]
+ignore = [
+    "D203", # incompatible with D211
+    "D212", # incompatible with D213
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "ANN", "S101"]
+"src/stalbot/__main__.py" = ["D"]
+# Cyrillic currency/multiplier tokens are the actual feature here, not typos;
+# `_CURRENCY_TOKEN` is a regex fragment name, not a credential.
+"src/stalbot/domain/money.py" = ["RUF001", "RUF002", "RUF003", "S105"]
+"tests/unit/domain/test_money.py" = ["RUF001", "RUF002", "RUF003"]
+# Russian relative-date phrases ("через", "завтра", "час") are the feature.
+"src/stalbot/domain/clock.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/domain/test_clock.py" = ["RUF001", "RUF002", "RUF003"]
+# Attribute docstrings quote the sheet's own Russian column labels verbatim.
+"src/stalbot/domain/enums.py" = ["RUF001", "RUF002", "RUF003"]
+# Russian embed titles and the ℹ️ emoji glyph are the actual UI content.
+"src/stalbot/presentation/embeds/palette.py" = ["RUF001", "RUF002", "RUF003"]
+"src/stalbot/presentation/embeds/factory.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/presentation/embeds/test_factory.py" = ["RUF001", "RUF002", "RUF003"]
+# User-facing Russian error messages are the actual UI content.
+"src/stalbot/presentation/errors.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/presentation/test_errors.py" = ["RUF001", "RUF002", "RUF003"]
+# Sheet/column names and header text are literal spreadsheet content in Russian.
+"src/stalbot/infrastructure/sheets/layouts.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/infrastructure/sheets/test_layouts.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/infrastructure/sheets/test_protection.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/infrastructure/sheets/test_client.py" = ["RUF001", "RUF002", "RUF003"]
+# Item names, sheet cell content, ranks and referral-role labels in test
+# fixtures are literal Russian data mirroring the real spreadsheet.
+"tests/unit/infrastructure/cache/**" = ["RUF001", "RUF002", "RUF003"]
+"src/stalbot/infrastructure/cache/sync.py" = ["RUF001", "RUF002", "RUF003"]
+# Rank/referral-role labels and perk copy are literal Russian UI content;
+# the docstring quotes PLAN.md verbatim.
+"src/stalbot/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
+# Slash-command option names/descriptions and every user-facing string here
+# are literal Russian UI content (PLAN.md §10).
+"src/stalbot/presentation/cogs/**" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/presentation/cogs/**" = ["RUF001", "RUF002", "RUF003"]
+# /give_price's TXT header comments and column labels are literal Russian
+# file content the bot writes and re-parses (PLAN.md §10.5, §10.6).
+"src/stalbot/application/services/pricing.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/application/services/test_pricing.py" = ["RUF001", "RUF002", "RUF003"]
+# Attribute docstrings quote the sheet's own "у меня"/"мне" deal-direction
+# wording verbatim (PLAN.md §6.1, §10.11).
+"src/stalbot/application/dto/period_report.py" = ["RUF001", "RUF002", "RUF003"]
+# `/logs`'s "🔢 К странице" button label is literal Russian UI content
+# (PLAN.md §10.10).
+"src/stalbot/presentation/views/logs_pager.py" = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# --- mypy ---------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+plugins = []
+
+[[tool.mypy.overrides]]
+module = ["gspread.*", "aiosqlite.*", "google.oauth2.*"]
+ignore_missing_imports = true
+
+# --- pytest / coverage ------------------------------------------------------
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src/stalbot"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true

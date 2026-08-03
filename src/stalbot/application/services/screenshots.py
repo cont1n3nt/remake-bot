@@ -1,0 +1,100 @@
+"""Screenshot intake for tickets: hashing, dataset collection, OCR call (PLAN.md §11.5, §11.8).
+
+`ScreenshotService.on_attached()` is the one place a ticket's screenshot
+bytes get processed — it always calls `OcrGateway.recognize()` (decision A7:
+no `if OCR_ENABLED` branch in the ticket flow itself), always records a
+`screenshot_analyses` row, and — if `OCR_KEEP_SAMPLES` is on — always keeps
+a copy for the future training dataset, regardless of whether OCR is enabled.
+"""
+
+import hashlib
+from decimal import Decimal
+
+from stalbot.application.ports.clock import Clock
+from stalbot.application.ports.ocr import OcrGateway
+from stalbot.config.settings import Settings
+from stalbot.domain.entities.screenshot import OcrResult, ScreenshotImage
+from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
+    ScreenshotAnalysesRepository,
+)
+from stalbot.infrastructure.ocr.samples import save_sample
+
+_DEFAULT_EXTENSION = "png"
+
+
+class ScreenshotService:
+    """Handles a screenshot attachment the moment it lands in a ticket channel."""
+
+    def __init__(
+        self,
+        analyses: ScreenshotAnalysesRepository,
+        ocr: OcrGateway,
+        settings: Settings,
+        *,
+        clock: Clock,
+    ) -> None:
+        """Wire the service to its collaborators.
+
+        Args:
+            analyses: Cache repository for `screenshot_analyses`.
+            ocr: Recognition port; `NullOcrGateway` in v1.0.
+            settings: For `ocr_keep_samples`/`ocr_samples_dir`.
+            clock: Time source, tz-aware `GMT3`.
+        """
+        self._analyses = analyses
+        self._ocr = ocr
+        self._settings = settings
+        self._clock = clock
+
+    async def on_attached(
+        self, channel_id: int, data: bytes, *, filename: str, mime: str, image_url: str | None
+    ) -> OcrResult:
+        """Process one screenshot: hash, dataset copy, OCR call, bookkeeping row.
+
+        Args:
+            channel_id: Ticket channel the screenshot was attached in.
+            data: Original, unmodified screenshot bytes.
+            filename: Original attachment filename (used for its extension).
+            mime: Content type, e.g. `"image/png"`.
+            image_url: The log-channel's permanent CDN URL, once known.
+
+        Returns:
+            Whatever `OcrGateway.recognize()` returned — `status="disabled"`
+            in v1.0.
+        """
+        sha256 = hashlib.sha256(data).hexdigest()
+
+        sample_path: str | None = None
+        if self._settings.ocr_keep_samples:
+            extension = filename.rsplit(".", 1)[-1] if "." in filename else _DEFAULT_EXTENSION
+            path = await save_sample(
+                self._settings.ocr_samples_dir, sha256, data, extension=extension
+            )
+            sample_path = str(path)
+
+        image = ScreenshotImage(data=data, filename=filename, mime=mime)
+        result = await self._ocr.recognize(image)
+
+        await self._analyses.record(
+            channel_id=channel_id,
+            sha256=sha256,
+            image_url=image_url,
+            sample_path=sample_path,
+            size_bytes=len(data),
+            mime=mime,
+            status=result.status,
+            created_at=self._clock.now().isoformat(),
+        )
+        return result
+
+    async def record_confirmed_amount(self, channel_id: int, amount: Decimal) -> None:
+        """Label this ticket's screenshot(s) with the admin-confirmed deal amount.
+
+        A future OCR training pair — screenshot in, correct total out
+        (PLAN.md §11.8). Harmless no-op if the ticket had no screenshot.
+
+        Args:
+            channel_id: The confirmed ticket's channel.
+            amount: The confirmed deal amount.
+        """
+        await self._analyses.record_confirmed_amount(channel_id, str(amount))
