@@ -10,7 +10,6 @@ referrer on every deal would inflate it).
 
 import logging
 from collections.abc import Mapping
-from dataclasses import replace
 from datetime import datetime
 
 from stalbot.application.dto.transaction_request import (
@@ -18,11 +17,12 @@ from stalbot.application.dto.transaction_request import (
     TransactionRegistrationResult,
 )
 from stalbot.application.ports.clock import Clock
+from stalbot.application.services.binding import bind_discord
 from stalbot.domain.clock import format_datetime
 from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType
 from stalbot.domain.errors import SheetsWriteConflictError
-from stalbot.domain.nick import NormalizedNick, normalize_nick
+from stalbot.domain.nick import normalize_nick
 from stalbot.infrastructure.cache.repositories.idempotency import IdempotencyRepository
 from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
 from stalbot.infrastructure.cache.repositories.users import UsersCacheRepository
@@ -116,8 +116,13 @@ class TransactionService:
         await self._transactions.upsert_many([record])
 
         await self._cache_sync.sync_users_and_transactions()
-        discord_bound = await self._bind_discord(
-            nick, request.discord_id, force=request.force_rebind
+        discord_bound = await bind_discord(
+            self._users,
+            self._sheets,
+            self._clock,
+            nick,
+            request.discord_id,
+            force=request.force_rebind,
         )
 
         return TransactionRegistrationResult(
@@ -208,23 +213,6 @@ class TransactionService:
         await self._sheets.copy_formula_down(
             DATABASE_SHEET, columns=_FORMULA_COLUMNS, source_row=source_row, target_row=row
         )
-
-    async def _bind_discord(self, nick: NormalizedNick, discord_id: int, *, force: bool) -> bool:
-        profile = await self._users.get_by_nick(nick)
-        if profile is None or profile.discord_id == discord_id:
-            return False
-        if profile.discord_id is not None and not force:
-            return False  # bound to someone else, and the caller didn't confirm a rebind
-
-        ref = a1_range(DATABASE_SHEET, "I", profile.row)
-        await self._sheets.batch_update({ref: [[discord_id]]})
-        display = await self._users.get_nick_display(nick) or nick
-        await self._users.upsert_many(
-            [replace(profile, discord_id=discord_id)],
-            nick_displays={nick: display},
-            synced_at=self._clock.now().isoformat(),
-        )
-        return True
 
 
 def _cell_nonempty(result: Mapping[str, CellGrid], ref: str) -> bool:

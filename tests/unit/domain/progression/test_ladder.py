@@ -68,6 +68,16 @@ def test_by_label_returns_none_for_unknown_label() -> None:
     assert RankLadder().by_label("not a real rank") is None
 
 
+def test_by_key_finds_exact_match() -> None:
+    tier = RankLadder().by_key("elite")
+    assert tier is not None
+    assert tier.label == "💎 Elite"
+
+
+def test_by_key_returns_none_for_unknown_key() -> None:
+    assert RankLadder().by_key("not-a-real-key") is None
+
+
 def test_by_role_id_finds_exact_match() -> None:
     ladder = RankLadder()
     elite = ladder.by_label("💎 Elite")
@@ -84,6 +94,13 @@ def test_role_ids_covers_every_tier() -> None:
 def test_tiers_are_sorted_ascending_by_threshold() -> None:
     thresholds = [tier.xp_required for tier in RankLadder().tiers]
     assert thresholds == sorted(thresholds)
+
+
+def test_threshold_of_returns_the_tiers_unlock_value() -> None:
+    ladder = RankLadder()
+    elite = ladder.by_label("💎 Elite")
+    assert elite is not None
+    assert ladder.threshold_of(elite) == 3500
 
 
 def test_referral_ladder_current_and_progress() -> None:

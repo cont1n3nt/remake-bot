@@ -103,6 +103,14 @@ class Ladder[TierT: Tier]:
         pct = min(100, round(done / need * 100)) if need > 0 else 100
         return Progress(done=done, need=need, pct=pct)
 
+    def threshold_of(self, tier: TierT) -> int:
+        """Return the numeric threshold that unlocks *tier*.
+
+        Args:
+            tier: A tier from this ladder.
+        """
+        return self._threshold_of(tier)
+
     def perks_of(self, tier: TierT) -> tuple[str, ...]:
         """Return the ready-to-display perk lines for a tier.
 
@@ -124,6 +132,20 @@ class Ladder[TierT: Tier]:
         """
         for tier in self._tiers:
             if tier.label == label:
+                return tier
+        return None
+
+    def by_key(self, key: str) -> TierT | None:
+        """Look up a tier by its stable key (e.g. `"elite"`).
+
+        Used by `/set_rank` (M8) to resolve its choice value back to a tier
+        — unlike `by_label`, this does not depend on the sheet's text.
+
+        Args:
+            key: A tier's `key`.
+        """
+        for tier in self._tiers:
+            if tier.key == key:
                 return tier
         return None
 
