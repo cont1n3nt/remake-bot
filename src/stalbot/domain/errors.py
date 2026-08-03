@@ -28,6 +28,22 @@ class NickNotBoundError(DomainError):
     """An operation requires a nick bound to a Discord account, but it is not."""
 
 
+class PlayerNotFoundError(DomainError):
+    """A lookup by game nick found no matching player in the database."""
+
+
+class ProfileAccessDeniedError(DomainError):
+    """A non-admin requester tried to view a profile that is not their own."""
+
+
+class NoTransactionsYetError(DomainError):
+    """`/set_referral` was called for a player with no recorded deals yet.
+
+    The referrer is written to a player's *first* `Тикеты` row (PLAN.md
+    §10.12), so there must be at least one before a referrer can be set.
+    """
+
+
 class ItemNotFoundError(DomainError):
     """A catalog lookup for an item failed."""
 
@@ -38,6 +54,16 @@ class DuplicateItemError(DomainError):
 
 class InvalidPeriodError(DomainError):
     """A requested date/period range is invalid (e.g. end before start)."""
+
+
+class TicketSessionNotFoundError(DomainError):
+    """A ticket-flow interaction fired for a channel with no tracked session.
+
+    Should only happen for a stray/stale component (e.g. the channel was
+    deleted and its `ticket_sessions` row cleaned up, but an old message's
+    button is still clickable) — normal operation always finds a session
+    (PLAN.md §11.2 creates one on `on_guild_channel_create`).
+    """
 
 
 class InfrastructureError(StalbotError):

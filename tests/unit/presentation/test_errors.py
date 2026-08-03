@@ -8,7 +8,13 @@ import pytest
 from discord import app_commands
 
 from stalbot.domain.clock import GMT3
-from stalbot.domain.errors import AmountParseError, DomainError, ItemNotFoundError
+from stalbot.domain.errors import (
+    AmountParseError,
+    DomainError,
+    ItemNotFoundError,
+    NoTransactionsYetError,
+    TicketSessionNotFoundError,
+)
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.errors import _resolve_message, on_app_command_error
 
@@ -38,6 +44,19 @@ def test_known_domain_error_maps_to_its_message() -> None:
 def test_known_domain_error_wrapped_in_command_invoke_error() -> None:
     wrapped = _wrap(ItemNotFoundError("no such item"))
     assert _resolve_message(wrapped, "abc123") == "Предмет не найден в базе."
+
+
+def test_no_transactions_yet_error_maps_to_its_message() -> None:
+    wrapped = _wrap(NoTransactionsYetError("no deals yet"))
+    assert (
+        _resolve_message(wrapped, "abc123")
+        == "Реферала можно указать только после первой сделки игрока."
+    )
+
+
+def test_ticket_session_not_found_error_maps_to_its_message() -> None:
+    wrapped = _wrap(TicketSessionNotFoundError("no session for channel 1"))
+    assert "Тикет не найден" in _resolve_message(wrapped, "abc123")
 
 
 def test_unlisted_domain_error_falls_back_to_str() -> None:

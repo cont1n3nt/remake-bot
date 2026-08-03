@@ -33,3 +33,29 @@ class PriceField(StrEnum):
 
     BUY = "buy"
     SELL = "sell"
+
+
+class TicketStatus(StrEnum):
+    """A ticket session's place in the flow (PLAN.md §11.2–§11.5)."""
+
+    AWAITING_TOOL = "awaiting_tool"
+    """Channel just created; waiting for Ticket Tool's own first message."""
+
+    AWAITING_FORM = "awaiting_form"
+    """Panel posted, delivery method picked; the player's form modal is next."""
+
+    FILLED = "filled"
+    """Form submitted; the summary card is up, waiting for admin confirmation."""
+
+    CONFIRMED = "confirmed"
+    """Admin confirmed the deal; `TransactionService.register()` has run."""
+
+
+class DeliveryMethod(StrEnum):
+    """How a player will send in what they're selling (PLAN.md §11.3)."""
+
+    MAIL = "mail"
+    """📬 Почта — sent to the player's in-game mailbox."""
+
+    TRADE = "trade"
+    """🤝 Обмен — a direct in-game trade."""

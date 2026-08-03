@@ -19,9 +19,13 @@ from stalbot.domain.errors import (
     InvalidPeriodError,
     ItemNotFoundError,
     NickNotBoundError,
+    NoTransactionsYetError,
+    PlayerNotFoundError,
+    ProfileAccessDeniedError,
     SheetsUnavailableError,
     SheetsWriteConflictError,
     StalbotError,
+    TicketSessionNotFoundError,
 )
 from stalbot.infrastructure.logging.trace import current_trace_id
 from stalbot.presentation.embeds.factory import EmbedFactory
@@ -37,9 +41,15 @@ _DOMAIN_MESSAGES: dict[type[StalbotError], str] = {
     ),
     DeadlineParseError: "Не удалось распознать дату.",
     NickNotBoundError: "Этот игровой ник не привязан к Discord-аккаунту.",
+    NoTransactionsYetError: "Реферала можно указать только после первой сделки игрока.",
+    PlayerNotFoundError: "Игрок с таким ником не найден в базе.",
+    ProfileAccessDeniedError: "Вы можете смотреть только свой профиль.",
     ItemNotFoundError: "Предмет не найден в базе.",
     DuplicateItemError: "Такой предмет уже есть в базе.",
     InvalidPeriodError: "Некорректный период.",
+    TicketSessionNotFoundError: (
+        "Тикет не найден или ещё не инициализирован. Обратитесь к администратору."
+    ),
     SheetsUnavailableError: "Google Таблица временно недоступна, попробуйте позже.",
     SheetsWriteConflictError: "Не удалось подтвердить запись, попробуйте ещё раз.",
     CacheStaleError: "Данные устарели, попробуйте ещё раз через несколько секунд.",
