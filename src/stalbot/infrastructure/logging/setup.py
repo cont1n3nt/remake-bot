@@ -74,5 +74,16 @@ def configure_logging(*, log_level: str = "INFO", log_file: Path = _DEFAULT_LOG_
     file_handler.setFormatter(formatter)
 
     root = logging.getLogger()
+    # INFRA2-9: close whatever handlers were already attached before
+    # replacing them — `RotatingFileHandler` holds an open file descriptor,
+    # and just reassigning `.handlers` drops the reference without ever
+    # calling `.close()` on it. Harmless with today's single startup call,
+    # but a latent fd leak for any future caller that reconfigures logging
+    # more than once per process. `root.handlers = [...]` right below is
+    # already an unconditional full takeover of the root logger regardless
+    # (it drops anything already attached, ours or not) — closing what it
+    # drops is consistent with that, not a new scope of ownership.
+    for handler in root.handlers:
+        handler.close()
     root.handlers = [stream_handler, file_handler]
     root.setLevel(log_level)
