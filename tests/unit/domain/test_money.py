@@ -149,11 +149,42 @@ EVALUATE_AMOUNT_ERROR_CASES: list[str] = [
     "-" * 40 + "1",  # 40 nested UnaryOp nodes -> exceeds the AST depth guard
     "x" * 300,
     "lambda: 1",
+    # SEC-1: Python's native grammar recognizes scientific notation as a
+    # float literal, unlike parse_amount's regex-based path — a big enough
+    # one overflows silently to `inf`/`-inf` instead of raising SyntaxError.
+    "1e400",
+    "1e309",
+    "1e400 - 1e400",
+    "-1e400",
 ]
 
 
 @pytest.mark.parametrize("expression", EVALUATE_AMOUNT_ERROR_CASES)
 def test_evaluate_amount_rejects_invalid_input(expression: str) -> None:
+    with pytest.raises(AmountParseError):
+        evaluate_amount(expression)
+
+
+# --- SEC-1: non-finite/overflowing results must raise, never leak an -------
+# --- internal decimal.DecimalException past the domain boundary. ----------
+
+
+def test_evaluate_amount_rejects_scientific_notation_that_overflows_to_infinity() -> None:
+    with pytest.raises(AmountParseError):
+        evaluate_amount("1e400")
+
+
+def test_evaluate_amount_allows_scientific_notation_that_stays_finite() -> None:
+    """Only non-finite results are rejected — scientific notation itself is fine."""
+    assert evaluate_amount("1e10") == Decimal("1e10")
+
+
+def test_evaluate_amount_rejects_a_decimal_overflow_from_legitimate_arithmetic() -> None:
+    """A handful of nested `** 12` terms, each within `_MAX_POWER_EXPONENT`, can
+    still overflow the context's exponent range — must not leak `decimal.Overflow`."""
+    expression = "2"
+    for _ in range(7):
+        expression = f"({expression}**12)"
     with pytest.raises(AmountParseError):
         evaluate_amount(expression)
 

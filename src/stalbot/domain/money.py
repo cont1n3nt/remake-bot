@@ -7,10 +7,11 @@ money text (see PLAN.md §5.1).
 """
 
 import ast
+import math
 import re
 import unicodedata
 from collections.abc import Iterator, Mapping
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
+from decimal import ROUND_HALF_UP, Decimal, DecimalException, InvalidOperation, localcontext
 from typing import Final
 
 from stalbot.domain.errors import AmountParseError
@@ -75,6 +76,14 @@ _MAX_INPUT_LENGTH: Final = 256
 #: 256-character input limit. 60 leaves comfortable headroom above any
 #: realistic amount while still catching genuinely absurd input elsewhere
 #: (AST depth/length guards, `SEC-1`'s finite-result check).
+#:
+#: `localcontext()` at every call site below only overrides `prec` — `Emax`/
+#: `Emin`/the trap set (`InvalidOperation`/`DivisionByZero`/`Overflow`, all
+#: trapped) stay at the stdlib default. SEC-1's `except DecimalException`
+#: depends on that: it is what turns an exponent explosion (nested `** 12`
+#: terms, each individually within `_MAX_POWER_EXPONENT`) into a raised
+#: `decimal.Overflow` instead of a silently wrong result. Do not widen
+#: `Emax` or disable a trap here without re-auditing that guarantee.
 _ARITHMETIC_PRECISION: Final = 60
 
 _NARROW_NBSP: Final = " "
@@ -256,9 +265,22 @@ def evaluate_amount(expression: str) -> Decimal:
         _check_ast(tree)
 
         try:
-            return _eval_node(tree.body, tokens)
+            result = _eval_node(tree.body, tokens)
         except ZeroDivisionError as exc:
             raise AmountParseError("division by zero") from exc
+        except DecimalException as exc:
+            # SEC-1: legitimate-looking arithmetic can still overflow the
+            # context's exponent range (e.g. a handful of nested `** 12`
+            # terms, each individually within `_MAX_POWER_EXPONENT`) and
+            # raise `decimal.Overflow`/`InvalidOperation` — an internal
+            # exception type that must never reach the caller unwrapped.
+            raise AmountParseError(f"invalid arithmetic result: {expression!r}") from exc
+        if not result.is_finite():
+            # Belt and suspenders alongside `_check_ast`'s `ast.Constant`
+            # check: catches a non-finite `Decimal` that evaluation produced
+            # without raising, however that might happen.
+            raise AmountParseError(f"amount is not finite: {expression!r}")
+        return result
 
 
 def _walk_with_depth(node: ast.AST, depth: int = 0) -> Iterator[tuple[int, ast.AST]]:
@@ -278,6 +300,14 @@ def _check_ast(tree: ast.AST) -> None:
         if isinstance(node, ast.Constant):
             if isinstance(node.value, bool) or not isinstance(node.value, int | float):
                 raise AmountParseError("only numeric literals are allowed")
+            if isinstance(node.value, float) and not math.isfinite(node.value):
+                # SEC-1: Python's own grammar recognizes scientific notation
+                # ("1e400") as a float literal that `_NUMBER_SPAN_RE` never
+                # sees (it has no `e`-exponent handling), so it reaches
+                # `ast.parse` unmodified — one big enough overflows to `inf`
+                # silently, no `SyntaxError`, and the type check above lets
+                # it through (`inf` is a legitimate `float`).
+                raise AmountParseError("amount is not finite")
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
             exponent = node.right
             if not (isinstance(exponent, ast.Constant) and isinstance(exponent.value, int)):
