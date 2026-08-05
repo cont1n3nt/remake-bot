@@ -11,6 +11,7 @@ import pytest
 from stalbot.application.services.audit import AuditService
 from stalbot.config.settings import Settings
 from stalbot.infrastructure.cache.db import CacheDb
+from stalbot.infrastructure.logging.trace import current_trace_id
 from stalbot.infrastructure.sheets.client import SheetsClient
 from stalbot.presentation.bot import StalbotBot, _channel_display, _format_arguments
 from stalbot.presentation.embeds.factory import EmbedFactory
@@ -224,6 +225,89 @@ async def test_run_progression_poll_is_a_no_op_before_progression_service_exists
     bot = _bot(settings)
 
     await bot._run_progression_poll()  # must not raise
+
+
+async def test_run_users_sync_gets_a_fresh_trace_id_each_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """INFRA2-3: a `tasks.loop` runs as one long-lived `asyncio.Task` for the
+    whole process — without stamping a fresh trace id every tick, every log
+    line from every future tick would share whatever the very first tick
+    generated."""
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    cache_sync = MagicMock()
+    cache_sync.sync_users_and_transactions = AsyncMock(return_value=SimpleNamespace(warnings=()))
+    bot.cache_sync = cache_sync
+    bot._send_warnings = AsyncMock()  # type: ignore[method-assign]
+
+    await bot._run_users_sync()
+    first = current_trace_id()
+    await bot._run_users_sync()
+    second = current_trace_id()
+
+    assert first != second
+
+
+async def test_run_items_sync_gets_a_fresh_trace_id_each_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    cache_sync = MagicMock()
+    cache_sync.sync_items = AsyncMock()
+    bot.cache_sync = cache_sync
+
+    await bot._run_items_sync()
+    first = current_trace_id()
+    await bot._run_items_sync()
+    second = current_trace_id()
+
+    assert first != second
+
+
+async def test_run_progression_poll_gets_a_fresh_trace_id_each_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    progression_service = MagicMock()
+    progression_service.sync = AsyncMock(return_value=[])
+    bot.progression_service = progression_service
+
+    await bot._run_progression_poll()
+    first = current_trace_id()
+    await bot._run_progression_poll()
+    second = current_trace_id()
+
+    assert first != second
+
+
+async def test_run_metrics_log_gets_a_fresh_trace_id_each_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    health_service = MagicMock()
+    health_service.snapshot = AsyncMock(
+        return_value=SimpleNamespace(
+            sheets_read_requests=0,
+            sheets_write_requests=0,
+            cache_hit_rate=None,
+            cache_age_seconds=None,
+            audit_queue_size=0,
+            ocr_sample_count=0,
+            ocr_confirmed_sample_count=0,
+        )
+    )
+    bot.health_service = health_service
+
+    await bot._run_metrics_log()
+    first = current_trace_id()
+    await bot._run_metrics_log()
+    second = current_trace_id()
+
+    assert first != second
 
 
 async def test_on_member_update_syncs_booster_flag_on_transition(

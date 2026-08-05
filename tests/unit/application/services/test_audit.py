@@ -10,6 +10,7 @@ import pytest
 from stalbot.application.dto.audit_event import AuditEvent
 from stalbot.application.services.audit import AuditService
 from stalbot.domain.clock import GMT3
+from stalbot.infrastructure.logging.trace import current_trace_id
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 NOW = datetime(2026, 7, 31, 21, 45, tzinfo=GMT3)
@@ -102,6 +103,28 @@ async def test_stop_before_start_is_a_no_op(factory: EmbedFactory) -> None:
     service = AuditService(gateway, factory)
     await service.stop()
     assert gateway.batches == []
+
+
+async def test_worker_gets_a_fresh_trace_id_each_batch(factory: EmbedFactory) -> None:
+    """INFRA2-3: the worker is one long-lived `asyncio.Task` for the whole
+    process — without stamping a fresh trace id every batch, every later
+    delivery-failure log line would share whatever the first batch generated."""
+    seen_trace_ids: list[str] = []
+
+    class _CapturingGateway:
+        async def send_batch(self, embeds: Sequence[discord.Embed]) -> None:
+            seen_trace_ids.append(current_trace_id())
+
+    service = AuditService(_CapturingGateway(), factory)
+    service.record(_make_event("t1"))
+    service.start()
+    await _wait_until(lambda: len(seen_trace_ids) >= 1)
+
+    service.record(_make_event("t2"))
+    await _wait_until(lambda: len(seen_trace_ids) >= 2)
+    await service.stop()
+
+    assert seen_trace_ids[0] != seen_trace_ids[1]
 
 
 def test_queue_size_reflects_unconsumed_events(factory: EmbedFactory) -> None:

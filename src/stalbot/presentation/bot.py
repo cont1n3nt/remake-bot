@@ -38,7 +38,7 @@ from stalbot.infrastructure.cache.sync import CacheSync
 from stalbot.infrastructure.discord.audit_channel import AuditChannelGateway
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.infrastructure.discord.role_gateway import DiscordRoleGateway
-from stalbot.infrastructure.logging.trace import current_trace_id
+from stalbot.infrastructure.logging.trace import current_trace_id, new_trace_id, set_trace_id
 from stalbot.infrastructure.ocr.null import NullOcrGateway
 from stalbot.infrastructure.sheets.client import SheetsClient
 from stalbot.presentation.cogs.catalog import CatalogCog
@@ -279,24 +279,36 @@ class StalbotBot(commands.Bot):
         self._progression_loop.start()
 
     async def _run_users_sync(self) -> None:
+        # A `tasks.loop` runs as one long-lived `asyncio.Task` for the whole
+        # process, so `current_trace_id()`'s "generate once, cache forever"
+        # fallback would otherwise stick to whatever the very first tick
+        # generated — every log line from every future tick sharing one id
+        # defeats "one id = one operation" (INFRA2-3). Stamping a fresh one
+        # at the top of every tick is what actually delivers that invariant
+        # for a loop, the same way a new interaction's own Task delivers it
+        # for granted for command handlers.
+        set_trace_id(new_trace_id())
         if self.cache_sync is None:
             return
         report = await self.cache_sync.sync_users_and_transactions()
         await self._send_warnings(report.warnings)
 
     async def _run_items_sync(self) -> None:
+        set_trace_id(new_trace_id())  # INFRA2-3, see `_run_users_sync`
         if self.cache_sync is None:
             return
         await self.cache_sync.sync_items()
 
     async def _run_progression_poll(self) -> None:
         """Background poll over the whole player base (PLAN.md §9.2), no event channel."""
+        set_trace_id(new_trace_id())  # INFRA2-3, see `_run_users_sync`
         if self.progression_service is None:
             return
         await self.progression_service.sync()
 
     async def _run_metrics_log(self) -> None:
         """Log Sheets/cache/audit counters once a minute (PLAN.md §12, M11)."""
+        set_trace_id(new_trace_id())  # INFRA2-3, see `_run_users_sync`
         if self.health_service is None:
             return
         status = await self.health_service.snapshot()
