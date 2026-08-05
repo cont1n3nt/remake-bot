@@ -107,8 +107,13 @@ async def test_profile_sends_embed_and_forwards_admin_flags() -> None:
     )
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "Scaryyyyy" in (embed.title or "")
-    assert "💎 Elite" in (embed.description or "")
     assert "🎁 Бонусы ранга" in (embed.description or "")
+    field_values = {field.name: field.value for field in embed.fields}
+    assert field_values["🪙 Coins"] == "1 240"
+    assert field_values["⚡ XP"] == "3 780"
+    assert field_values["🏅 Ранг"] == "💎 Elite"
+    assert field_values["🤝 Реф-роль"] == "🧲 Вербовщик"
+    assert field_values["👥 Приглашено"] == "2"
 
 
 async def test_profile_shows_max_rank_notice_when_maxed() -> None:

@@ -19,7 +19,7 @@ from stalbot.domain.money import format_amount
 from stalbot.domain.progression.ladder import Ladder, Tier
 from stalbot.domain.progression.ranks import RankLadder
 from stalbot.domain.progression.referrals import ReferralLadder
-from stalbot.presentation.embeds.factory import EmbedFactory
+from stalbot.presentation.embeds.factory import EmbedFactory, enforce_limits
 from stalbot.presentation.embeds.progress import render_progress_bar
 from stalbot.presentation.views.paginated_embed import PaginatedEmbedView
 
@@ -99,13 +99,7 @@ class ProfileCog(commands.Cog):
         rank_label = profile.rank or "—"
         referral_label = profile.referral_role or "—"
 
-        lines = [
-            f"🪙 Coins {format_amount(profile.coins, currency=False)}"
-            f"    ⚡ XP {format_amount(profile.xp, currency=False)}"
-            f"    🏅 Ранг {rank_label}",
-            f"🤝 Реф-роль {referral_label}    👥 Приглашено {profile.referrals_count}",
-            _SEPARATOR,
-        ]
+        lines: list[str] = []
 
         rank_tier = self._rank_ladder.by_label(profile.rank) if profile.rank else None
         if rank_tier is not None:
@@ -115,8 +109,19 @@ class ProfileCog(commands.Cog):
 
         lines.extend(_progress_lines(self._rank_ladder, profile.xp, unit="XP"))
 
-        embed = self._embeds.info(f"👤 Профиль — {view.nick_display}", "\n".join(lines))
-        return embed
+        embed = self._embeds.info(
+            f"👤 Профиль — {view.nick_display}", "\n".join(lines) if lines else None
+        )
+        embed.add_field(
+            name="🪙 Coins", value=format_amount(profile.coins, currency=False), inline=True
+        )
+        embed.add_field(
+            name="⚡ XP", value=format_amount(profile.xp, currency=False), inline=True
+        )
+        embed.add_field(name="🏅 Ранг", value=rank_label, inline=True)
+        embed.add_field(name="🤝 Реф-роль", value=referral_label, inline=True)
+        embed.add_field(name="👥 Приглашено", value=str(profile.referrals_count), inline=True)
+        return enforce_limits(embed)
 
     def _build_referrals_pages(
         self, view: ProfileView, referred: Sequence[ReferredPlayer]
