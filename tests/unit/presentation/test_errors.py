@@ -13,6 +13,8 @@ from stalbot.domain.errors import (
     DomainError,
     ItemNotFoundError,
     NoTransactionsYetError,
+    ProtectedRangeWriteError,
+    SheetStructureError,
     TicketSessionNotFoundError,
 )
 from stalbot.presentation.embeds.factory import EmbedFactory
@@ -72,6 +74,30 @@ def test_unknown_error_shows_trace_id() -> None:
     message = _resolve_message(wrapped, "abc123")
     assert "abc123" in message
     assert "Внутренняя ошибка" in message
+
+
+# --- PRES-1: infrastructure errors must never leak internal details ---------
+
+
+def test_sheet_structure_error_does_not_leak_internal_details() -> None:
+    wrapped = _wrap(SheetStructureError("missing sheet: 'Users'; block 'DataBase' mismatch"))
+    message = _resolve_message(wrapped, "abc123")
+    assert "Users" not in message
+    assert "missing sheet" not in message
+    assert "abc123" in message
+    assert "Внутренняя ошибка" in message
+
+
+def test_protected_range_write_error_does_not_leak_internal_details() -> None:
+    wrapped = _wrap(
+        ProtectedRangeWriteError(
+            "column F on sheet 'DataBase' is formula-owned (attempted write to 'DataBase!F3')"
+        )
+    )
+    message = _resolve_message(wrapped, "abc123")
+    assert "DataBase!F3" not in message
+    assert "formula-owned" not in message
+    assert "abc123" in message
 
 
 class _FakeClock:

@@ -15,6 +15,7 @@ from stalbot.domain.errors import (
     AmountParseError,
     CacheStaleError,
     DeadlineParseError,
+    DomainError,
     DuplicateItemError,
     InvalidPeriodError,
     ItemNotFoundError,
@@ -32,8 +33,9 @@ from stalbot.presentation.embeds.factory import EmbedFactory
 
 logger = logging.getLogger(__name__)
 
-#: User-facing text per domain exception type. Anything not listed falls
-#: back to `str(exc)` if it is non-empty, else a generic message.
+#: User-facing text per domain exception type. A `DomainError` not listed
+#: here falls back to `str(exc)` (curated to be user-facing by convention);
+#: anything else unmapped gets a generic message — see `_resolve_message`.
 _DOMAIN_MESSAGES: dict[type[StalbotError], str] = {
     AmountParseError: (
         "Не удалось распознать сумму. Примеры корректного ввода: "
@@ -68,7 +70,16 @@ def _resolve_message(error: app_commands.AppCommandError, trace_id: str) -> str:
         for exc_type, message in _DOMAIN_MESSAGES.items():
             if isinstance(cause, exc_type):
                 return message
-        return str(cause) or "Произошла ошибка."
+        if isinstance(cause, DomainError):
+            # Domain messages are curated to be user-facing by convention —
+            # safe to surface directly even when not explicitly mapped above.
+            return str(cause) or "Произошла ошибка."
+        # Anything else (InfrastructureError and any future StalbotError not
+        # rooted in DomainError) may carry internal details — sheet/column
+        # names, header diffs — that must never reach Discord. Log it under
+        # the trace id shown to the user instead of leaking `str(cause)`.
+        logger.warning("infrastructure error (trace=%s): %s", trace_id, cause, exc_info=cause)
+        return f"Внутренняя ошибка, обратитесь к администратору. Trace: `{trace_id}`"
 
     logger.exception("unhandled app command error (trace=%s)", trace_id, exc_info=error)
     return f"Внутренняя ошибка, обратитесь к администратору. Trace: `{trace_id}`"
