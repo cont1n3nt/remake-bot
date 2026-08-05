@@ -6,12 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
 dependencies = [
-    "discord-py>=2.4",
-    "gspread>=6.1",
-    "google-auth>=2.32",
-    "aiosqlite>=0.20",
-    "pydantic-settings>=2.4",
-    "structlog>=24.4",
+    "discord-py==2.7.1",
+    "gspread==6.2.1",
+    "google-auth==2.56.2",
+    "aiosqlite==0.22.1",
+    "pydantic-settings==2.14.2",
+    "structlog==26.1.0",
 ]
 
 [project.optional-dependencies]
@@ -21,13 +21,13 @@ ocr = [
     "pytesseract>=0.3",
 ]
 dev = [
-    "ruff>=0.6",
-    "mypy>=1.11",
-    "pytest>=8.3",
-    "pytest-asyncio>=0.24",
-    "pytest-cov>=5.0",
-    "hypothesis>=6.111",
-    "pre-commit>=3.8",
+    "ruff==0.16.1",
+    "mypy==2.3.0",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "hypothesis==6.164.0",
+    "pre-commit==4.6.1",
 ]
 
 [project.scripts]
