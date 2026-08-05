@@ -3,11 +3,16 @@
 from unittest.mock import AsyncMock
 
 from stalbot.presentation.cogs.tickets.modals import OrderBoostsFormModal
+from stalbot.presentation.embeds.factory import EmbedFactory
 
 
 def test_deadline_field_shows_pending_text_when_reopened_without_an_error() -> None:
     modal = OrderBoostsFormModal(
-        AsyncMock(), nick="Scaryyyyy", deadline_text="через 3 часа", error_hint=None
+        AsyncMock(),
+        embeds=EmbedFactory(),
+        nick="Scaryyyyy",
+        deadline_text="через 3 часа",
+        error_hint=None,
     )
     assert modal.deadline.default == "через 3 часа"
 
@@ -16,6 +21,7 @@ def test_deadline_field_drops_the_default_so_the_error_placeholder_is_visible() 
     """TICK-4: Discord only shows `placeholder` on an empty field — `default` would hide it."""
     modal = OrderBoostsFormModal(
         AsyncMock(),
+        embeds=EmbedFactory(),
         nick="Scaryyyyy",
         deadline_text="через много часов",
         error_hint="Слишком большое число часов.",
@@ -29,6 +35,7 @@ def test_other_fields_still_carry_their_pending_text_when_reopened_on_error() ->
     """Only the deadline field's `default` is dropped — everything else round-trips."""
     modal = OrderBoostsFormModal(
         AsyncMock(),
+        embeds=EmbedFactory(),
         nick="Scaryyyyy",
         deadline_text="через много часов",
         referrer_nick="OtherNick",

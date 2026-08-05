@@ -10,6 +10,9 @@ from collections.abc import Awaitable, Callable
 
 import discord
 
+from stalbot.presentation.embeds.factory import EmbedFactory
+from stalbot.presentation.views.error_modal import ErrorReportingModal
+
 _FormSubmitHandler = Callable[[discord.Interaction, str, str | None, str | None], Awaitable[None]]
 _AmountSubmitHandler = Callable[[discord.Interaction, str], Awaitable[None]]
 _OrderFormSubmitHandler = Callable[
@@ -23,17 +26,18 @@ _DEADLINE_LABEL = "До какой даты и времени нужно сде�
 _DEADLINE_PLACEHOLDER = "31.07.2026 21:00 (по МСК)"
 
 
-class TicketFormModal(discord.ui.Modal):
+class TicketFormModal(ErrorReportingModal):
     """Ник + optional referrer fields, shared by `SELL_ITEMS` and `SELL_BOOSTS` (PLAN.md §11.4)."""
 
-    def __init__(self, on_submit: _FormSubmitHandler) -> None:
+    def __init__(self, on_submit: _FormSubmitHandler, *, embeds: EmbedFactory) -> None:
         """Build the modal.
 
         Args:
             on_submit: Called with the interaction, the typed nick, and the
                 two optional referrer fields (each `None` if left blank).
+            embeds: Factory used to build the error embed on an `on_submit` failure.
         """
-        super().__init__(title="📝 Заявка")
+        super().__init__(title="📝 Заявка", embeds=embeds)
         self._on_submit_cb = on_submit
         self.nick: discord.ui.TextInput[TicketFormModal] = discord.ui.TextInput(
             label="Ваш игровой ник", max_length=_NICK_MAX_LENGTH
@@ -58,20 +62,27 @@ class TicketFormModal(discord.ui.Modal):
         )
 
 
-class AmountModal(discord.ui.Modal):
+class AmountModal(ErrorReportingModal):
     """The one `💰 Сумма сделки` field, shared by `/add`-equivalent ticket confirmation."""
 
-    def __init__(self, on_submit: _AmountSubmitHandler, *, default: str | None = None) -> None:
+    def __init__(
+        self,
+        on_submit: _AmountSubmitHandler,
+        *,
+        embeds: EmbedFactory,
+        default: str | None = None,
+    ) -> None:
         """Build the modal.
 
         Args:
             on_submit: Called with the interaction and the raw typed amount
                 (parsed by the caller via `evaluate_amount`).
+            embeds: Factory used to build the error embed on an `on_submit` failure.
             default: Pre-filled value. Always `None` in v1.0 — the
                 parameter exists so M13's OCR estimate can prefill it
                 without touching this modal (PLAN.md §11.8).
         """
-        super().__init__(title="💰 Сумма сделки")
+        super().__init__(title="💰 Сумма сделки", embeds=embeds)
         self._on_submit_cb = on_submit
         self.amount: discord.ui.TextInput[AmountModal] = discord.ui.TextInput(
             label="Сумма сделки",
@@ -86,7 +97,7 @@ class AmountModal(discord.ui.Modal):
         await self._on_submit_cb(interaction, str(self.amount.value))
 
 
-class OrderBoostsFormModal(discord.ui.Modal):
+class OrderBoostsFormModal(ErrorReportingModal):
     """Ник + срок + optional referrer fields, for `ORDER_BOOSTS` (PLAN.md §11.4).
 
     Discord has no date-picker in modals, so the deadline is free text
@@ -100,6 +111,7 @@ class OrderBoostsFormModal(discord.ui.Modal):
         self,
         on_submit: _OrderFormSubmitHandler,
         *,
+        embeds: EmbedFactory,
         nick: str = "",
         deadline_text: str = "",
         referrer_nick: str = "",
@@ -112,6 +124,7 @@ class OrderBoostsFormModal(discord.ui.Modal):
             on_submit: Called with the interaction, the typed nick, the
                 typed deadline text (unparsed — the caller parses it), and
                 the two optional referrer fields (each `None` if blank).
+            embeds: Factory used to build the error embed on an `on_submit` failure.
             nick: Pre-filled nick, when reopening after a validation error.
             deadline_text: Pre-filled deadline text, same case.
             referrer_nick: Pre-filled referrer nick, same case.
@@ -119,7 +132,7 @@ class OrderBoostsFormModal(discord.ui.Modal):
             error_hint: If set, replaces the deadline field's placeholder
                 with this message instead of the usual format example.
         """
-        super().__init__(title="📝 Заявка на заказ бустов")
+        super().__init__(title="📝 Заявка на заказ бустов", embeds=embeds)
         self._on_submit_cb = on_submit
         self.nick: discord.ui.TextInput[OrderBoostsFormModal] = discord.ui.TextInput(
             label="Ваш игровой ник", default=nick or None, max_length=_NICK_MAX_LENGTH
@@ -163,17 +176,18 @@ class OrderBoostsFormModal(discord.ui.Modal):
         )
 
 
-class QuantityModal(discord.ui.Modal):
+class QuantityModal(ErrorReportingModal):
     """The one `🔢 Ввести количество` field for the active boost-order line (PLAN.md §11.6)."""
 
-    def __init__(self, on_submit: _AmountSubmitHandler) -> None:
+    def __init__(self, on_submit: _AmountSubmitHandler, *, embeds: EmbedFactory) -> None:
         """Build the modal.
 
         Args:
             on_submit: Called with the interaction and the raw typed
                 quantity (parsed by the caller via `domain.money.parse_amount`).
+            embeds: Factory used to build the error embed on an `on_submit` failure.
         """
-        super().__init__(title="🔢 Количество")
+        super().__init__(title="🔢 Количество", embeds=embeds)
         self._on_submit_cb = on_submit
         self.quantity: discord.ui.TextInput[QuantityModal] = discord.ui.TextInput(
             label="Количество", placeholder="1", max_length=8

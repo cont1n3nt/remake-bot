@@ -196,7 +196,7 @@ class TicketsCog(commands.Cog):
             # No delivery method for a boost order — straight to the form
             # modal, same as any other button-triggered modal (PLAN.md §11.4).
             await interaction.response.send_modal(
-                OrderBoostsFormModal(self._on_order_form_submitted)
+                OrderBoostsFormModal(self._on_order_form_submitted, embeds=self._embeds)
             )
             return
 
@@ -212,7 +212,9 @@ class TicketsCog(commands.Cog):
         self, interaction: discord.Interaction, method: DeliveryMethod
     ) -> None:
         await self._tickets.record_delivery_method(interaction.channel_id or 0, method)
-        await interaction.response.send_modal(TicketFormModal(self._on_form_submitted))
+        await interaction.response.send_modal(
+            TicketFormModal(self._on_form_submitted, embeds=self._embeds)
+        )
 
     async def _on_form_submitted(
         self,
@@ -270,6 +272,7 @@ class TicketsCog(commands.Cog):
             await interaction.response.send_modal(
                 OrderBoostsFormModal(
                     self._on_order_form_submitted,
+                    embeds=self._embeds,
                     nick=nick,
                     deadline_text=deadline_text,
                     referrer_nick=referrer_nick or "",
@@ -348,7 +351,9 @@ class TicketsCog(commands.Cog):
         session = await self._active_order_session(interaction)
         if session is None or session.active_order_item_id is None:
             return
-        await interaction.response.send_modal(QuantityModal(self._on_order_qty_submitted))
+        await interaction.response.send_modal(
+            QuantityModal(self._on_order_qty_submitted, embeds=self._embeds)
+        )
 
     async def _on_order_qty_submitted(
         self, interaction: discord.Interaction, qty_text: str
@@ -492,7 +497,7 @@ class TicketsCog(commands.Cog):
             return
         total = await self._boost_orders.compute_total(session.channel_id)
         await interaction.response.send_modal(
-            AmountModal(self._on_amount_submitted, default=str(int(total)))
+            AmountModal(self._on_amount_submitted, embeds=self._embeds, default=str(int(total)))
         )
 
     async def _refresh_order_editor_inline(self, interaction: discord.Interaction) -> None:
@@ -643,7 +648,9 @@ class TicketsCog(commands.Cog):
         session = await self._confirm_precheck(interaction)
         if session is None:
             return
-        await interaction.response.send_modal(AmountModal(self._on_amount_submitted))
+        await interaction.response.send_modal(
+            AmountModal(self._on_amount_submitted, embeds=self._embeds)
+        )
 
     async def _on_amount_submitted(
         self, interaction: discord.Interaction, amount_text: str

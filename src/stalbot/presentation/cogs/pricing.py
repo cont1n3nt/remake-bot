@@ -28,6 +28,12 @@ from stalbot.presentation.views.confirm import ConfirmView
 _MAX_IMPORT_FILE_BYTES: Final = 1_000_000
 _NOT_FOUND_PREVIEW_LIMIT: Final = 10
 
+#: SEC-5: defense-in-depth per-admin cooldown on the two commands that scan
+#: every price sheet / parse-and-apply a bulk import — not a response to any
+#: observed abuse, just a cheap guard against an accidental double-click or
+#: a careless script hammering an already-privileged session.
+_HEAVY_COMMAND_COOLDOWN_SECONDS: Final = 15.0
+
 
 class PricingCog(commands.Cog):
     """`/setprice`, `/setboost`, `/sync_prices`, `/new_price`."""
@@ -89,6 +95,7 @@ class PricingCog(commands.Cog):
     @app_commands.command(
         name="sync_prices", description="🛡️ [Админ] 🔄 Синхронизировать цены с прайс-листов"
     )
+    @app_commands.checks.cooldown(1, _HEAVY_COMMAND_COOLDOWN_SECONDS)
     @admin_only()
     async def sync_prices(self, interaction: discord.Interaction) -> None:
         """Handle `/sync_prices`: pull every price sheet into the item database."""
@@ -117,6 +124,7 @@ class PricingCog(commands.Cog):
 
     @app_commands.command(name="new_price", description="🛡️ [Админ] 📥 Импортировать цены из TXT")
     @app_commands.describe(файл="TXT-файл прайс-листа (формат — как в /give_price)")
+    @app_commands.checks.cooldown(1, _HEAVY_COMMAND_COOLDOWN_SECONDS)
     @admin_only()
     async def new_price(self, interaction: discord.Interaction, файл: discord.Attachment) -> None:
         """Handle `/new_price`: parse, validate, show a diff, then apply on confirmation."""

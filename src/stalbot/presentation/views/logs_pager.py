@@ -10,7 +10,9 @@ from typing import Final
 
 import discord
 
+from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.views.base import AuthorLockedView
+from stalbot.presentation.views.error_modal import ErrorReportingModal
 
 _DEFAULT_TIMEOUT_SECONDS: Final = 300.0
 
@@ -20,7 +22,7 @@ class LogsPagerView(AuthorLockedView):
 
     Usage::
 
-        view = LogsPagerView(pages=pages, author_id=interaction.user.id)
+        view = LogsPagerView(pages=pages, author_id=interaction.user.id, embeds=embeds)
         await interaction.followup.send(embed=view.current, view=view, ephemeral=True)
         view.message = await interaction.original_response()
     """
@@ -30,6 +32,7 @@ class LogsPagerView(AuthorLockedView):
         *,
         pages: Sequence[discord.Embed],
         author_id: int,
+        embeds: EmbedFactory,
         timeout: float = _DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
         """Build the pager.
@@ -37,10 +40,12 @@ class LogsPagerView(AuthorLockedView):
         Args:
             pages: The embeds to page through, in order. Must be non-empty.
             author_id: The only Discord user id allowed to interact.
+            embeds: Factory used to build the jump-to-page modal's error embed.
             timeout: Seconds before the view disables itself.
         """
         super().__init__(author_id=author_id, timeout=timeout)
         self._pages = pages
+        self._embeds = embeds
         self._index = 0
         self._sync()
 
@@ -93,7 +98,7 @@ class LogsPagerView(AuthorLockedView):
         self, interaction: discord.Interaction, button: discord.ui.Button["LogsPagerView"]
     ) -> None:
         """Open the jump-to-page modal."""
-        await interaction.response.send_modal(_JumpToPageModal(self))
+        await interaction.response.send_modal(_JumpToPageModal(self, embeds=self._embeds))
 
     async def go_to_page(self, interaction: discord.Interaction, index: int) -> None:
         """Render *index* and edit the original message via *interaction*.
@@ -113,18 +118,19 @@ class LogsPagerView(AuthorLockedView):
         self.page_indicator.label = f"{self._index + 1}/{self.page_count}"
 
 
-class _JumpToPageModal(discord.ui.Modal):
+class _JumpToPageModal(ErrorReportingModal):
     """Single-field modal opened by `LogsPagerView`'s `🔢 К странице` button."""
 
     page = discord.ui.TextInput[discord.ui.Modal](label="Номер страницы", max_length=6)
 
-    def __init__(self, view: LogsPagerView) -> None:
+    def __init__(self, view: LogsPagerView, *, embeds: EmbedFactory) -> None:
         """Build the modal.
 
         Args:
             view: The pager to jump within once a valid page is submitted.
+            embeds: Factory used to build the error embed on an `on_submit` failure.
         """
-        super().__init__(title="Перейти к странице")
+        super().__init__(title="Перейти к странице", embeds=embeds)
         self._view = view
 
     async def on_submit(self, interaction: discord.Interaction) -> None:

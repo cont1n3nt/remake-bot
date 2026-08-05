@@ -82,7 +82,7 @@ class StatsCog(commands.Cog):
         if len(pages) == 1:
             await interaction.followup.send(embed=pages[0], ephemeral=True)
             return
-        view = LogsPagerView(pages=pages, author_id=interaction.user.id)
+        view = LogsPagerView(pages=pages, author_id=interaction.user.id, embeds=self._embeds)
         message = await interaction.followup.send(
             embed=view.current, view=view, ephemeral=True, wait=True
         )

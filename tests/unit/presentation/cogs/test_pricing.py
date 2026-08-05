@@ -5,12 +5,14 @@ covered in `tests/unit/application/services/test_pricing.py`. This file is
 about whether the cog validates input, confirms imports, and reports right.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
+from discord import app_commands
 
 from stalbot.application.dto.price_change import PriceChange
 from stalbot.application.dto.price_import import PriceImportIssue, PriceImportPlan
@@ -277,3 +279,55 @@ async def test_new_price_waits_for_confirmation_before_applying(
     kwargs = interaction.followup.send.call_args_list[0].kwargs
     assert kwargs["embed"].title == "✏️ Подтвердите изменение цен"
     assert "view" in kwargs
+
+
+# -- SEC-5: cooldown on the two heavy admin commands ------------------------
+
+
+def _admin_interaction(user_id: int = 1) -> MagicMock:
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.user = MagicMock(spec=discord.Member, id=user_id)
+    interaction.user.guild_permissions = MagicMock(administrator=True)
+    interaction.created_at = datetime(2026, 8, 5, 12, 0, 0, tzinfo=UTC)
+    return interaction
+
+
+@pytest.mark.parametrize(
+    ("command", "user_id"), [(PricingCog.sync_prices, 1001), (PricingCog.new_price, 1002)]
+)
+async def test_heavy_command_rejects_a_second_call_within_the_cooldown_window(
+    command: app_commands.Command[PricingCog, ..., None], user_id: int
+) -> None:
+    """A second invocation at the same moment (same `interaction.created_at`) must be
+    throttled — `app_commands.checks.cooldown` keys entirely off that timestamp, not
+    real wall-clock time, so this is deterministic without any sleeping/mocking.
+
+    Each command/test pair gets its own `user_id` (deliberately distinct from every
+    other cooldown test in this module) — the cooldown mapping is a closure captured
+    once when the decorator runs at class-definition time, so it persists across
+    tests in the same process; reusing a `user_id` would leak state between tests.
+    """
+    interaction = _admin_interaction(user_id)
+
+    for check in command.checks:
+        assert await check(interaction) is True
+
+    with pytest.raises(app_commands.CommandOnCooldown):
+        for check in command.checks:
+            await check(interaction)
+
+
+@pytest.mark.parametrize(
+    ("command", "user_id"), [(PricingCog.sync_prices, 2001), (PricingCog.new_price, 2002)]
+)
+async def test_heavy_command_allows_a_second_call_after_the_window(
+    command: app_commands.Command[PricingCog, ..., None], user_id: int
+) -> None:
+    first = _admin_interaction(user_id)
+    for check in command.checks:
+        assert await check(first) is True
+
+    later = _admin_interaction(user_id)
+    later.created_at = datetime(2026, 8, 5, 12, 1, 0, tzinfo=UTC)  # +60s, well past the 15s window
+    for check in command.checks:
+        assert await check(later) is True
