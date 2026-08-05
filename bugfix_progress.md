@@ -263,22 +263,68 @@ Review passed: да (`agent-skills:code-reviewer`, five-axis; первый пр�
 ## Этап 4 — Infrastructure: Discord / OCR / Logging / Config
 
 Зависит от: этапа 1 (domain), может идти параллельно с этапом 3.
-Статус: **not started**
+Статус: **done**
 
-- [ ] INFRA2-1 — `sync_roles()` ловит только `Forbidden`, обрывает весь поллер
-- [ ] INFRA2-2 — grant/revoke в одном try/except врёт о частичном сбое (чинить вместе с INFRA2-1)
-- [ ] INFRA2-3 — `trace_id` залипает в долгоживущих фоновых петлях
-- [ ] INFRA2-4 — `save_sample()` не валидирует `extension` (latent path traversal)
-- [ ] INFRA2-5 — OCR-сэмплы всегда `.png` независимо от реального формата
-- [ ] INFRA2-6 — `log_level` не `Literal`
-- [ ] INFRA2-7 — интервалы синка без `Field(gt=0)`
-- [ ] INFRA2-8 — дублирующиеся константы статуса `"disabled"`
-- [ ] INFRA2-9 — утечка fd при повторном `configure_logging()`
+- [x] INFRA2-1 — `sync_roles()` ловит только `Forbidden`, обрывает весь поллер
+- [x] INFRA2-2 — grant/revoke в одном try/except врёт о частичном сбое (чинить вместе с INFRA2-1)
+- [x] INFRA2-3 — `trace_id` залипает в долгоживущих фоновых петлях
+- [x] INFRA2-4 — `save_sample()` не валидирует `extension` (latent path traversal)
+- [x] INFRA2-5 — OCR-сэмплы всегда `.png` независимо от реального формата
+- [x] INFRA2-6 — `log_level` не `Literal`
+- [x] INFRA2-7 — интервалы синка без `Field(gt=0)`
+- [x] INFRA2-8 — дублирующиеся константы статуса `"disabled"`
+- [x] INFRA2-9 — утечка fd при повторном `configure_logging()`
 
 Заметки после исправления:
-_(заполнить)_
+- **INFRA2-1/INFRA2-2** (`infrastructure/discord/role_gateway.py::sync_roles`): grant и
+  revoke теперь два независимых `try/except discord.HTTPException` (было: один общий
+  `try/except discord.Forbidden` вокруг обоих) — транзиентный `5xx`/удалённая роль больше
+  не роняет весь фоновый поллер по всей базе игроков (`HTTPException` — родитель
+  `Forbidden`, так что покрытие не сузилось), и частичный сбой (grant прошёл, revoke упал)
+  теперь корректно репортится в `RoleDiff`, а не маскируется под «ничего не изменилось».
+- **INFRA2-3** (`presentation/bot.py`, `application/services/audit.py`): `set_trace_id()`
+  был определён, но нигде не вызывался в проде — `current_trace_id()`'s фоллбек кэширует
+  сгенерированный id в контекстваре навечно для долгоживущего `asyncio.Task`. Для команд
+  это не проблема (каждый interaction — свежий Task), но 4 `tasks.loop`-цикла в `bot.py` и
+  воркер `AuditService._run()` — каждый один и тот же `Task` весь процесс. Добавлен
+  `set_trace_id(new_trace_id())` в начало каждого тика/итерации.
+- **INFRA2-4** (`infrastructure/ocr/samples.py`): `save_sample()` валидирует `extension`
+  через `re.fullmatch(r"[A-Za-z0-9]{1,8}", extension)`, поднимает `ValueError` иначе —
+  defense-in-depth на границе функции, недостижимо сегодняшним единственным вызывающим.
+- **INFRA2-5** (`application/services/screenshots.py`): новый `_sample_extension()` берёт
+  расширение из `mime` (allowlist `_MIME_EXTENSIONS`) в приоритете над именем файла,
+  которое используется только как fallback для нераспознанного mime. `mime` очищается от
+  `; charset=...`-параметров перед поиском в allowlist — поймано ревью на первом проходе
+  (без очистки любой параметризованный mime всегда промахивался мимо словаря и тихо
+  откатывался на имя файла, воскрешая тот же баг, который чинит INFRA2-5).
+- **INFRA2-6/INFRA2-7** (`config/settings.py`): `log_level` теперь `Literal["DEBUG", ...,
+  "CRITICAL"]`; `sync_users_interval_seconds`/`sync_items_interval_seconds`/
+  `progression_poll_seconds` теперь `Field(gt=0)` — опечатка/`0`/отрицательное значение
+  ловится на старте, а не позже нечитаемой ошибкой/hot loop.
+- **INFRA2-8** (`domain/entities/screenshot.py`): новая `OCR_STATUS_DISABLED` — общий
+  источник истины вместо двух независимых `"disabled"`-констант в `infrastructure/ocr/
+  null.py` и `application/services/tickets.py`.
+- **INFRA2-9** (`infrastructure/logging/setup.py`): `configure_logging()` закрывает уже
+  подключённые хендлеры перед переприсвоением `root.handlers` — `RotatingFileHandler`
+  держит открытый fd, который раньше терялся без `.close()`.
+- Обязательный `agent-skills:code-reviewer` — **APPROVE** с первого прохода (один
+  important-finding: `_sample_extension()`'s mime-lookup не чистил `; charset=...`-параметр,
+  из-за чего параметризованный mime всегда промахивался мимо `_MIME_EXTENSIONS` и тихо
+  откатывался на имя файла — практически возвращало баг INFRA2-5; исправлено сразу).
+  Два suggestion-уровня findings залогированы как новые баги, не исправлены (см. ниже) —
+  требуют либо более широкого рефакторинга (per-player trace_id внутри `sync()`), либо
+  продуктового решения (что делать с частичным сбоем grant/revoke на уровне выше
+  `sync_roles`), оба не блокируют текущий этап.
+- Все 951 unit-тест зелёные (+26 к концу Этапа 3), `mypy --strict`/`ruff` чисты по
+  всему `src`+`tests`.
+- Новые баги, найденные по пути (см. `bugfix.md`): **INFRA2-10** (гранулярность
+  trace_id внутри `_run_progression_poll` — весь тик, а не на игрока, low/Suggestion) и
+  **INFRA2-11** (уточнённый `RoleDiff` из фикса INFRA2-2 нигде не используется вызывающим
+  кодом, low/Suggestion) — оба не исправлены, ждут своего повода (первый — более широкого
+  трейсинг-рефакторинга, второй — продуктового решения о реакции на частичный сбой).
 
-Review passed: ☐
+Review passed: да (`agent-skills:code-reviewer`, five-axis, APPROVE после исправления
+одного important-finding по ходу; mypy/ruff/полный прогон тестов зелёные)
 
 ---
 
@@ -373,14 +419,15 @@ Review passed: ☐
 | 1 | Domain | 10 | 1 (DOM-1 дублирован из эт.0) | done |
 | 2 | Application | 8 | 2 (APP-1/2 дублированы из эт.0) | done |
 | 3 | Infrastructure: Sheets+Cache | 10 | 2 (дублированы из эт.0) | done |
-| 4 | Infrastructure: Discord/OCR/Logging/Config | 9 | 0 (2 high) | not started |
+| 4 | Infrastructure: Discord/OCR/Logging/Config | 9 | 0 (2 high) | done |
 | 5 | Presentation (non-ticket) | 9 | 1 (PRES-1 дублирован из эт.0) | not started |
 | 6 | Presentation: Tickets | 10 | 1 (TICK-1 дублирован из эт.0) | not started |
 | 7 | Security (остаточные) | 5 | 0 | not started |
 | 8 | Test-coverage backfill | 4 | — | not started |
 
-**Итого уникальных находок: ~55** (с учётом дублей CLUSTER-1 и DOM-8/PRES-8, DOM-2/SEC-2, посчитанных один раз).
+**Итого уникальных находок: ~57** (с учётом дублей CLUSTER-1 и DOM-8/PRES-8, DOM-2/SEC-2,
+посчитанных один раз; +2 за INFRA2-10/INFRA2-11, найденные при ревью Этапа 4).
 
-Этапы 0, 1, 2 и 3 исправлены и прошли ревью (2026-08-05). Этап 4 (Infrastructure:
-Discord/OCR/Logging/Config) — следующий по очереди, ждёт явной команды на продолжение
-(правило "один этап за раз").
+Этапы 0, 1, 2, 3 и 4 исправлены и прошли ревью (2026-08-05). Этап 5 (Presentation,
+non-ticket) — следующий по очереди, ждёт явной команды на продолжение (правило "один
+этап за раз").
