@@ -27,7 +27,12 @@ from stalbot.infrastructure.sheets.layouts import (
     HEADER_ROW,
     DatabaseBlock,
 )
-from stalbot.infrastructure.sheets.ratelimit import SheetsRateLimiter, retry_with_backoff
+from stalbot.infrastructure.sheets.ratelimit import (
+    REQUEST_TIMEOUT_SECONDS,
+    ReentrantAsyncLock,
+    SheetsRateLimiter,
+    retry_with_backoff,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +138,24 @@ class SheetsClient:
 
             await retry_with_backoff(_do)
         self.write_request_count += 1
+
+    def locked(self, sheet: str) -> ReentrantAsyncLock:
+        """Return the lock serializing every write to `sheet` (INFRA1-6).
+
+        `batch_update` only ever holds this lock around its own network
+        call, which is not enough to protect a caller's full
+        read -> compute -> write sequence: two concurrent calls can each
+        read the same stale state, compute the same "next" id/row, and the
+        second write silently clobbers the first (the exact class of race
+        APP-5 narrowed but did not close for every caller). Wrap the whole
+        sequence in `async with client.locked(sheet):` instead — the lock is
+        reentrant, so `batch_update`'s own internal acquire for the same
+        sheet, from the same task, does not deadlock against it.
+
+        Args:
+            sheet: Worksheet title whose writes should be serialized.
+        """
+        return self._rate_limiter.write_lock(sheet)
 
     async def write_verified(self, data: Mapping[str, CellGrid]) -> None:
         """Write cells, then read them back to confirm the write took.
@@ -330,6 +353,14 @@ class SheetsClient:
                 str(self._settings.google_credentials_path), scopes=list(_SCOPES)
             )
             self._client = gspread.authorize(creds)
+            # Belt and suspenders with `retry_with_backoff`'s own
+            # `asyncio.wait_for` (INFRA1-11): that alone only abandons a
+            # hung call's background thread, which could still complete
+            # later and silently overwrite a newer write. A transport-level
+            # timeout makes the underlying socket operation itself actually
+            # abort, so the thread doesn't outlive the request that gave up
+            # on it.
+            self._client.http_client.set_timeout(REQUEST_TIMEOUT_SECONDS)
         return self._client
 
 
@@ -363,14 +394,30 @@ def _grid_matches(written: CellGrid, read: CellGrid) -> bool:
 
 
 class _AcquireAll:
-    """Acquire several `asyncio.Lock`s (sorted order) as one context manager."""
+    """Acquire several locks (sorted order) as one context manager.
 
-    def __init__(self, locks: Sequence[asyncio.Lock]) -> None:
+    If a later lock's `acquire()` raises or is cancelled partway through,
+    every lock already acquired is released before the exception propagates
+    (INFRA1-7) — otherwise those locks would stay held forever, since
+    `__aexit__` never runs for a context manager whose `__aenter__` didn't
+    complete. Not observable with today's single-sheet writes (`locks` is
+    always length 1), but `_AcquireAll` is written to be correct for the
+    multi-lock case its signature already promises.
+    """
+
+    def __init__(self, locks: Sequence[ReentrantAsyncLock]) -> None:
         self._locks = locks
 
     async def __aenter__(self) -> None:
-        for lock in self._locks:
-            await lock.acquire()
+        acquired: list[ReentrantAsyncLock] = []
+        try:
+            for lock in self._locks:
+                await lock.acquire()
+                acquired.append(lock)
+        except BaseException:
+            for lock in reversed(acquired):
+                lock.release()
+            raise
 
     async def __aexit__(self, *_exc_info: object) -> None:
         for lock in reversed(self._locks):
