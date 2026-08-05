@@ -69,11 +69,9 @@ class BoostOrderService:
             channel_id: Discord channel id of the order-boosts ticket.
         """
         lines = await self._lines.list_for_channel(channel_id)
-        result: list[tuple[BoostOrderLine, Item | None]] = []
-        for line in lines:
-            item = await self._items.get_by_id(line.item_id)
-            result.append((line, item))
-        return result
+        # One batched lookup instead of one `get_by_id` per line (APP-6).
+        items = await self._items.get_by_ids([line.item_id for line in lines])
+        return [(line, items.get(line.item_id)) for line in lines]
 
     async def apply_page_selection(
         self, channel_id: int, page_items: Sequence[Item], selected_ids: frozenset[int]
@@ -111,13 +109,16 @@ class BoostOrderService:
         Args:
             channel_id: The order-boosts ticket channel.
             item_id: The line's catalog item id.
-            quantity: New quantity, already validated by the caller
-                (`MIN_QUANTITY..MAX_QUANTITY`).
+            quantity: New quantity. Clamped to `MIN_QUANTITY..MAX_QUANTITY`
+                here too (APP-7), not just trusted from the caller (like
+                `adjust_quantity` already does) — this method has no other
+                guard of its own if a future caller skips validation.
         """
         line = await self._find_line(channel_id, item_id)
         if line is None:
             return
-        await self._lines.upsert(replace(line, quantity=quantity))
+        clamped = max(MIN_QUANTITY, min(MAX_QUANTITY, quantity))
+        await self._lines.upsert(replace(line, quantity=clamped))
 
     async def adjust_quantity(self, channel_id: int, item_id: int, delta: int) -> int | None:
         """Adjust a line's quantity by `delta`, clamped to the valid range.

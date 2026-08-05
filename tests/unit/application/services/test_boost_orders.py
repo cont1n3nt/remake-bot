@@ -132,6 +132,21 @@ async def test_set_quantity_is_a_no_op_for_a_missing_line(connection: aiosqlite.
     assert await service.list_lines(111) == []
 
 
+async def test_set_quantity_clamps_to_the_valid_range(connection: aiosqlite.Connection) -> None:
+    """APP-7: unlike `adjust_quantity`, this had no clamp of its own — safe today only
+    because the sole caller already validates, which isn't a guarantee this method makes."""
+    service = await _service(connection, [_BOOST_A])
+    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
+
+    await service.set_quantity(111, 1, MAX_QUANTITY + 1000)
+    lines = await service.list_lines(111)
+    assert lines[0].quantity == MAX_QUANTITY
+
+    await service.set_quantity(111, 1, MIN_QUANTITY - 1000)
+    lines = await service.list_lines(111)
+    assert lines[0].quantity == MIN_QUANTITY
+
+
 async def test_adjust_quantity_increments_and_decrements(connection: aiosqlite.Connection) -> None:
     service = await _service(connection, [_BOOST_A])
     await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
