@@ -73,23 +73,54 @@ Review passed: да (`agent-skills:code-reviewer`, five-axis; первый пр�
 ## Этап 1 — Domain (`domain/**`)
 
 Зависит от: этапа 0 (DOM-1 уже фиксится там).
-Статус: **not started**
+Статус: **done**
 
 - [x] DOM-1 — исправлено в Этапе 0
-- [ ] DOM-2 / SEC-2 — `OverflowError` в `parse_deadline` от пользовательского текста
-- [ ] DOM-3 — потеря точности выше 28 значащих цифр
-- [ ] DOM-4 — `format_compact` неверная единица на границе округления
-- [ ] DOM-5 — `parse_sheet_datetime` принимает некорректный 3-значный год
-- [ ] DOM-6 — `Ladder.progress()` отрицательный `pct`
-- [ ] DOM-7 — `Ladder.progress()` 100% на 1 единицу раньше
-- [ ] DOM-8 / PRES-8 — неиспользуемый `PermissionError`, затеняющий builtin
-- [ ] DOM-9 — (опционально) валидация монотонности порогов `Ladder`
-- [ ] DOM-10 — (FYI, решение не обязательно) домен импортирует `config.ids`
+- [x] DOM-2 / SEC-2 — `OverflowError` в `parse_deadline` от пользовательского текста
+- [x] DOM-3 — потеря точности выше 28 значащих цифр
+- [x] DOM-4 — `format_compact` неверная единица на границе округления
+- [x] DOM-5 — `parse_sheet_datetime` принимает некорректный 3-значный год
+- [x] DOM-6 — `Ladder.progress()` отрицательный `pct`
+- [x] DOM-7 — `Ladder.progress()` 100% на 1 единицу раньше
+- [x] DOM-8 / PRES-8 — неиспользуемый `PermissionError`, затеняющий builtin
+- [x] DOM-9 — (опционально, всё же сделано — напрямую защищает инвариант, на
+      который опираются DOM-6/DOM-7) валидация монотонности порогов `Ladder`
+- [x] DOM-10 — (FYI) домен импортирует `config.ids` — решение принято: не баг,
+      оставлено как есть (см. bugfix.md)
 
 Заметки после исправления:
-_(заполнить)_
+- **DOM-2/SEC-2** (`domain/clock.py`): `_parse_relative_hours`/`_parse_relative_minutes`
+  оборачивают `now + timedelta(...)` в `try/except OverflowError` → `DeadlineParseError`.
+  Прогнано через `security-auditor` (нет других непокрытых мест с тем же паттерном, hint
+  безопасен для показа юзеру, 50-символьный лимит модалки делает конверсию `int()` дешёвой
+  даже на максимальной длине) — вердикт: чисто, 0 находок.
+- **DOM-5** (`domain/clock.py`): `_ABSOLUTE_RE`'s год-группа `\d{2,4}` → `\d{4}|\d{2}`
+  (ровно 2 или 4 цифры) — 3-значный год больше не проходит как валидная (но бессмысленная)
+  дата ни в `parse_deadline`, ни в `parse_sheet_datetime`.
+- **DOM-3** (`domain/money.py`): `parse_amount`/`evaluate_amount` теперь считают внутри
+  `decimal.localcontext()` с `prec=60` вместо амбиентного дефолтного контекста (28 значащих
+  цифр) — умножение на множитель (`ккк`/`кк`/`к`) и бинарные операции `evaluate_amount`
+  больше не округляются молча выше 28 цифр.
+- **DOM-4** (`domain/money.py`): `format_compact` эскалирует единицу измерения, если
+  округлённое частное достигает 1000 (напр. `999950` → `1 кк`, не `1000 к`); цикл
+  поддерживает каскадную эскалацию через несколько уровней подряд.
+- **DOM-6/DOM-7** (`domain/progression/ladder.py`): `Ladder.progress()` теперь
+  `pct = max(0, min(99, round(...))) if need > 0 else 99` — нижняя граница на случай
+  отрицательного `value`, верхняя граница 99 (не 100) пока следующий тир ещё впереди.
+- **DOM-9**: `Ladder.__init__` валидирует строго возрастающие пороги, поднимает `ValueError`
+  иначе — защищает именно тот инвариант (`need > 0`), от которого зависит фикс DOM-6/DOM-7.
+- **DOM-8/PRES-8**: `domain/errors.py::PermissionError` удалён (0 использований в `src`/`tests`,
+  затенял builtin; permission-проверки идут через `app_commands.CheckFailure`).
+- Прогнан `agent-skills:code-reviewer` (five-axis) по всему диффу этапа — вердикт **APPROVE**,
+  0 critical/required; 2 optional-комментария (заметить, что ветка `need <= 0` в
+  `Ladder.progress()` сейчас недостижима для обеих реальных лестниц; заметить, что цикл
+  эскалации в `format_compact` полагается на порядок `_COMPACT_UNITS` largest-first) —
+  оба добавлены как комментарии в код.
+- Все 884 unit-теста зелёные (+20 к концу Этапа 0), `mypy`/`ruff` чисты по всему `src`+`tests`.
+- Новых багов по пути не найдено.
 
-Review passed: ☐
+Review passed: да (`agent-skills:code-reviewer`, five-axis, APPROVE после добавления двух
+optional-комментариев; `security-auditor` отдельно на DOM-2/SEC-2)
 
 ---
 
@@ -250,7 +281,7 @@ Review passed: ☐
 | Этап | Модуль | Багов | Critical/Security | Статус |
 |---|---|---|---|---|
 | 0 | Критично + Security (кросс-модульно) | 6 | 6 | done |
-| 1 | Domain | 10 | 1 (DOM-1 дублирован из эт.0) | not started |
+| 1 | Domain | 10 | 1 (DOM-1 дублирован из эт.0) | done |
 | 2 | Application | 8 | 2 (APP-1/2 дублированы из эт.0) | not started |
 | 3 | Infrastructure: Sheets+Cache | 10 | 2 (дублированы из эт.0) | not started |
 | 4 | Infrastructure: Discord/OCR/Logging/Config | 9 | 0 (2 high) | not started |
@@ -261,5 +292,5 @@ Review passed: ☐
 
 **Итого уникальных находок: ~55** (с учётом дублей CLUSTER-1 и DOM-8/PRES-8, DOM-2/SEC-2, посчитанных один раз).
 
-Этап 0 исправлен и прошёл ревью (2026-08-05). Этап 1 (Domain) — следующий по очереди, ждёт
-явной команды на продолжение (правило "один этап за раз").
+Этапы 0 и 1 исправлены и прошли ревью (2026-08-05). Этап 2 (Application) — следующий по
+очереди, ждёт явной команды на продолжение (правило "один этап за раз").
