@@ -127,7 +127,12 @@ class OrderBoostsFormModal(discord.ui.Modal):
         self.deadline: discord.ui.TextInput[OrderBoostsFormModal] = discord.ui.TextInput(
             label=_DEADLINE_LABEL,
             placeholder=(error_hint or _DEADLINE_PLACEHOLDER)[:_DEADLINE_MAX_LENGTH],
-            default=deadline_text or None,
+            # TICK-4: Discord only shows `placeholder` on an empty field —
+            # `default` would win and hide the error hint, so the rejected
+            # text is deliberately NOT carried over into `default` here (every
+            # other field still is). The player retypes the one field that
+            # actually needs fixing instead of seeing no explanation at all.
+            default=None if error_hint else (deadline_text or None),
             max_length=_DEADLINE_MAX_LENGTH,
         )
         self.referrer_nick: discord.ui.TextInput[OrderBoostsFormModal] = discord.ui.TextInput(
