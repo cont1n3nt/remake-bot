@@ -8,6 +8,7 @@ a copy for the future training dataset, regardless of whether OCR is enabled.
 """
 
 import hashlib
+import logging
 from decimal import Decimal
 
 from stalbot.application.ports.clock import Clock
@@ -19,7 +20,10 @@ from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
 )
 from stalbot.infrastructure.ocr.samples import save_sample
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_EXTENSION = "png"
+_FAILED_STATUS = "failed"
 
 
 class ScreenshotService:
@@ -73,7 +77,21 @@ class ScreenshotService:
             sample_path = str(path)
 
         image = ScreenshotImage(data=data, filename=filename, mime=mime)
-        result = await self._ocr.recognize(image)
+        try:
+            result = await self._ocr.recognize(image)
+        except Exception as exc:
+            # OCR must never block ticket confirmation (PLAN.md §11.8) — the
+            # contract is enforced only by convention today (`NullOcrGateway`
+            # never raises), not at this call site (APP-8). A future real
+            # engine failing mid-recognition must degrade the same way a
+            # clean "failed" result already does, not propagate. Deliberately
+            # `Exception`, not narrower: any recognition failure must degrade,
+            # while `asyncio.CancelledError` (a `BaseException`) still
+            # propagates normally, which is what we want on shutdown/timeout.
+            logger.warning(
+                "OCR recognition failed for channel %d: %s", channel_id, exc, exc_info=exc
+            )
+            result = OcrResult(status=_FAILED_STATUS, error=str(exc))
 
         await self._analyses.record(
             channel_id=channel_id,

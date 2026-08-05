@@ -82,6 +82,28 @@ async def test_on_attached_calls_the_ocr_gateway() -> None:
     assert result.status == "disabled"
 
 
+async def test_on_attached_degrades_to_failed_status_when_ocr_raises(tmp_path: Path) -> None:
+    """APP-8: OCR must never block ticket confirmation — a raised exception must degrade
+    to a normal `status="failed"` result, not propagate out of `on_attached`."""
+    analyses = _fake_analyses()
+    ocr = MagicMock(spec=OcrGateway)
+    ocr.recognize = AsyncMock(side_effect=RuntimeError("engine crashed"))
+    service = ScreenshotService(
+        analyses,
+        ocr,
+        _settings(ocr_keep_samples=False, samples_dir=tmp_path),
+        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+    )
+
+    result = await service.on_attached(
+        111, _DATA, filename="screenshot.png", mime="image/png", image_url=None
+    )  # must not raise
+
+    assert result.status == "failed"
+    analyses.record.assert_awaited_once()
+    assert analyses.record.call_args.kwargs["status"] == "failed"
+
+
 async def test_on_attached_keeps_a_sample_when_enabled(tmp_path: Path) -> None:
     service = ScreenshotService(
         _fake_analyses(),
