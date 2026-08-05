@@ -9,7 +9,7 @@ money text (see PLAN.md §5.1).
 import ast
 import re
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Final
 
@@ -160,6 +160,8 @@ _ALLOWED_AST_NODES: Final = (
     ast.BinOp,
     ast.UnaryOp,
     ast.Constant,
+    ast.Name,
+    ast.Load,
     ast.Add,
     ast.Sub,
     ast.Mult,
@@ -170,6 +172,11 @@ _ALLOWED_AST_NODES: Final = (
     ast.USub,
     ast.UAdd,
 )
+
+#: Placeholder identifier prefix substituted for money tokens whose formatted
+#: text would otherwise be parsed as a native Python float literal (anything
+#: with a decimal point) — see `evaluate_amount`.
+_TOKEN_PLACEHOLDER: Final = "__m{}__"
 
 _MAX_AST_DEPTH: Final = 32
 _MAX_POWER_EXPONENT: Final = 12
@@ -185,6 +192,17 @@ def evaluate_amount(expression: str) -> Decimal:
     Allowed operators: `+ - * / // % ** ()` and unary minus. `eval`/`exec`
     are never used: the expression is parsed into an AST and walked with a
     node-type whitelist.
+
+    Money tokens with a fractional part are never handed to `ast.parse` as
+    literal text: Python has no fixed-point literal grammar, so any token
+    with a decimal point would be parsed as a native `float`, silently
+    losing precision above ~15-17 significant digits before it is ever
+    converted back to `Decimal`. Instead each such token is replaced with a
+    placeholder identifier bound to its exact, already-parsed `Decimal` in
+    `tokens`, and `_eval_node` resolves it by lookup rather than by reading
+    `ast.Constant.value`. Whole-number tokens are left as plain integer
+    literals — Python `int` is arbitrary-precision, so they round-trip
+    exactly regardless of magnitude.
 
     Args:
         expression: User-supplied arithmetic expression; money tokens may use
@@ -204,8 +222,16 @@ def evaluate_amount(expression: str) -> Decimal:
     if not normalized:
         raise AmountParseError("empty expression")
 
+    tokens: dict[str, Decimal] = {}
+
     def _replace(match: re.Match[str]) -> str:
-        return format(_parse_number_token(match.group(0)), "f")
+        value = _parse_number_token(match.group(0))
+        text = format(value, "f")
+        if "." not in text:
+            return text
+        name = _TOKEN_PLACEHOLDER.format(len(tokens))
+        tokens[name] = value
+        return name
 
     clean = _NUMBER_SPAN_RE.sub(_replace, normalized)
 
@@ -217,7 +243,7 @@ def evaluate_amount(expression: str) -> Decimal:
     _check_ast(tree)
 
     try:
-        return _eval_node(tree.body)
+        return _eval_node(tree.body, tokens)
     except ZeroDivisionError as exc:
         raise AmountParseError("division by zero") from exc
 
@@ -247,15 +273,22 @@ def _check_ast(tree: ast.AST) -> None:
                 raise AmountParseError("exponent out of allowed range")
 
 
-def _eval_node(node: ast.expr) -> Decimal:
+def _eval_node(node: ast.expr, tokens: Mapping[str, Decimal]) -> Decimal:
     """Evaluate an already-validated AST expression node into a `Decimal`."""
     if isinstance(node, ast.Constant):
         return Decimal(str(node.value))
+    if isinstance(node, ast.Name):
+        try:
+            return tokens[node.id]
+        except KeyError as exc:
+            raise AmountParseError(f"unknown identifier: {node.id!r}") from exc
     if isinstance(node, ast.UnaryOp):
-        operand = _eval_node(node.operand)
+        operand = _eval_node(node.operand, tokens)
         return -operand if isinstance(node.op, ast.USub) else operand
     if isinstance(node, ast.BinOp):
-        return _apply_binop(node.op, _eval_node(node.left), _eval_node(node.right))
+        return _apply_binop(
+            node.op, _eval_node(node.left, tokens), _eval_node(node.right, tokens)
+        )
     raise AmountParseError(f"disallowed expression element: {type(node).__name__}")
 
 
@@ -276,6 +309,27 @@ def _apply_binop(op: ast.operator, left: Decimal, right: Decimal) -> Decimal:
     if isinstance(op, ast.Pow):
         return left ** int(right)
     raise AmountParseError(f"disallowed operator: {type(op).__name__}")
+
+
+def round_for_storage(value: Decimal) -> Decimal:
+    """Round a money value to a whole unit before it is written to Sheets.
+
+    Every write site that stores an `int(...)` amount/price column must
+    round through this first — game currency has no fractional part on the
+    sheet, and truncating with a bare `int(...)` (round-toward-zero) instead
+    of rounding would make the persisted value quietly diverge from the
+    `Decimal` that stays cached/returned to the caller for the very same
+    field. Uses the same `ROUND_HALF_UP` convention as `format_amount`.
+
+    Args:
+        value: Amount to round.
+
+    Returns:
+        `value` rounded to the nearest whole unit, still a `Decimal` — the
+        object a caller caches/returns should be built from this, not from
+        the original unrounded `value`, so the two never disagree.
+    """
+    return value.to_integral_value(rounding=ROUND_HALF_UP)
 
 
 def format_amount(value: Decimal | int, *, currency: bool = True) -> str:

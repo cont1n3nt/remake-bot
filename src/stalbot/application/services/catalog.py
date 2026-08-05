@@ -17,6 +17,7 @@ from stalbot.domain.clock import format_datetime
 from stalbot.domain.entities.item import Item
 from stalbot.domain.enums import ItemCategory
 from stalbot.domain.errors import DuplicateItemError, ItemNotFoundError
+from stalbot.domain.money import round_for_storage
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
 from stalbot.infrastructure.cache.repositories.items import (
     ItemsCacheRepository,
@@ -87,8 +88,8 @@ class CatalogService:
             id=max((i.id for i in catalog), default=0) + 1,
             name=name,
             category=category,
-            price_buy=price_buy,
-            price_sell=price_sell,
+            price_buy=round_for_storage(price_buy) if price_buy is not None else None,
+            price_sell=round_for_storage(price_sell) if price_sell is not None else None,
             emoji=emoji,
             updated_at=self._clock.now(),
             row=max((i.row for i in catalog), default=DATA_START_ROW - 1) + 1,

@@ -89,6 +89,33 @@ async def test_add_item_writes_row_and_upserts_cache(connection: aiosqlite.Conne
     assert cached.name == "Кристалл"
 
 
+async def test_add_item_rounds_fractional_price_consistently_for_sheet_and_cache(
+    connection: aiosqlite.Connection,
+) -> None:
+    """APP-2: a bare `int(...)` truncated toward zero while the cache kept the raw Decimal."""
+    sheets = _fake_sheets()
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service, _lines = _service(connection, sheets=sheets, clock=clock)
+
+    item = await service.add_item(
+        name="Кристалл",
+        category=ItemCategory.RESOURCE,
+        price_buy=Decimal("120000.5"),
+        price_sell=None,
+        emoji="crystal",
+    )
+
+    assert item.price_buy == Decimal(120001)  # ROUND_HALF_UP, not truncation
+    (data,), _ = sheets.write_verified.call_args
+    row = data["DataBase!AA3:AG3"][0]
+    assert row[3] == 120001
+
+    items = ItemsCacheRepository(connection)
+    cached = await items.get_by_id(1)
+    assert cached is not None
+    assert cached.price_buy == Decimal(120001)
+
+
 async def test_add_item_computes_next_id_from_existing_catalog(
     connection: aiosqlite.Connection,
 ) -> None:

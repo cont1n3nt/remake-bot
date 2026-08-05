@@ -158,6 +158,22 @@ def test_evaluate_amount_rejects_invalid_input(expression: str) -> None:
         evaluate_amount(expression)
 
 
+# --- DOM-1: no float round-trip for high-precision fractional amounts -------
+
+
+def test_evaluate_amount_preserves_precision_above_float64_range() -> None:
+    """A fractional literal Python's float grammar cannot round-trip exactly."""
+    assert evaluate_amount("999999999999999.99") == Decimal("999999999999999.99")
+
+
+def test_evaluate_amount_preserves_precision_in_arithmetic() -> None:
+    assert evaluate_amount("999999999999999.99 + 0.01") == Decimal("1000000000000000.00")
+
+
+def test_evaluate_amount_fractional_multiplier_stays_exact() -> None:
+    assert evaluate_amount("1.5кк * 3 - 250к") == Decimal(4_250_000)
+
+
 # --- format_amount / format_compact -----------------------------------
 
 

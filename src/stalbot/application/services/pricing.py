@@ -27,7 +27,7 @@ from stalbot.domain.clock import format_datetime
 from stalbot.domain.entities.item import Item
 from stalbot.domain.enums import ItemCategory, PriceField
 from stalbot.domain.errors import AmountParseError, ItemNotFoundError
-from stalbot.domain.money import format_amount, parse_amount
+from stalbot.domain.money import format_amount, parse_amount, round_for_storage
 from stalbot.infrastructure.cache.repositories.items import (
     ItemsCacheRepository,
     normalize_item_name,
@@ -86,13 +86,14 @@ class PricingService:
 
         old_price = item.price_buy if field is PriceField.BUY else item.price_sell
         now = self._clock.now()
+        stored_price = round_for_storage(amount)
         await self._sheets.write_verified(
             {
-                a1_range(DATABASE_SHEET, _PRICE_COLUMN[field], item.row): [[int(amount)]],
+                a1_range(DATABASE_SHEET, _PRICE_COLUMN[field], item.row): [[int(stored_price)]],
                 a1_range(DATABASE_SHEET, _UPDATED_COLUMN, item.row): [[format_datetime(now)]],
             }
         )
-        updated = _apply_price(item, field, amount, updated_at=now)
+        updated = _apply_price(item, field, stored_price, updated_at=now)
         await self._items.upsert_many([updated])
         return PriceChange(
             item_id=item.id,
@@ -100,7 +101,7 @@ class PricingService:
             category=item.category,
             field=field,
             old_price=old_price,
-            new_price=amount,
+            new_price=stored_price,
         )
 
     async def sync_prices(self) -> SyncPricesReport:
@@ -135,7 +136,8 @@ class PricingService:
                         continue
                     item = touched.get(base_item.id, base_item)
 
-                    new_price = _cell_decimal(prices, offset)
+                    raw_price = _cell_decimal(prices, offset)
+                    new_price = round_for_storage(raw_price) if raw_price is not None else None
                     current = _current_price(item, layout.price_field)
                     if new_price == current:
                         unchanged += 1
@@ -218,8 +220,8 @@ class PricingService:
                     continue
 
             try:
-                new_buy = parse_amount(buy_text) if buy_text else None
-                new_sell = parse_amount(sell_text) if sell_text else None
+                new_buy = round_for_storage(parse_amount(buy_text)) if buy_text else None
+                new_sell = round_for_storage(parse_amount(sell_text)) if sell_text else None
             except AmountParseError as exc:
                 issues.append(PriceImportIssue(line_number, f"некорректная цена: {exc}"))
                 continue
@@ -279,9 +281,12 @@ class PricingService:
             if item is None:
                 continue  # renumbered/deleted since preview; nothing left to write
             for change in item_changes:
-                item = _apply_price(item, change.field, change.new_price, updated_at=now)
+                stored_price = (
+                    round_for_storage(change.new_price) if change.new_price is not None else None
+                )
+                item = _apply_price(item, change.field, stored_price, updated_at=now)
                 data[a1_range(DATABASE_SHEET, _PRICE_COLUMN[change.field], item.row)] = [
-                    [int(change.new_price) if change.new_price is not None else ""]
+                    [int(stored_price) if stored_price is not None else ""]
                 ]
             data[a1_range(DATABASE_SHEET, _UPDATED_COLUMN, item.row)] = [[format_datetime(now)]]
             updated_items.append(item)

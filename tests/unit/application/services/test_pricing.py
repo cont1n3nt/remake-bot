@@ -101,6 +101,30 @@ async def test_set_price_writes_the_cell_and_updates_cache(
     assert updated.price_buy == Decimal(19500)
 
 
+async def test_set_price_rounds_fractional_price_consistently_for_sheet_and_cache(
+    connection: aiosqlite.Connection,
+) -> None:
+    """APP-2: a bare `int(...)` truncated toward zero while the cache kept the raw Decimal."""
+    items = ItemsCacheRepository(connection)
+    await items.replace_all([_item()])
+    sheets = _fake_sheets()
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service = _service(connection, sheets=sheets, clock=clock)
+
+    change = await service.set_price(1, PriceField.BUY, Decimal("19500.5"))
+
+    assert change.new_price == Decimal(19501)  # ROUND_HALF_UP, not truncation
+    sheets.write_verified.assert_awaited_once_with(
+        {
+            "DataBase!AD3": [[19501]],
+            "DataBase!AG3": [["02.08.2026 15:00"]],
+        }
+    )
+    updated = await items.get_by_id(1)
+    assert updated is not None
+    assert updated.price_buy == Decimal(19501)
+
+
 async def test_set_price_raises_when_item_missing(connection: aiosqlite.Connection) -> None:
     sheets = _fake_sheets()
     clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
@@ -142,6 +166,36 @@ async def test_sync_prices_updates_changed_cells_only(connection: aiosqlite.Conn
     updated = await items.get_by_id(1)
     assert updated is not None
     assert updated.price_buy == Decimal(260000)
+
+
+async def test_sync_prices_rounds_fractional_cell_consistently_for_sheet_and_cache(
+    connection: aiosqlite.Connection,
+) -> None:
+    items = ItemsCacheRepository(connection)
+    await items.replace_all(
+        [
+            _item(
+                id=1, name="Топот", category=ItemCategory.RESOURCE, price_buy=Decimal(250000), row=5
+            )
+        ]
+    )
+    sheets = _fake_sheets(
+        batch_get_result={
+            "'Мейн скуп'!C1:C31": [["Топот"]],
+            "'Мейн скуп'!D1:D31": [["260000.5"]],
+        }
+    )
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service = _service(connection, sheets=sheets, clock=clock)
+
+    report = await service.sync_prices()
+
+    assert report.updated[0].new_price == Decimal(260001)  # ROUND_HALF_UP, not truncation
+    (data,), _ = sheets.batch_update.call_args
+    assert data["DataBase!AD5"] == [[260001]]
+    updated = await items.get_by_id(1)
+    assert updated is not None
+    assert updated.price_buy == Decimal(260001)
 
 
 async def test_sync_prices_skips_unchanged_prices(connection: aiosqlite.Connection) -> None:
@@ -332,6 +386,23 @@ async def test_preview_import_reports_bad_id(connection: aiosqlite.Connection) -
     assert "ID" in plan.issues[0].message
 
 
+async def test_preview_import_rounds_before_comparing_so_a_rounding_no_op_is_not_reported(
+    connection: aiosqlite.Connection,
+) -> None:
+    """Mirrors sync_prices: comparing the raw parsed value against an already-rounded
+    cached price would report a change for a line that rounds back to the same price.
+    """
+    items = ItemsCacheRepository(connection)
+    await items.replace_all([_item(id=1, price_buy=Decimal(19501))])
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service = _service(connection, sheets=_fake_sheets(), clock=clock)
+    text = "1 | Хвост тушкана | resource | 19500,6 |  |  | \n"
+
+    plan = await service.preview_import(text)
+
+    assert plan.changes == ()
+
+
 async def test_preview_import_empty_field_clears_the_price(
     connection: aiosqlite.Connection,
 ) -> None:
@@ -363,6 +434,25 @@ async def test_apply_import_writes_every_changed_item(connection: aiosqlite.Conn
     updated = await items.get_by_id(1)
     assert updated is not None
     assert updated.price_buy == Decimal(19500)
+
+
+async def test_apply_import_rounds_fractional_price_consistently_for_sheet_and_cache(
+    connection: aiosqlite.Connection,
+) -> None:
+    items = ItemsCacheRepository(connection)
+    await items.replace_all([_item(id=1, price_buy=Decimal(18000), row=3)])
+    sheets = _fake_sheets()
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service = _service(connection, sheets=sheets, clock=clock)
+    plan = await service.preview_import("1 | Хвост тушкана | resource | 19500,5 |  |  | \n")
+
+    await service.apply_import(plan)
+
+    (data,), _ = sheets.batch_update.call_args
+    assert data["DataBase!AD3"] == [[19501]]  # ROUND_HALF_UP, not truncation
+    updated = await items.get_by_id(1)
+    assert updated is not None
+    assert updated.price_buy == Decimal(19501)
 
 
 async def test_apply_import_is_a_no_op_for_an_empty_plan(connection: aiosqlite.Connection) -> None:
