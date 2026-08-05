@@ -4,6 +4,7 @@
 genuine round-trip confidence on the renumbering logic.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -25,6 +26,7 @@ from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrd
 from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
 from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
 from stalbot.infrastructure.sheets.client import SheetsClient
+from stalbot.infrastructure.sheets.ratelimit import ReentrantAsyncLock
 
 
 @pytest_asyncio.fixture
@@ -48,6 +50,11 @@ def _fake_sheets(*, block_rows: list[list[object]] | None = None) -> MagicMock:
     client.batch_get = AsyncMock(return_value={"DataBase!AA3:AG": block_rows or []})
     client.write_verified = AsyncMock()
     client.batch_update = AsyncMock()
+    # Real lock, not a bare MagicMock: `add_item`/`delete_item` run their
+    # whole body under `async with self._sheets.locked(...)` (INFRA1-6), and
+    # a plain MagicMock doesn't support the async context manager protocol.
+    lock = ReentrantAsyncLock()
+    client.locked = MagicMock(return_value=lock)
     return client
 
 
@@ -157,6 +164,79 @@ async def test_add_item_ignores_a_stale_cache_and_uses_the_live_block(
     assert item.row == 5
 
 
+async def test_add_item_serializes_concurrent_calls_so_ids_never_collide(
+    connection: aiosqlite.Connection,
+) -> None:
+    """INFRA1-6: reading the live block (APP-5) narrows the race but does not
+    close it on its own — two concurrent `/item_add` calls can still both
+    read the block before either writes back. `SheetsClient.locked()` must
+    serialize the whole read -> compute -> write sequence so the second
+    call always sees the first call's write before computing its own id."""
+
+    class _StatefulSheets:
+        """Fake whose `batch_get` reflects whatever `write_verified` has
+        written so far, and logs a timeline of read/write boundaries —
+        realistic enough to prove not just that the ids never collide, but
+        that the second call's read never *starts* before the first call's
+        write has fully *finished* (i.e. the two are truly serialized, not
+        just accidentally non-colliding)."""
+
+        def __init__(self) -> None:
+            self._rows: list[list[object]] = []
+            self._lock = ReentrantAsyncLock()
+            self.events: list[str] = []
+
+        async def batch_get(self, _ranges: list[str]) -> dict[str, list[list[object]]]:
+            self.events.append("read_start")
+            await asyncio.sleep(0)  # yield control so an unserialized caller could interleave
+            self.events.append("read_end")
+            return {"DataBase!AA3:AG": list(self._rows)}
+
+        async def write_verified(self, data: dict[str, list[list[object]]]) -> None:
+            self.events.append("write_start")
+            await asyncio.sleep(0)
+            (rows,) = data.values()
+            self._rows.extend(rows)
+            self.events.append("write_end")
+
+        async def batch_update(self, _data: dict[str, list[list[object]]]) -> None:
+            return None
+
+        def locked(self, _sheet: str) -> ReentrantAsyncLock:
+            return self._lock
+
+    sheets = _StatefulSheets()
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service, _lines, _sessions = _service(
+        connection,
+        sheets=sheets,  # type: ignore[arg-type]
+        clock=clock,
+    )
+
+    first, second = await asyncio.gather(
+        service.add_item(
+            name="Кристалл",
+            category=ItemCategory.RESOURCE,
+            price_buy=None,
+            price_sell=None,
+            emoji=None,
+        ),
+        service.add_item(
+            name="Хвост",
+            category=ItemCategory.RESOURCE,
+            price_buy=None,
+            price_sell=None,
+            emoji=None,
+        ),
+    )
+
+    assert {first.id, second.id} == {1, 2}
+    assert {first.row, second.row} == {3, 4}
+    second_read_start = sheets.events.index("read_start", sheets.events.index("read_start") + 1)
+    first_write_end = sheets.events.index("write_end")
+    assert second_read_start > first_write_end, sheets.events
+
+
 async def test_add_item_rejects_duplicate_name_and_category(
     connection: aiosqlite.Connection,
 ) -> None:
@@ -208,6 +288,81 @@ async def test_delete_item_raises_when_id_not_found(connection: aiosqlite.Connec
 
     with pytest.raises(ItemNotFoundError):
         await service.delete_item(999)
+
+
+async def test_delete_item_serializes_concurrent_calls(connection: aiosqlite.Connection) -> None:
+    """INFRA1-6: the read -> renumber -> write -> cache-reassignment sequence
+    must be fully serialized, not just the sheet write itself — otherwise a
+    second concurrent `/del_item` could run its own reassignment against an
+    id-remapping snapshot the first call's write has already superseded.
+
+    This must observe the *reassignment* step specifically (not just the
+    sheet read/write) — an earlier version of this test only logged
+    sheet-level events and kept passing even when the lock's `async with`
+    block was narrowed back to just read+write, because the reassignment
+    loop's SQLite calls weren't instrumented at all."""
+
+    class _StatefulSheets:
+        def __init__(self, rows: list[list[object]]) -> None:
+            self._rows = rows
+            self._lock = ReentrantAsyncLock()
+            self.events: list[str] = []
+
+        async def batch_get(self, _ranges: list[str]) -> dict[str, list[list[object]]]:
+            self.events.append("read_start")
+            await asyncio.sleep(0)  # yield control so an unserialized caller could interleave
+            self.events.append("read_end")
+            return {"DataBase!AA3:AG": list(self._rows)}
+
+        async def write_verified(self, _data: dict[str, list[list[object]]]) -> None:
+            self.events.append("write_start")
+            await asyncio.sleep(0)
+            self.events.append("write_end")
+
+        async def batch_update(self, _data: dict[str, list[list[object]]]) -> None:
+            return None
+
+        def locked(self, _sheet: str) -> ReentrantAsyncLock:
+            return self._lock
+
+    class _EventLoggingTicketSessions:
+        """Delegates to the real repository, but logs start/end around
+        `clear_active_order_item_for` — the first thing `delete_item` does
+        after its sheet write, i.e. exactly the step that used to sit
+        outside the lock."""
+
+        def __init__(self, real: TicketSessionsRepository, events: list[str]) -> None:
+            self._real = real
+            self._events = events
+
+        async def clear_active_order_item_for(self, item_id: int) -> None:
+            self._events.append("reassign_start")
+            await asyncio.sleep(0)
+            await self._real.clear_active_order_item_for(item_id)
+            self._events.append("reassign_end")
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._real, name)
+
+    block = [_row(1, "Топот"), _row(2, "Кристалл"), _row(3, "Хвост")]
+    sheets = _StatefulSheets(block)
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    real_sessions = TicketSessionsRepository(connection)
+    logging_sessions = _EventLoggingTicketSessions(real_sessions, sheets.events)
+    service = CatalogService(
+        sheets,  # type: ignore[arg-type]
+        ItemsCacheRepository(connection),
+        BoostOrderLinesRepository(connection),
+        logging_sessions,  # type: ignore[arg-type]
+        clock=clock,
+    )
+
+    await asyncio.gather(service.delete_item(1), service.delete_item(3))
+
+    events = sheets.events
+    second_read_start = events.index("read_start", events.index("read_start") + 1)
+    first_reassign_end = events.index("reassign_end")
+    assert second_read_start > first_reassign_end, events
 
 
 async def test_delete_item_reassigns_boost_order_lines_of_renumbered_items(
