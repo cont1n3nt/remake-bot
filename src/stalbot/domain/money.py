@@ -10,7 +10,7 @@ import ast
 import re
 import unicodedata
 from collections.abc import Iterator, Mapping
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from typing import Final
 
 from stalbot.domain.errors import AmountParseError
@@ -67,6 +67,15 @@ _NUMBER_SPAN_RE: Final = re.compile(
 )
 
 _MAX_INPUT_LENGTH: Final = 256
+
+#: Decimal context precision used for every parse/evaluate call (DOM-3):
+#: the ambient default context caps arithmetic at 28 significant digits,
+#: which silently rounds a multiplier multiplication or `evaluate_amount`
+#: binop above that width instead of raising — well within reach of the
+#: 256-character input limit. 60 leaves comfortable headroom above any
+#: realistic amount while still catching genuinely absurd input elsewhere
+#: (AST depth/length guards, `SEC-1`'s finite-result check).
+_ARITHMETIC_PRECISION: Final = 60
 
 _NARROW_NBSP: Final = " "
 
@@ -152,7 +161,9 @@ def parse_amount(raw: str) -> Decimal:
     text = _normalize_spaces(raw).strip()
     if not text:
         raise AmountParseError("empty amount string")
-    return _parse_number_token(text)
+    with localcontext() as ctx:
+        ctx.prec = _ARITHMETIC_PRECISION
+        return _parse_number_token(text)
 
 
 _ALLOWED_AST_NODES: Final = (
@@ -233,19 +244,21 @@ def evaluate_amount(expression: str) -> Decimal:
         tokens[name] = value
         return name
 
-    clean = _NUMBER_SPAN_RE.sub(_replace, normalized)
+    with localcontext() as ctx:
+        ctx.prec = _ARITHMETIC_PRECISION
+        clean = _NUMBER_SPAN_RE.sub(_replace, normalized)
 
-    try:
-        tree = ast.parse(clean, mode="eval")
-    except SyntaxError as exc:
-        raise AmountParseError(f"invalid expression: {expression!r}") from exc
+        try:
+            tree = ast.parse(clean, mode="eval")
+        except SyntaxError as exc:
+            raise AmountParseError(f"invalid expression: {expression!r}") from exc
 
-    _check_ast(tree)
+        _check_ast(tree)
 
-    try:
-        return _eval_node(tree.body, tokens)
-    except ZeroDivisionError as exc:
-        raise AmountParseError("division by zero") from exc
+        try:
+            return _eval_node(tree.body, tokens)
+        except ZeroDivisionError as exc:
+            raise AmountParseError("division by zero") from exc
 
 
 def _walk_with_depth(node: ast.AST, depth: int = 0) -> Iterator[tuple[int, ast.AST]]:
@@ -362,17 +375,31 @@ def format_compact(value: Decimal | int) -> str:
     negative = amount < 0
     magnitude = abs(amount)
 
-    for unit, suffix in _COMPACT_UNITS:
-        if magnitude >= unit:
-            text = f"{_quantize_one_decimal(magnitude / unit)} {suffix}"
-            break
+    for index, (unit, suffix) in enumerate(_COMPACT_UNITS):
+        if magnitude < unit:
+            continue
+        # Rounding the quotient to one decimal can itself reach 1000 (e.g.
+        # 999 950 -> "1000.0к"), which is really the next unit up, not
+        # "1000 к" (DOM-4). Escalate as long as a larger unit exists.
+        # _COMPACT_UNITS is ordered largest-first, so decrementing `index`
+        # is what moves to a larger unit; this only matters if a unit is
+        # ever inserted out of that order.
+        while index > 0 and _quantized_quotient(magnitude, unit) >= 1000:
+            index -= 1
+            unit, suffix = _COMPACT_UNITS[index]
+        text = f"{_format_quotient(_quantized_quotient(magnitude, unit))} {suffix}"
+        break
     else:
         text = str(int(magnitude.to_integral_value(rounding=ROUND_HALF_UP)))
 
     return f"-{text}" if negative else text
 
 
-def _quantize_one_decimal(value: Decimal) -> str:
-    """Round to one decimal place and drop a trailing ".0"."""
-    text = f"{value.quantize(Decimal('0.1'), rounding=ROUND_HALF_UP):f}"
-    return text.removesuffix(".0")
+def _quantized_quotient(magnitude: Decimal, unit: Decimal) -> Decimal:
+    """Round `magnitude / unit` to one decimal place."""
+    return (magnitude / unit).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+
+
+def _format_quotient(quantized: Decimal) -> str:
+    """Render an already-quantized one-decimal value, dropping a trailing ".0"."""
+    return f"{quantized:f}".removesuffix(".0")

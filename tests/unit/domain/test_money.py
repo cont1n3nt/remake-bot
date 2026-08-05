@@ -174,6 +174,23 @@ def test_evaluate_amount_fractional_multiplier_stays_exact() -> None:
     assert evaluate_amount("1.5кк * 3 - 250к") == Decimal(4_250_000)
 
 
+# --- DOM-3: no silent rounding above the ambient 28-digit decimal context ---
+
+
+def test_parse_amount_preserves_precision_above_28_significant_digits() -> None:
+    """The default decimal context caps arithmetic at 28 sig figs; a multiplier
+    multiplication would otherwise silently round a longer amount."""
+    assert parse_amount("123456789012345678901234567.89ккк") == Decimal(
+        "123456789012345678901234567890000000.00"
+    )
+
+
+def test_evaluate_amount_preserves_precision_above_28_significant_digits() -> None:
+    assert evaluate_amount("123456789012345678901234567890 + 1") == Decimal(
+        "123456789012345678901234567891"
+    )
+
+
 # --- format_amount / format_compact -----------------------------------
 
 
@@ -212,6 +229,21 @@ def test_format_compact(value: Decimal, expected: str) -> None:
 
 def test_format_compact_negative() -> None:
     assert format_compact(Decimal(-1_500_000)) == "-1.5 кк"
+
+
+# --- DOM-4: escalate to the next unit when rounding reaches 1000 -----------
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (Decimal(999_950), "1 кк"),  # 999.95к rounds to 1000.0к -> escalate, not "1000 к"
+        (Decimal(999_949), "999.9 к"),  # just below the boundary: no escalation
+        (Decimal(999_950_000), "1 ккк"),  # same boundary one tier up: кк -> ккк
+    ],
+)
+def test_format_compact_escalates_unit_on_rounding_boundary(value: Decimal, expected: str) -> None:
+    assert format_compact(value) == expected
 
 
 # --- property: parse_amount(format_amount(x)) == x ----------------------
