@@ -39,5 +39,28 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/stalbot/data
 
+# SEC-6: further restrict what a compromised/misbehaving process could do,
+# on top of the above — none of this is a response to a known exploit path,
+# just narrowing what's available. The bot is a plain asyncio network client
+# (Discord gateway/HTTPS, Google Sheets API, local SQLite) with no need for
+# kernel/namespace/capability access of any kind.
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+# Outbound-only network client (Discord gateway/HTTPS, Google Sheets HTTPS) —
+# AF_UNIX covers local DNS-resolver/NSS paths some glibc resolvers use.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# `@system-service` is systemd's own broad allowlist for typical daemons —
+# verify with `systemctl status stalbot` / `journalctl -u stalbot` after
+# installing this unit, in case some dependency needs a syscall outside it.
+# `SystemCallErrorNumber=EPERM` turns any such gap into a normal Python
+# exception on that one call instead of `SIGSYS` killing the whole process.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
 [Install]
 WantedBy=multi-user.target
