@@ -157,7 +157,7 @@ async def test_close_awaits_a_cancelled_loops_task_before_closing_the_cache(
     task = asyncio.create_task(in_flight_iteration())
     fake_loop = MagicMock()
     fake_loop.get_task = MagicMock(return_value=task)
-    bot._users_sync_loop = fake_loop  # type: ignore[assignment]
+    bot._users_sync_loop = fake_loop
 
     async def tracking_cache_close() -> None:
         order.append("cache_closed")
@@ -184,7 +184,7 @@ async def test_close_still_closes_the_cache_when_a_loop_task_raises(
     task = asyncio.create_task(failing_iteration())
     fake_loop = MagicMock()
     fake_loop.get_task = MagicMock(return_value=task)
-    bot._users_sync_loop = fake_loop  # type: ignore[assignment]
+    bot._users_sync_loop = fake_loop
 
     cache_close = AsyncMock()
     monkeypatch.setattr(bot.cache_db, "close", cache_close)

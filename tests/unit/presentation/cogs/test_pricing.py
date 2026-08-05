@@ -329,10 +329,10 @@ async def test_a_non_admins_call_does_not_consume_the_cooldown_bucket(
 
     non_admin = _admin_interaction(user_id)
     non_admin.user.guild_permissions = MagicMock(administrator=False)
-    assert await command._check_can_run(non_admin) is False  # type: ignore[attr-defined]
+    assert await command._check_can_run(non_admin) is False
 
     admin = _admin_interaction(user_id)  # same identity, same `created_at` moment
-    assert await command._check_can_run(admin) is True  # type: ignore[attr-defined]
+    assert await command._check_can_run(admin) is True
 
 
 @pytest.mark.parametrize(
@@ -353,11 +353,11 @@ async def test_heavy_command_rejects_a_second_call_within_the_cooldown_window(
     interaction = _admin_interaction(user_id)
 
     for check in command.checks:
-        assert await check(interaction) is True
+        assert await discord.utils.maybe_coroutine(check, interaction) is True
 
     with pytest.raises(app_commands.CommandOnCooldown):
         for check in command.checks:
-            await check(interaction)
+            await discord.utils.maybe_coroutine(check, interaction)
 
 
 @pytest.mark.parametrize(
@@ -368,9 +368,9 @@ async def test_heavy_command_allows_a_second_call_after_the_window(
 ) -> None:
     first = _admin_interaction(user_id)
     for check in command.checks:
-        assert await check(first) is True
+        assert await discord.utils.maybe_coroutine(check, first) is True
 
     later = _admin_interaction(user_id)
     later.created_at = datetime(2026, 8, 5, 12, 1, 0, tzinfo=UTC)  # +60s, well past the 15s window
     for check in command.checks:
-        assert await check(later) is True
+        assert await discord.utils.maybe_coroutine(check, later) is True

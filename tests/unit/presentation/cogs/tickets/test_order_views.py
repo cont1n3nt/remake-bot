@@ -1,6 +1,8 @@
 """Tests for `stalbot.presentation.cogs.tickets.order_views` (PLAN.md §11.6)."""
 
+from collections.abc import Awaitable, Callable, Sequence
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -13,6 +15,8 @@ from stalbot.presentation.cogs.tickets.order_views import (
     OrderSummaryView,
 )
 from stalbot.presentation.embeds.factory import EmbedFactory
+
+_OnChange = Callable[[Any, Sequence[Item], frozenset[int]], Awaitable[frozenset[int]]]
 
 
 def _item(item_id: int, name: str) -> Item:
@@ -28,7 +32,7 @@ def _item(item_id: int, name: str) -> Item:
     )
 
 
-def _custom_id(item: discord.ui.Item[OrderEditorView]) -> str | None:
+def _custom_id(item: discord.ui.Item[Any]) -> str | None:
     return item.custom_id if isinstance(item, discord.ui.Button | discord.ui.Select) else None
 
 
@@ -157,7 +161,7 @@ async def test_order_summary_buttons_delegate_to_their_handlers() -> None:
 
 
 def _multiselect(
-    items: list[Item], selected: frozenset[int], *, on_change: AsyncMock | None = None
+    items: list[Item], selected: frozenset[int], *, on_change: _OnChange | None = None
 ) -> BoostMultiSelectView:
     return BoostMultiSelectView(
         items,
