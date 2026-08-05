@@ -116,6 +116,12 @@ class TicketsCog(commands.Cog):
         self._clock = clock or SystemClock()
         self._tool_wait_timeout = tool_wait_timeout_seconds
         self._tool_wait: dict[int, asyncio.Event] = {}
+        # UX #15: only images sent after the "📸 Прикрепить скриншот" button was
+        # pressed should be recorded — an image posted into the ticket channel
+        # unprompted (chit-chat, an unrelated screenshot) must not silently
+        # become part of the dataset/log. Populated in `_on_screenshot_button`,
+        # cleared once a screenshot is actually recorded for that channel.
+        self._awaiting_screenshot: set[int] = set()
 
     def persistent_views(self) -> tuple[discord.ui.View, ...]:
         """Every persistent View this cog owns, for `bot.add_view()` at startup."""
@@ -175,13 +181,17 @@ class TicketsCog(commands.Cog):
 
         if message.author.bot or not message.attachments:
             return
+        if message.channel.id not in self._awaiting_screenshot:
+            # UX #15: no "📸 Прикрепить скриншот" click is on file for this
+            # channel — this image was not requested, ignore it entirely.
+            return
         session = await self._tickets.get(message.channel.id)
         if session is None:
             return
-        attachment = _first_image_attachment(message.attachments)
-        if attachment is None:
+        attachments = _image_attachments(message.attachments)
+        if not attachments:
             return
-        await self._handle_screenshot(message, session, attachment)
+        await self._handle_screenshots(message, session, attachments)
 
     async def _post_panel(self, channel: discord.TextChannel, kind: TicketKind) -> None:
         embed = self._embeds.ticket(kind, _PANEL_DESCRIPTIONS[kind])
@@ -570,38 +580,103 @@ class TicketsCog(commands.Cog):
             "PNG / JPG / WEBP, не более 8 МБ.",
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        self._awaiting_screenshot.add(interaction.channel_id or 0)
 
-    async def _handle_screenshot(
-        self, message: discord.Message, session: TicketSession, attachment: discord.Attachment
+    async def _handle_screenshots(
+        self,
+        message: discord.Message,
+        session: TicketSession,
+        attachments: Sequence[discord.Attachment],
     ) -> None:
-        if attachment.size > _MAX_SCREENSHOT_BYTES:
+        oversized = [a for a in attachments if a.size > _MAX_SCREENSHOT_BYTES]
+        attachments = [a for a in attachments if a.size <= _MAX_SCREENSHOT_BYTES]
+        if oversized:
             embed = self._embeds.warning(
                 "⚠️ Скриншот слишком большой",
                 f"Максимум {_MAX_SCREENSHOT_BYTES // (1024 * 1024)} МБ — сожмите изображение "
                 "и отправьте снова.",
             )
             await message.channel.send(embed=embed)
+        if not attachments:
             return
 
-        data = await attachment.read()
-        mime = attachment.content_type or "image/png"
+        # UX #13: every image attached to the message is archived/analyzed —
+        # not just the first one. The card and `TicketSession.screenshot_url`
+        # can only ever point at one cover image (an embed has a single
+        # `image`), so the first attachment is what gets recorded there.
+        # Archiving/recording happens before the `on_attached` (OCR/dataset)
+        # pass below, same order the single-attachment path always used —
+        # a caller-side bug leaking out of `on_attached` must not prevent
+        # the card/log-channel archive from having already landed.
+        archived: list[tuple[bytes, str, str | None]] = []
+        for attachment in attachments:
+            data = await attachment.read()
+            mime = attachment.content_type or "image/png"
+            image_url = await self._archive_to_log_channel(message, session, data)
+            archived.append((data, mime, image_url))
 
-        image_url = await self._archive_to_log_channel(message, session, data)
-        updated = await self._tickets.record_screenshot(session.channel_id, image_url, message.id)
+        cover_data, _cover_mime, cover_url = archived[0]
+        updated = await self._tickets.record_screenshot(session.channel_id, cover_url, message.id)
 
         if updated.summary_message_id is not None and isinstance(
             message.channel, discord.TextChannel
         ):
             summary_message = await _try_fetch(message.channel, updated.summary_message_id)
             if summary_message is not None:
-                card_file = discord.File(io.BytesIO(data), filename=SCREENSHOT_FILENAME)
+                card_file = discord.File(io.BytesIO(cover_data), filename=SCREENSHOT_FILENAME)
                 embed = render_ticket_card(updated, self._embeds)
                 view = TicketSummaryView(self._on_screenshot_button, self._on_confirm_button)
                 await summary_message.edit(embed=embed, view=view, attachments=[card_file])
 
-        await self._screenshots.on_attached(
-            session.channel_id, data, filename=SCREENSHOT_FILENAME, mime=mime, image_url=image_url
+        self._awaiting_screenshot.discard(session.channel_id)
+
+        # UX #2: the raw upload is now preserved in the ticket card's embed
+        # (and archived in the log channel) — no reason to leave the
+        # original message cluttering the channel too.
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            logger.warning(
+                "could not delete the screenshot message %s in channel %s",
+                message.id,
+                session.channel_id,
+                exc_info=True,
+            )
+
+        # UX #12: a plain channel message has no `ephemeral` concept (that
+        # only exists for interaction responses) — `delete_after` is the
+        # closest equivalent, a transient confirmation instead of one that
+        # lingers in the channel forever.
+        count_note = f" ({len(attachments)} шт.)" if len(attachments) > 1 else ""
+        confirmation = self._embeds.success(
+            "✅ Скриншот закреплён", f"Скриншот закреплён в заявку{count_note}."
         )
+        await message.channel.send(
+            content=f"<@{message.author.id}>", embed=confirmation, delete_after=8.0
+        )
+
+        # OCR/dataset bookkeeping runs last and is fully isolated from
+        # everything above: decision A7 requires OCR to never affect the
+        # ticket flow, and `on_attached` already swallows its own OCR
+        # errors (APP-8) — this `except Exception` is a second line of
+        # defense against a *caller*-side bug in that layer (e.g. the
+        # dataset/analysis bookkeeping around the OCR call) reaching here
+        # and undoing the gate-close/delete/confirmation that already
+        # completed above.
+        for data, mime, image_url in archived:
+            try:
+                await self._screenshots.on_attached(
+                    session.channel_id,
+                    data,
+                    filename=SCREENSHOT_FILENAME,
+                    mime=mime,
+                    image_url=image_url,
+                )
+            except Exception:
+                logger.exception(
+                    "screenshot analysis failed for channel %s — ticket flow unaffected",
+                    session.channel_id,
+                )
 
     async def _archive_to_log_channel(
         self, message: discord.Message, session: TicketSession, data: bytes
@@ -782,14 +857,15 @@ def _drop_self_referral(
     return referrer_nick, referrer_discord_text
 
 
-def _first_image_attachment(
+def _image_attachments(
     attachments: Sequence[discord.Attachment],
-) -> discord.Attachment | None:
-    for attachment in attachments:
-        content_type = (attachment.content_type or "").split(";")[0].strip().lower()
-        if content_type in _ALLOWED_CONTENT_TYPES:
-            return attachment
-    return None
+) -> list[discord.Attachment]:
+    return [
+        attachment
+        for attachment in attachments
+        if (attachment.content_type or "").split(";")[0].strip().lower()
+        in _ALLOWED_CONTENT_TYPES
+    ]
 
 
 async def _try_fetch(channel: discord.TextChannel, message_id: int) -> discord.Message | None:

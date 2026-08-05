@@ -286,6 +286,35 @@ async def test_on_message_ignores_messages_without_attachments_in_a_tracked_chan
     tickets.get.assert_not_called()
 
 
+async def test_on_message_ignores_an_image_when_the_button_was_not_pressed() -> None:
+    """UX #15: an unrequested image in the ticket channel must not be recorded."""
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session()))
+    attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+
+    await cog.on_message(_message(author_id=42, attachments=[attachment]))
+
+    tickets.get.assert_not_called()
+
+
+async def test_on_message_handles_an_image_once_the_button_was_pressed() -> None:
+    """UX #15: the gate opens after `_on_screenshot_button`, for that channel only."""
+    session = _session()
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    channel = _text_channel()
+    interaction = _interaction(channel=channel)
+    await cog._on_screenshot_button(interaction)
+
+    message = _message(author_id=42, channel=channel)
+    message.guild = None
+    attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+    attachment.read = AsyncMock(return_value=b"fake-bytes")
+    message.attachments = [attachment]
+
+    await cog.on_message(message)
+
+    tickets.get.assert_awaited_once_with(channel.id)
+
+
 # -- Form flow ------------------------------------------------------------
 
 
@@ -543,24 +572,26 @@ async def test_screenshot_button_shows_the_requirements() -> None:
     interaction.response.send_message.assert_awaited_once()
     embed = interaction.response.send_message.call_args.kwargs["embed"]
     assert "8 МБ" in (embed.description or "")
+    assert interaction.channel_id in cog._awaiting_screenshot
 
 
-async def test_handle_screenshot_rejects_oversized_files() -> None:
+async def test_handle_screenshots_rejects_oversized_files() -> None:
     cog, tickets, screenshots, *_ = _cog()
     channel = _text_channel()
     message = _message(author_id=1, channel=channel)
     attachment = MagicMock(spec=discord.Attachment, size=9 * 1024 * 1024, content_type="image/png")
 
-    await cog._handle_screenshot(message, _session(), attachment)
+    await cog._handle_screenshots(message, _session(), [attachment])
 
     channel.send.assert_awaited_once()
     embed = channel.send.call_args.kwargs["embed"]
     assert "слишком большой" in (embed.title or "")
     tickets.record_screenshot.assert_not_called()
     screenshots.on_attached.assert_not_called()
+    message.delete.assert_not_awaited()
 
 
-async def test_handle_screenshot_archives_and_updates_the_card() -> None:
+async def test_handle_screenshots_archives_and_updates_the_card() -> None:
     session = _session(summary_message_id=321)
     cog, tickets, screenshots, *_ = _cog(tickets=_fake_tickets(get_return=session))
     log_channel = _text_channel(channel_id=555)
@@ -576,13 +607,83 @@ async def test_handle_screenshot_archives_and_updates_the_card() -> None:
     message.attachments = []
     attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
     attachment.read = AsyncMock(return_value=b"fake-bytes")
+    cog._awaiting_screenshot.add(session.channel_id)
 
-    await cog._handle_screenshot(message, session, attachment)
+    await cog._handle_screenshots(message, session, [attachment])
 
     log_channel.send.assert_awaited_once()
     tickets.record_screenshot.assert_awaited_once()
     screenshots.on_attached.assert_awaited_once()
     ticket_channel.fetch_message.assert_awaited_once_with(321)
+
+    # UX #2: the raw upload is removed from the channel once it's archived.
+    message.delete.assert_awaited_once()
+
+    # UX #12: a transient "closest to ephemeral outside an interaction"
+    # confirmation, addressed to the uploader, self-deletes.
+    ticket_channel.send.assert_awaited_once()
+    confirm_kwargs = ticket_channel.send.call_args.kwargs
+    assert confirm_kwargs["content"] == "<@1>"
+    assert confirm_kwargs["delete_after"] == 8.0
+    assert "закреплён" in (confirm_kwargs["embed"].description or "")
+
+    # The gate closes again once a screenshot has actually been recorded.
+    assert session.channel_id not in cog._awaiting_screenshot
+
+
+async def test_handle_screenshots_still_confirms_when_deleting_the_upload_fails() -> None:
+    """A missing-permissions/already-gone message must not stop the confirmation."""
+    session = _session(summary_message_id=None)
+    cog, tickets, _screenshots, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    log_channel = _text_channel(channel_id=555)
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_channel = MagicMock(return_value=log_channel)
+    ticket_channel = _text_channel()
+    ticket_channel.guild = guild
+    message = _message(author_id=1, channel=ticket_channel)
+    message.guild = guild
+    message.attachments = []
+    message.delete = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(status=403), "Missing Permissions")
+    )
+    attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+    attachment.read = AsyncMock(return_value=b"fake-bytes")
+
+    await cog._handle_screenshots(message, session, [attachment])
+
+    message.delete.assert_awaited_once()
+    ticket_channel.send.assert_awaited_once()
+    tickets.record_screenshot.assert_awaited_once()
+
+
+async def test_handle_screenshots_archives_every_attachment_but_cards_only_the_first() -> None:
+    """UX #13: all images in the message are archived/analyzed, not just the first."""
+    session = _session(summary_message_id=None)
+    cog, tickets, screenshots, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    log_channel = _text_channel(channel_id=555)
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_channel = MagicMock(return_value=log_channel)
+    ticket_channel = _text_channel()
+    ticket_channel.guild = guild
+    message = _message(author_id=1, channel=ticket_channel)
+    message.guild = guild
+    message.attachments = []
+
+    def _attachment() -> MagicMock:
+        attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+        attachment.read = AsyncMock(return_value=b"fake-bytes")
+        return attachment
+
+    attachments = [_attachment(), _attachment(), _attachment()]
+
+    await cog._handle_screenshots(message, session, attachments)
+
+    assert log_channel.send.await_count == 3
+    assert screenshots.on_attached.await_count == 3
+    # Only the cover image is recorded on the session.
+    tickets.record_screenshot.assert_awaited_once()
+    confirm_kwargs = ticket_channel.send.call_args.kwargs
+    assert "3 шт." in (confirm_kwargs["embed"].description or "")
 
 
 async def test_handle_screenshot_is_byte_identical_regardless_of_the_ocr_outcome() -> None:
@@ -656,10 +757,14 @@ async def test_handle_screenshot_is_byte_identical_regardless_of_the_ocr_outcome
         attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
         attachment.read = AsyncMock(return_value=b"fake-bytes")
 
-        try:
-            await cog._handle_screenshot(message, session, attachment)
-        except RuntimeError:
-            pass  # only the third outcome raises — the point is everything *before* it already ran
+        # `_handle_screenshots` now isolates `on_attached` behind its own
+        # try/except — a raising outcome (the third one) must never escape,
+        # and everything that runs after the archive/card update in the
+        # happy path (gate close, delete, confirmation) must still happen.
+        await cog._handle_screenshots(message, session, [attachment])
+        message.delete.assert_awaited_once()
+        ticket_channel.send.assert_awaited_once()  # the confirmation message
+        assert session.channel_id not in cog._awaiting_screenshot
 
         edit_calls.append(_call_snapshot(summary_message.edit.call_args))
         archive_calls.append(_call_snapshot(log_channel.send.call_args))
