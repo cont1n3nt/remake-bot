@@ -62,8 +62,9 @@ class OrderEditorView(discord.ui.View):
             on_input_qty: `🔢 Ввести количество` — opens the quantity modal.
             on_delete: `🗑️ Удалить` — removes the active line.
             on_add: `➕ Добавить бусты` — opens the multiselect picker.
-            on_confirm: `✅ Подтвердить заказ` (admin-only, enforced by the
-                handler, not the view).
+            on_confirm: `✅ Подтвердить` — any participant (author or admin,
+                enforced by the handler, not the view); returns to the
+                read-only summary embed (`OrderSummaryView`), UX #1.
         """
         super().__init__(timeout=None)
         self.add_item(_LineSelect(options, on_select))
@@ -82,10 +83,46 @@ class OrderEditorView(discord.ui.View):
         self.add_item(_Button("➕ Добавить бусты", "order:add", on_add, row=2))
         self.add_item(
             _Button(
-                "✅ Подтвердить заказ",
+                "✅ Подтвердить",
                 "order:confirm",
                 on_confirm,
                 row=2,
+                style=discord.ButtonStyle.success,
+            )
+        )
+
+
+class OrderSummaryView(discord.ui.View):
+    """The read-only order summary's persistent controls (PLAN.md §11.6, UX #1).
+
+    Shown first after the order form is submitted, and again once the
+    editor's "✅ Подтвердить" returns to it.
+    """
+
+    def __init__(
+        self,
+        *,
+        on_edit: _ButtonHandler,
+        on_complete: _ButtonHandler,
+    ) -> None:
+        """Build the view.
+
+        Args:
+            on_edit: `✏️ Редактировать` — any participant (author or
+                admin); opens the interactive editor (`OrderEditorView`).
+            on_complete: `🏁 Завершить заказ` (admin-only, enforced by the
+                handler, not the view) — registers the deal, same
+                `AmountModal` flow the editor's confirm used to trigger
+                directly.
+        """
+        super().__init__(timeout=None)
+        self.add_item(_Button("✏️ Редактировать", "order:edit", on_edit, row=0))
+        self.add_item(
+            _Button(
+                "🏁 Завершить заказ",
+                "order:complete",
+                on_complete,
+                row=0,
                 style=discord.ButtonStyle.success,
             )
         )

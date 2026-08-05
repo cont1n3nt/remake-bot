@@ -28,6 +28,11 @@ class TicketSession:
     screenshot_url: str | None
     screenshot_message_id: int | None
     summary_message_id: int | None
+    """Shared slot for whichever card is currently posted for this channel —
+    the ticket card (`SELL_ITEMS`/`SELL_BOOSTS`) or, for `ORDER_BOOSTS`, the
+    order summary/editor embed the two toggle between (UX #1). Never both
+    at once; each handler re-derives the embed/view from fresh session
+    state before editing the message this id points at."""
     panel_message_id: int | None
     ocr_status: str
     ocr_analysis_id: int | None

@@ -25,6 +25,7 @@ from stalbot.domain.enums import DealType, DeliveryMethod, ItemCategory, TicketK
 from stalbot.domain.errors import AmountParseError
 from stalbot.presentation.cogs.tickets.cog import TicketsCog, _infer_author_id, _resolve_member
 from stalbot.presentation.cogs.tickets.modals import AmountModal
+from stalbot.presentation.cogs.tickets.order_views import OrderEditorView, OrderSummaryView
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 _SELL_ITEMS_CATEGORY = next(
@@ -792,7 +793,8 @@ async def test_on_start_opens_the_order_form_modal_directly() -> None:
     interaction.response.send_message.assert_not_called()
 
 
-async def test_order_form_submitted_records_the_deadline_and_posts_the_editor() -> None:
+async def test_order_form_submitted_records_the_deadline_and_posts_the_summary() -> None:
+    """UX #1: the order starts on the read-only summary, not the interactive editor."""
     session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
     cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
     channel = _text_channel()
@@ -804,6 +806,7 @@ async def test_order_form_submitted_records_the_deadline_and_posts_the_editor() 
     _args, kwargs = tickets.record_form.call_args
     assert kwargs["deadline"] is not None
     channel.send.assert_awaited_once()
+    assert isinstance(channel.send.call_args.kwargs["view"], OrderSummaryView)
     tickets.record_summary_message.assert_awaited_once()
 
 
@@ -1085,7 +1088,87 @@ async def test_order_confirm_rejects_an_empty_order() -> None:
     assert "нет ни одной позиции" in (embed.description or "")
 
 
-async def test_order_confirm_opens_the_amount_modal_prefilled_with_the_total() -> None:
+async def test_order_confirm_returns_to_the_read_only_summary() -> None:
+    """UX #1: the editor's "✅ Подтвердить" no longer opens the amount modal directly —
+    it switches the message back to the read-only summary embed/view, open to any
+    participant (author or admin), not just admins.
+    """
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    boost_orders = _fake_boost_orders()
+    boost_orders.list_lines = AsyncMock(return_value=[MagicMock()])
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), boost_orders=boost_orders)
+    interaction = _interaction(user_id=session.author_id)  # a non-admin author
+
+    await cog._on_order_confirm(interaction)
+
+    interaction.response.send_modal.assert_not_awaited()
+    kwargs = interaction.response.edit_message.call_args.kwargs
+    assert isinstance(kwargs["view"], OrderSummaryView)
+    assert "Заказ бустов" in (kwargs["embed"].title or "")
+
+
+async def test_order_confirm_rejects_a_non_participant() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=999999)  # neither the author nor an admin
+
+    await cog._on_order_confirm(interaction)
+
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_order_edit_button_opens_the_interactive_editor() -> None:
+    """UX #1: "✏️ Редактировать" on the summary switches the message to `OrderEditorView`."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=session.author_id)
+
+    await cog._on_order_edit_button(interaction)
+
+    kwargs = interaction.response.edit_message.call_args.kwargs
+    assert isinstance(kwargs["view"], OrderEditorView)
+    assert "Редактор заказа" in (kwargs["embed"].title or "")
+
+
+async def test_order_edit_button_rejects_a_non_participant() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=999999)
+
+    await cog._on_order_edit_button(interaction)
+
+    interaction.response.edit_message.assert_not_awaited()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_order_complete_button_rejects_non_admins() -> None:
+    """UX #1: "🏁 Завершить заказ" keeps the old admin-only gate `_on_order_confirm` had."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=session.author_id)  # author, but not an admin
+
+    await cog._on_order_complete_button(interaction)
+
+    interaction.response.send_modal.assert_not_awaited()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_order_complete_button_rejects_an_empty_order() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+    interaction.user.guild_permissions.administrator = True
+
+    await cog._on_order_complete_button(interaction)
+
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "нет ни одной позиции" in (embed.description or "")
+
+
+async def test_order_complete_button_opens_the_amount_modal_prefilled_with_the_total() -> None:
     session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
     boost_orders = _fake_boost_orders()
     boost_orders.list_lines = AsyncMock(return_value=[MagicMock()])
@@ -1094,7 +1177,7 @@ async def test_order_confirm_opens_the_amount_modal_prefilled_with_the_total() -
     interaction = _interaction()
     interaction.user.guild_permissions.administrator = True
 
-    await cog._on_order_confirm(interaction)
+    await cog._on_order_complete_button(interaction)
 
     interaction.response.send_modal.assert_awaited_once()
 

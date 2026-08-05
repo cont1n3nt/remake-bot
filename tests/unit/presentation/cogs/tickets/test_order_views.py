@@ -7,7 +7,11 @@ import discord
 
 from stalbot.domain.entities.item import Item
 from stalbot.domain.enums import ItemCategory
-from stalbot.presentation.cogs.tickets.order_views import BoostMultiSelectView, OrderEditorView
+from stalbot.presentation.cogs.tickets.order_views import (
+    BoostMultiSelectView,
+    OrderEditorView,
+    OrderSummaryView,
+)
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 
@@ -113,6 +117,35 @@ async def test_order_editor_buttons_delegate_to_their_handlers() -> None:
         ("order:qty:delete", handlers["on_delete"]),
         ("order:add", handlers["on_add"]),
         ("order:confirm", handlers["on_confirm"]),
+    ):
+        button = next(item for item in view.children if _custom_id(item) == custom_id)
+        assert isinstance(button, discord.ui.Button)
+        await button.callback(interaction)
+        handler.assert_awaited_once_with(interaction)
+
+
+# -- OrderSummaryView ------------------------------------------------------
+
+
+def _order_summary_handlers() -> dict[str, AsyncMock]:
+    return {"on_edit": AsyncMock(), "on_complete": AsyncMock()}
+
+
+def test_order_summary_view_has_deterministic_custom_ids() -> None:
+    view = OrderSummaryView(**_order_summary_handlers())
+
+    custom_ids = {_custom_id(item) for item in view.children}
+    assert custom_ids == {"order:edit", "order:complete"}
+
+
+async def test_order_summary_buttons_delegate_to_their_handlers() -> None:
+    handlers = _order_summary_handlers()
+    view = OrderSummaryView(**handlers)
+    interaction = _interaction()
+
+    for custom_id, handler in (
+        ("order:edit", handlers["on_edit"]),
+        ("order:complete", handlers["on_complete"]),
     ):
         button = next(item for item in view.children if _custom_id(item) == custom_id)
         assert isinstance(button, discord.ui.Button)

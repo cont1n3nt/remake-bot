@@ -45,8 +45,12 @@ from stalbot.presentation.cogs.tickets.modals import (
     QuantityModal,
     TicketFormModal,
 )
-from stalbot.presentation.cogs.tickets.order_card import render_order_editor
-from stalbot.presentation.cogs.tickets.order_views import BoostMultiSelectView, OrderEditorView
+from stalbot.presentation.cogs.tickets.order_card import render_order_editor, render_order_summary
+from stalbot.presentation.cogs.tickets.order_views import (
+    BoostMultiSelectView,
+    OrderEditorView,
+    OrderSummaryView,
+)
 from stalbot.presentation.cogs.tickets.views import (
     DeliveryMethodView,
     TicketPanelView,
@@ -131,6 +135,7 @@ class TicketsCog(commands.Cog):
             TicketPanelView(TicketKind.ORDER_BOOSTS, self._on_start),
             TicketSummaryView(self._on_screenshot_button, self._on_confirm_button),
             self._build_order_editor_view(None, ()),
+            self._build_order_summary_view(),
         )
 
     # -- Channel lifecycle (PLAN.md §11.2) -----------------------------------
@@ -313,7 +318,9 @@ class TicketsCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
-            await self._post_or_update_order_editor(channel, session)
+            # UX #1: the order starts on the read-only summary embed, not
+            # the interactive editor — "✏️ Редактировать" opens the latter.
+            await self._post_or_update_order_summary(channel, session)
 
         embed = self._embeds.success(
             "✅ Заявка заполнена", "Спасибо! Ваша заявка передана администрации."
@@ -497,6 +504,44 @@ class TicketsCog(commands.Cog):
         return rejected
 
     async def _on_order_confirm(self, interaction: discord.Interaction) -> None:
+        """`✅ Подтвердить` in the editor — returns to the read-only summary (UX #1).
+
+        Open to any participant (author or admin) — unlike `_on_order_complete_button`
+        (`🏁 Завершить заказ`), this does not register anything, it only switches
+        the message back to `OrderSummaryView`.
+        """
+        session = await self._require_order_participant(interaction)
+        if session is None:
+            return
+        lines = await self._boost_orders.list_lines(session.channel_id)
+        if not lines:
+            embed = self._embeds.error("Ошибка", "В заказе нет ни одной позиции.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        rendered = await self._render_order_summary(session.channel_id)
+        if rendered is None:
+            return
+        _session, embed = rendered
+        await interaction.response.edit_message(embed=embed, view=self._build_order_summary_view())
+
+    async def _on_order_edit_button(self, interaction: discord.Interaction) -> None:
+        """`✏️ Редактировать` on the summary — opens the interactive editor (UX #1)."""
+        session = await self._require_order_participant(interaction)
+        if session is None:
+            return
+        rendered = await self._render_order(session.channel_id)
+        if rendered is None:
+            return
+        _session, embed, view = rendered
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    async def _on_order_complete_button(self, interaction: discord.Interaction) -> None:
+        """`🏁 Завершить заказ` on the summary — admin-only, registers the deal (UX #1).
+
+        This is what `_on_order_confirm` did directly before the summary/editor
+        split — the "current button becomes an admin-only completion step"
+        half of UX #1.
+        """
         session = await self._confirm_precheck(interaction)
         if session is None:
             return
@@ -534,6 +579,23 @@ class TicketsCog(commands.Cog):
         message = await channel.send(embed=embed, view=view)
         await self._tickets.record_summary_message(channel.id, message.id)
 
+    async def _post_or_update_order_summary(
+        self, channel: discord.TextChannel, session: TicketSession
+    ) -> None:
+        """Post the read-only summary for the first time, or edit it in place (UX #1)."""
+        rendered = await self._render_order_summary(channel.id)
+        if rendered is None:
+            return
+        _session, embed = rendered
+        view = self._build_order_summary_view()
+        if session.summary_message_id is not None:
+            message = await _try_fetch(channel, session.summary_message_id)
+            if message is not None:
+                await message.edit(embed=embed, view=view)
+                return
+        message = await channel.send(embed=embed, view=view)
+        await self._tickets.record_summary_message(channel.id, message.id)
+
     async def _render_order(
         self, channel_id: int
     ) -> tuple[TicketSession, discord.Embed, OrderEditorView] | None:
@@ -544,6 +606,22 @@ class TicketsCog(commands.Cog):
         embed = render_order_editor(session, lines_with_items, self._embeds)
         view = self._build_order_editor_view(session.active_order_item_id, lines_with_items)
         return session, embed, view
+
+    async def _render_order_summary(
+        self, channel_id: int
+    ) -> tuple[TicketSession, discord.Embed] | None:
+        session = await self._tickets.get(channel_id)
+        if session is None:
+            return None
+        lines_with_items = await self._boost_orders.list_lines_with_items(channel_id)
+        embed = render_order_summary(session, lines_with_items, self._embeds)
+        return session, embed
+
+    def _build_order_summary_view(self) -> OrderSummaryView:
+        return OrderSummaryView(
+            on_edit=self._on_order_edit_button,
+            on_complete=self._on_order_complete_button,
+        )
 
     def _build_order_editor_view(
         self,
