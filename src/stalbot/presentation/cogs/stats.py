@@ -14,6 +14,7 @@ from stalbot.application.dto.log_entry import LogEntry
 from stalbot.application.dto.period_report import PeriodReport, PlayerPeriodStats
 from stalbot.application.services.stats import StatsService
 from stalbot.domain.clock import DateRange, SystemClock, format_date, format_datetime, parse_date
+from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType
 from stalbot.domain.money import format_amount
 from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
@@ -25,6 +26,7 @@ from stalbot.presentation.views.paginated_embed import PaginatedEmbedView
 _SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━"
 _PLAYERS_PAGE_SIZE: Final = 20
 _LOGS_PAGE_SIZE: Final = 25
+_DEALS_PAGE_SIZE: Final = 20
 
 _MONTH_NAMES: Final[dict[int, str]] = {
     1: "Январь",
@@ -176,7 +178,32 @@ def _render_period_pages(
         body = ["```", *table_lines, "```", _SEPARATOR, *footer]
         page_title = title if len(chunks) == 1 else f"{title} (стр. {index}/{len(chunks)})"
         pages.append(embeds.info(page_title, "\n".join(body)))
+    pages.extend(_render_deal_pages(embeds, title, report.deals))
     return pages
+
+
+def _render_deal_pages(
+    embeds: EmbedFactory, title: str, deals: Sequence[TransactionRecord]
+) -> list[discord.Embed]:
+    """Render the individual-deal listing that follows the aggregate pages (UX #11)."""
+    if not deals:
+        return []
+    chunks = _chunk(deals, _DEALS_PAGE_SIZE)
+    pages: list[discord.Embed] = []
+    for index, chunk in enumerate(chunks, start=1):
+        lines = [_format_deal_line(deal) for deal in chunk]
+        page_title = f"🧾 Сделки — {title}"
+        if len(chunks) > 1:
+            page_title += f" (стр. {index}/{len(chunks)})"
+        pages.append(embeds.info(page_title, "\n".join(lines)))
+    return pages
+
+
+def _format_deal_line(deal: TransactionRecord) -> str:
+    return (
+        f"{format_datetime(deal.at)} │ {deal.nick_display} │ "
+        f"{_DEAL_LABELS[deal.deal_type]} │ {format_amount(deal.amount)}"
+    )
 
 
 def _format_player_line(player: PlayerPeriodStats) -> str:

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from stalbot.domain.clock import DateRange
+from stalbot.domain.entities.transaction import TransactionRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +35,8 @@ class PeriodReport:
     period: DateRange
     players: tuple[PlayerPeriodStats, ...]
     deal_count: int
+    deals: tuple[TransactionRecord, ...] = ()
+    """Every individual deal in the period, oldest first (PLAN.md §10.11, UX #11)."""
 
     @property
     def total_purchases(self) -> Decimal:

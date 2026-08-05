@@ -72,4 +72,6 @@ class StatsService:
             )
         players.sort(key=lambda p: p.turnover, reverse=True)
 
-        return PeriodReport(period=period, players=tuple(players), deal_count=len(records))
+        return PeriodReport(
+            period=period, players=tuple(players), deal_count=len(records), deals=tuple(records)
+        )
