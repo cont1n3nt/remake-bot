@@ -32,10 +32,12 @@ class _Clock(Protocol):
 
 _TITLE_MAX = 256
 _DESCRIPTION_MAX = 4096
+_FIELD_NAME_MAX = 256
 _FIELD_VALUE_MAX = 1024
 _FIELDS_MAX = 25
 _TOTAL_MAX = 6000
 _TRIM_STEP = 200
+_PLACEHOLDER = "—"
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -158,7 +160,7 @@ class EmbedFactory:
 
 
 def enforce_limits(embed: discord.Embed) -> discord.Embed:
-    """Clamp *embed* to Discord's field-count and total-length limits.
+    """Clamp *embed* to Discord's field-count and per-field/total-length limits.
 
     `success`/`info`/`warning`/`error`/`ticket` return an embed with no
     fields yet; callers that add fields with `embed.add_field(...)`
@@ -168,11 +170,22 @@ def enforce_limits(embed: discord.Embed) -> discord.Embed:
     while len(embed.fields) > _FIELDS_MAX:
         embed.remove_field(_FIELDS_MAX)
 
+    for index, field in enumerate(embed.fields):
+        name = _truncate(field.name or "​", _FIELD_NAME_MAX)
+        value = _truncate(field.value or "​", _FIELD_VALUE_MAX)
+        if name != field.name or value != field.value:
+            embed.set_field_at(index, name=name, value=value, inline=field.inline)
+
     while len(embed) > _TOTAL_MAX and embed.fields:
         index = max(range(len(embed.fields)), key=lambda i: len(embed.fields[i].value or ""))
         field = embed.fields[index]
         value = field.value or ""
-        trimmed = _truncate(value, max(0, len(value) - _TRIM_STEP)) or "—"
+        if value == _PLACEHOLDER:
+            # Every field's value has already been collapsed to the
+            # placeholder — shrinking further is impossible (field names
+            # are not trimmed here), so stop instead of looping forever.
+            break
+        trimmed = _truncate(value, max(0, len(value) - _TRIM_STEP)) or _PLACEHOLDER
         embed.set_field_at(index, name=field.name or "​", value=trimmed, inline=field.inline)
 
     return embed

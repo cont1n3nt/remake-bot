@@ -136,3 +136,33 @@ class TestEnforceLimits:
             embed.add_field(name=f"F{i}", value="x" * 1024, inline=False)
         enforce_limits(embed)
         assert len(embed) <= 6000
+
+    def test_clamps_field_value_to_1024_even_when_total_is_small(
+        self, factory: EmbedFactory
+    ) -> None:
+        embed = factory.info("Заголовок")
+        embed.add_field(name="F", value="x" * 1200, inline=False)
+        enforce_limits(embed)
+        assert embed.fields[0].value is not None
+        assert len(embed.fields[0].value) <= 1024
+
+    def test_clamps_field_name_to_256_even_when_total_is_small(
+        self, factory: EmbedFactory
+    ) -> None:
+        embed = factory.info("Заголовок")
+        embed.add_field(name="N" * 300, value="v", inline=False)
+        enforce_limits(embed)
+        assert embed.fields[0].name is not None
+        assert len(embed.fields[0].name) <= 256
+
+    def test_trim_loop_terminates_when_values_are_already_at_the_placeholder(
+        self, factory: EmbedFactory
+    ) -> None:
+        embed = factory.info("Заголовок")
+        for _ in range(25):
+            embed.add_field(name="N" * 256, value="—", inline=False)
+        # Must return promptly instead of looping forever: every field's
+        # value is already the placeholder, so the trim loop cannot shrink
+        # them any further and must give up rather than spin.
+        enforce_limits(embed)
+        assert all(field.value == "—" for field in embed.fields)
