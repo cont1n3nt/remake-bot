@@ -19,7 +19,15 @@ _REQUIRED_ENV: dict[str, str] = {
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear every stalbot env var so tests never see the developer's real `.env`."""
-    for key in (*_REQUIRED_ENV, "CACHE_DB_PATH", "OCR_ENABLED", "LOG_LEVEL"):
+    for key in (
+        *_REQUIRED_ENV,
+        "CACHE_DB_PATH",
+        "OCR_ENABLED",
+        "LOG_LEVEL",
+        "SYNC_USERS_INTERVAL_SECONDS",
+        "SYNC_ITEMS_INTERVAL_SECONDS",
+        "PROGRESSION_POLL_SECONDS",
+    ):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -67,3 +75,29 @@ def test_explicit_unknown_kwarg_is_rejected(monkeypatch: pytest.MonkeyPatch) -> 
     _set_required_env(monkeypatch)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, totally_unknown_field="x")  # type: ignore[call-arg]
+
+
+def test_invalid_log_level_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    """INFRA2-6: a typo'd `LOG_LEVEL` must be caught at startup, not surface
+    later as a less-legible error from `logging.setLevel`."""
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("LOG_LEVEL", "VERBOSE")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["SYNC_USERS_INTERVAL_SECONDS", "SYNC_ITEMS_INTERVAL_SECONDS", "PROGRESSION_POLL_SECONDS"],
+)
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_non_positive_sync_interval_fails_fast(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+    """INFRA2-7: `0`/negative would drive the matching `tasks.loop` into a
+    hot loop hammering Discord/Sheets — must be rejected at startup, not
+    discovered from a rate-limit storm in production."""
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv(field, value)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)  # type: ignore[call-arg]
