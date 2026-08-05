@@ -10,8 +10,8 @@ from typing import Final
 from stalbot.domain.clock import format_datetime
 from stalbot.domain.enums import TicketKind
 
-#: Name shown in the embed author line, prefixed to every footer.
-PLATFORM_NAME: Final = "Stalzone"
+#: Name shown in the footer of every embed, prefixed before its kind.
+PLATFORM_NAME: Final = "Клондайк Шёпота"
 
 
 class Color:
@@ -54,6 +54,11 @@ TICKET_TITLES: Final[dict[TicketKind, str]] = {
 }
 
 
-def build_footer(now: datetime) -> str:
-    """Render the one footer every embed shares: `Stalzone • 31.07.2026 21:45 (GMT+3)`."""
-    return f"{PLATFORM_NAME} • {format_datetime(now)} (GMT+3)"
+def build_footer(now: datetime, kind: str | None = None) -> str:
+    """Render the shared footer.
+
+    Without a *kind* (most embeds): `Клондайк Шёпота • 31.07.2026 21:45 (GMT+3)`.
+    With one (e.g. log/ticket embeds): `Клондайк Шёпота | Логи • 31.07.2026 21:45 (GMT+3)`.
+    """
+    prefix = f"{PLATFORM_NAME} | {kind}" if kind else PLATFORM_NAME
+    return f"{prefix} • {format_datetime(now)} (GMT+3)"
