@@ -1,5 +1,6 @@
 """Subclass of `commands.Bot` — the anchor point for cogs and persistent views."""
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Any, Final
@@ -57,6 +58,13 @@ logger = logging.getLogger(__name__)
 
 #: PLAN.md §12: metrics logged once a minute.
 _METRICS_LOG_INTERVAL_SECONDS: Final = 60
+
+#: Ceiling on how long `close()` waits for a cancelled background loop to
+#: actually unwind (PRES-9). Generous enough to cover a legitimate
+#: `retry_with_backoff` cycle (worst case: `MAX_RETRY_ATTEMPTS` attempts each
+#: capped by `REQUEST_TIMEOUT_SECONDS`, plus backoff) — this is a backstop
+#: against a genuinely wedged task, not a tight budget for the common case.
+_SHUTDOWN_TIMEOUT_SECONDS: Final = 60.0
 
 
 class _StalbotCommandTree(app_commands.CommandTree["StalbotBot"]):
@@ -393,14 +401,38 @@ class StalbotBot(commands.Bot):
         """Flush the audit queue, stop sync loops, close the cache, then disconnect."""
         if self.audit_service is not None:
             await self.audit_service.stop()
-        if self._users_sync_loop is not None:
-            self._users_sync_loop.cancel()
-        if self._items_sync_loop is not None:
-            self._items_sync_loop.cancel()
-        if self._progression_loop is not None:
-            self._progression_loop.cancel()
-        if self._metrics_loop is not None:
-            self._metrics_loop.cancel()
+        loops = (
+            self._users_sync_loop,
+            self._items_sync_loop,
+            self._progression_loop,
+            self._metrics_loop,
+        )
+        running_tasks = []
+        for loop in loops:
+            if loop is None:
+                continue
+            loop.cancel()
+            task = loop.get_task()
+            if task is not None:
+                running_tasks.append(task)
+        if running_tasks:
+            # `Loop.cancel()` only requests cancellation — it does not wait
+            # for the in-flight iteration to actually unwind. Without this,
+            # `cache_db.close()` below can race a loop iteration still
+            # mid-query against it (PRES-9). Bounded by `wait_for` so a
+            # genuinely wedged task delays shutdown instead of hanging it
+            # forever — see `_SHUTDOWN_TIMEOUT_SECONDS`.
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*running_tasks, return_exceptions=True),
+                    timeout=_SHUTDOWN_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "background loop(s) did not stop within %.0fs of close(); "
+                    "closing the cache anyway",
+                    _SHUTDOWN_TIMEOUT_SECONDS,
+                )
         await self.cache_db.close()
         await super().close()
 

@@ -1,5 +1,6 @@
 """Tests for `stalbot.presentation.bot` that do not require a live connection."""
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -137,6 +138,60 @@ async def test_close_stops_audit_service(monkeypatch: pytest.MonkeyPatch) -> Non
     await bot.close()
 
     audit_service.stop.assert_awaited_once()
+
+
+async def test_close_awaits_a_cancelled_loops_task_before_closing_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRES-9: `close()` must not close `cache_db` while a loop iteration is still in flight."""
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    monkeypatch.setattr(discord.ext.commands.Bot, "close", AsyncMock())
+
+    order: list[str] = []
+
+    async def in_flight_iteration() -> None:
+        await asyncio.sleep(0)  # simulate the loop still unwinding after cancel()
+        order.append("loop_task_finished")
+
+    task = asyncio.create_task(in_flight_iteration())
+    fake_loop = MagicMock()
+    fake_loop.get_task = MagicMock(return_value=task)
+    bot._users_sync_loop = fake_loop  # type: ignore[assignment]
+
+    async def tracking_cache_close() -> None:
+        order.append("cache_closed")
+
+    monkeypatch.setattr(bot.cache_db, "close", tracking_cache_close)
+
+    await bot.close()
+
+    assert order == ["loop_task_finished", "cache_closed"]
+    fake_loop.cancel.assert_called_once()
+
+
+async def test_close_still_closes_the_cache_when_a_loop_task_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`return_exceptions=True` must swallow a loop task's own failure, not propagate it."""
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    monkeypatch.setattr(discord.ext.commands.Bot, "close", AsyncMock())
+
+    async def failing_iteration() -> None:
+        raise RuntimeError("boom")
+
+    task = asyncio.create_task(failing_iteration())
+    fake_loop = MagicMock()
+    fake_loop.get_task = MagicMock(return_value=task)
+    bot._users_sync_loop = fake_loop  # type: ignore[assignment]
+
+    cache_close = AsyncMock()
+    monkeypatch.setattr(bot.cache_db, "close", cache_close)
+
+    await bot.close()  # must not raise despite the loop task's RuntimeError
+
+    cache_close.assert_awaited_once()
 
 
 async def test_setup_cache_runs_startup_sync_before_starting_loops(
