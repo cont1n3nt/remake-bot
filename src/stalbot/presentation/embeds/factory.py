@@ -101,16 +101,23 @@ class EmbedFactory:
                 panel's `"🎫 Заявка на заказ бустов"`, but still wants the
                 same ticket color.
         """
-        return self._build(Color.TICKET, title or TICKET_TITLES[kind], description)
+        return self._build(Color.TICKET, title or TICKET_TITLES[kind], description, kind="Заявки")
 
     def audit(self, event: AuditEvent) -> discord.Embed:
         """Build the one audit-log embed format (`#9B59B6`, PLAN.md §5.4)."""
         embed = self._build(
-            Color.AUDIT, f"{Emoji.AUDIT} Использование команды", None, now=event.occurred_at
+            Color.AUDIT,
+            f"{Emoji.AUDIT} Использование команды",
+            None,
+            now=event.occurred_at,
+            kind="Логи",
         )
         embed.add_field(
             name=f"{Emoji.USER} Пользователь",
-            value=_truncate(f"{event.user_display} (ID: {event.user_id})", _FIELD_VALUE_MAX),
+            value=_truncate(
+                f"<@{event.user_id}> ({event.user_display}, ID: {event.user_id})",
+                _FIELD_VALUE_MAX,
+            ),
             inline=True,
         )
         embed.add_field(
@@ -148,14 +155,15 @@ class EmbedFactory:
         description: str | None,
         *,
         now: datetime | None = None,
+        kind: str | None = None,
     ) -> discord.Embed:
         embed = discord.Embed(
             title=_truncate(title, _TITLE_MAX),
             description=_truncate(description, _DESCRIPTION_MAX) if description else None,
             color=color,
         )
-        embed.set_author(name=self._platform_name, icon_url=self.guild_icon_url)
-        embed.set_footer(text=build_footer(now or self._clock.now()))
+        embed.set_author(name=kind or self._platform_name, icon_url=self.guild_icon_url)
+        embed.set_footer(text=build_footer(now or self._clock.now(), kind))
         return enforce_limits(embed)
 
 

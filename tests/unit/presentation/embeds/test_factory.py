@@ -25,12 +25,35 @@ def factory() -> EmbedFactory:
 
 def test_footer_format(factory: EmbedFactory) -> None:
     embed = factory.info("Заголовок")
-    assert embed.footer.text == "Stalzone • 31.07.2026 21:45 (GMT+3)"
+    assert embed.footer.text == "Клондайк Шёпота • 31.07.2026 21:45 (GMT+3)"
 
 
 def test_author_uses_platform_name(factory: EmbedFactory) -> None:
     embed = factory.info("Заголовок")
-    assert embed.author.name == "Stalzone"
+    assert embed.author.name == "Клондайк Шёпота"
+
+
+def test_ticket_embed_uses_tickets_kind(factory: EmbedFactory) -> None:
+    embed = factory.ticket(TicketKind.SELL_ITEMS)
+    assert embed.author.name == "Заявки"
+    assert embed.footer.text == "Клондайк Шёпота | Заявки • 31.07.2026 21:45 (GMT+3)"
+
+
+def test_audit_embed_uses_logs_kind(factory: EmbedFactory) -> None:
+    event = AuditEvent(
+        user_id=1,
+        user_display="@x",
+        channel_display="#c",
+        command="/profile",
+        arguments="",
+        result="Успешно",
+        duration_seconds=0.1,
+        trace_id="deadbeef",
+        occurred_at=NOW,
+    )
+    embed = factory.audit(event)
+    assert embed.author.name == "Логи"
+    assert embed.footer.text == "Клондайк Шёпота | Логи • 31.07.2026 21:45 (GMT+3)"
 
 
 @pytest.mark.parametrize(
@@ -95,10 +118,10 @@ def test_audit_embed_fields(factory: EmbedFactory) -> None:
     assert embed.title == "🧾 Использование команды"
     assert embed.color is not None
     assert embed.color.value == Color.AUDIT
-    assert embed.footer.text == "Stalzone • 31.07.2026 21:45 (GMT+3)"
+    assert embed.footer.text == "Клондайк Шёпота | Логи • 31.07.2026 21:45 (GMT+3)"
 
     values = {field.name: field.value for field in embed.fields}
-    assert values["👤 Пользователь"] == "@scary (ID: 123)"
+    assert values["👤 Пользователь"] == "<@123> (@scary, ID: 123)"
     assert values["📍 Канал"] == "#ticket-0042"
     assert values["⌨️ Команда"] == "/add"
     assert values["⏱️ Длительность"] == "0.84 с"
