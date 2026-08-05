@@ -189,6 +189,7 @@ class StalbotBot(commands.Bot):
             self.sheets_client,
             items_repo,
             BoostOrderLinesRepository(connection),
+            TicketSessionsRepository(connection),
             clock=SystemClock(),
         )
         pricing_service = PricingService(self.sheets_client, items_repo, clock=SystemClock())

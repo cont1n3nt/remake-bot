@@ -89,6 +89,43 @@ class TicketSessionsRepository:
         cursor = await self._conn.execute("SELECT * FROM ticket_sessions")
         return [_row_to_session(row) async for row in cursor]
 
+    async def reassign_active_order_item(self, *, old_item_id: int, new_item_id: int) -> None:
+        """Repoint sessions' selected order-editor line to a renumbered item id (APP-4).
+
+        `/del_item` renumbers every surviving item's `id`; a session whose
+        editor had a line from the shifted range selected (`active_order_item_id`)
+        would otherwise keep pointing at the old number — the editor's `+`/
+        `-`/delete buttons silently do nothing until the player reselects a
+        line, since `BoostOrderService.compute_total`/renderers all key off
+        the current id. Mirrors `BoostOrderLinesRepository.reassign_item_id`,
+        which fixes the equivalent problem for draft order lines.
+
+        Args:
+            old_item_id: The id any pointing session currently has.
+            new_item_id: The id the surviving item was renumbered to.
+        """
+        if old_item_id == new_item_id:
+            return
+        await self._conn.execute(
+            "UPDATE ticket_sessions SET active_order_item_id = ?"
+            " WHERE active_order_item_id = ?",
+            (new_item_id, old_item_id),
+        )
+        await self._conn.commit()
+
+    async def clear_active_order_item_for(self, item_id: int) -> None:
+        """Clear the selected line for sessions pointing at a permanently deleted item (APP-4).
+
+        Args:
+            item_id: The deleted item's id, before renumbering.
+        """
+        await self._conn.execute(
+            "UPDATE ticket_sessions SET active_order_item_id = NULL"
+            " WHERE active_order_item_id = ?",
+            (item_id,),
+        )
+        await self._conn.commit()
+
 
 def _session_to_params(session: TicketSession) -> dict[str, object]:
     return {

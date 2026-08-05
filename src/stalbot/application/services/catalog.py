@@ -23,6 +23,7 @@ from stalbot.infrastructure.cache.repositories.items import (
     ItemsCacheRepository,
     normalize_item_name,
 )
+from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
 from stalbot.infrastructure.cache.sync import parse_items_block
 from stalbot.infrastructure.sheets.a1 import a1_range
 from stalbot.infrastructure.sheets.client import SheetsClient
@@ -41,6 +42,7 @@ class CatalogService:
         sheets: SheetsClient,
         items: ItemsCacheRepository,
         boost_order_lines: BoostOrderLinesRepository,
+        ticket_sessions: TicketSessionsRepository,
         *,
         clock: Clock,
     ) -> None:
@@ -51,11 +53,16 @@ class CatalogService:
             items: Cache repository for the item database.
             boost_order_lines: Draft boost-order lines, reassigned/pruned
                 when `/del_item` changes an id or removes an item entirely.
+            ticket_sessions: Ticket sessions, whose order-editor selection
+                (`active_order_item_id`) needs the same reassign/clear
+                treatment as `boost_order_lines` when `/del_item` renumbers
+                or removes an item (APP-4).
             clock: Time source, tz-aware `GMT3`, stamps `updated_at`.
         """
         self._sheets = sheets
         self._items = items
         self._boost_order_lines = boost_order_lines
+        self._ticket_sessions = ticket_sessions
         self._clock = clock
 
     async def add_item(
@@ -80,10 +87,20 @@ class CatalogService:
             DuplicateItemError: An item with the same name and category
                 already exists.
         """
-        if await self._items.find(name, category) is not None:
+        # Reads the live block, like `delete_item` — not the cache (APP-5):
+        # id/row must come from what's actually on the sheet, or two
+        # concurrent `/item_add` calls racing an equally-stale cache could
+        # compute the same "next" id/row and the second write silently
+        # clobbers the first. Reusing the same read for the duplicate check
+        # closes the same race there for free.
+        catalog = await self._read_block()
+        name_norm = normalize_item_name(name)
+        if any(
+            normalize_item_name(item.name) == name_norm and item.category is category
+            for item in catalog
+        ):
             raise DuplicateItemError(f"{name} ({category.value})")
 
-        catalog = await self._items.all()
         item = Item(
             id=max((i.id for i in catalog), default=0) + 1,
             name=name,
@@ -132,6 +149,13 @@ class CatalogService:
         await self._write_rows(renumbered)
         await self._clear_row(DATA_START_ROW + len(renumbered))
 
+        # Clear sessions pointing at the deleted item's id *before* renumbering
+        # repoints anything else onto that same now-vacant id — otherwise a
+        # session freshly reassigned onto `deleted.id` would be wiped out
+        # again by this clear step running after it (APP-4: renumbering can
+        # reuse the deleted item's old id as a survivor's new one).
+        await self._ticket_sessions.clear_active_order_item_for(deleted.id)
+
         for before, after in zip(remaining, renumbered, strict=True):
             if before.id != after.id:
                 await self._boost_order_lines.reassign_item_id(
@@ -139,6 +163,9 @@ class CatalogService:
                     new_item_id=after.id,
                     name_norm=normalize_item_name(after.name),
                     category=after.category,
+                )
+                await self._ticket_sessions.reassign_active_order_item(
+                    old_item_id=before.id, new_item_id=after.id
                 )
         affected_channels = await self._boost_order_lines.delete_by_name(
             name_norm=normalize_item_name(deleted.name), category=deleted.category
