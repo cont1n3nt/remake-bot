@@ -117,6 +117,7 @@ class PricingService:
         by_key = {(normalize_item_name(item.name), item.category): item for item in catalog}
         changes: list[PriceChange] = []
         not_found: list[str] = []
+        unparseable: list[str] = []
         unchanged = 0
         touched: dict[int, Item] = {}
         data: dict[str, CellGrid] = {}
@@ -136,7 +137,11 @@ class PricingService:
                         continue
                     item = touched.get(base_item.id, base_item)
 
-                    raw_price = _cell_decimal(prices, offset)
+                    try:
+                        raw_price = _cell_decimal(prices, offset)
+                    except InvalidOperation:
+                        unparseable.append(name_text)
+                        continue
                     new_price = round_for_storage(raw_price) if raw_price is not None else None
                     current = _current_price(item, layout.price_field)
                     if new_price == current:
@@ -159,7 +164,10 @@ class PricingService:
             await self._items.upsert_many(list(touched.values()))
 
         return SyncPricesReport(
-            updated=tuple(changes), not_found=tuple(not_found), unchanged_count=unchanged
+            updated=tuple(changes),
+            not_found=tuple(not_found),
+            unchanged_count=unchanged,
+            unparseable=tuple(unparseable),
         )
 
     async def preview_import(self, text: str) -> PriceImportPlan:
@@ -276,8 +284,10 @@ class PricingService:
         now = self._clock.now()
         data: dict[str, CellGrid] = {}
         updated_items: list[Item] = []
+        # One batched lookup instead of one `get_by_id` per changed item (APP-6).
+        items = await self._items.get_by_ids(list(by_item.keys()))
         for item_id, item_changes in by_item.items():
-            item = await self._items.get_by_id(item_id)
+            item = items.get(item_id)
             if item is None:
                 continue  # renumbered/deleted since preview; nothing left to write
             for change in item_changes:
@@ -437,12 +447,17 @@ def _cell_text(rows: CellGrid, offset: int) -> str:
 
 
 def _cell_decimal(rows: CellGrid, offset: int) -> Decimal | None:
+    """Parse a price cell, or `None` if the cell itself is genuinely empty.
+
+    Raises:
+        InvalidOperation: If the cell has non-empty content that isn't a
+            valid number — the caller must not treat this the same as an
+            empty cell (APP-3), or it reads as "price cleared" and silently
+            wipes an existing price.
+    """
     if offset >= len(rows) or not rows[offset]:
         return None
     value = rows[offset][0]
     if value is None or value == "":
         return None
-    try:
-        return Decimal(str(value))
-    except InvalidOperation:
-        return None
+    return Decimal(str(value))

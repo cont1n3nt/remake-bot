@@ -171,6 +171,21 @@ async def test_sync_prices_reports_not_found_names_with_overflow_count() -> None
     assert "и ещё 2" in (embed.description or "")
 
 
+async def test_sync_prices_reports_unparseable_cells() -> None:
+    """APP-3: surfaced separately from "not found" — this is an existing item
+    whose price cell couldn't be read, not an unknown item."""
+    report = SyncPricesReport(unparseable=("Топот",))
+    cog, _pricing, _items = _cog(sync_report=report)
+    interaction = _interaction()
+
+    callback: Any = PricingCog.sync_prices.callback
+    await callback(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Топот" in (embed.description or "")
+    assert "не изменено" in (embed.description or "")
+
+
 # --- new_price -----------------------------------------------------------
 
 

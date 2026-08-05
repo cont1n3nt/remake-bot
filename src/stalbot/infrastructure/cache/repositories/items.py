@@ -52,6 +52,31 @@ class ItemsCacheRepository:
         row = await cursor.fetchone()
         return _row_to_item(row) if row is not None else None
 
+    async def get_by_ids(self, item_ids: Sequence[int]) -> dict[int, Item]:
+        """Look up several items by id in one query (APP-6: avoids an N+1 `get_by_id` loop).
+
+        Args:
+            item_ids: Catalog ids to look up; duplicates are fine.
+
+        Returns:
+            Mapping from id to `Item`, containing only the ids that were
+            actually found — a caller must handle a missing key the same
+            way `get_by_id` returning `None` would.
+        """
+        unique_ids = list(dict.fromkeys(item_ids))
+        if not unique_ids:
+            return {}
+        # The f-string only interpolates a run of "?" placeholders (one per
+        # id) — every actual value still goes through parameter binding, so
+        # this isn't the string-built-query injection risk the rule guards
+        # against.
+        placeholders = ",".join("?" * len(unique_ids))
+        cursor = await self._conn.execute(
+            f"SELECT * FROM items WHERE id IN ({placeholders})",  # noqa: S608
+            unique_ids,
+        )
+        return {row["id"]: _row_to_item(row) async for row in cursor}
+
     async def find(self, name: str, category: ItemCategory | None) -> Item | None:
         """Look up one item by name, optionally scoped to a category.
 

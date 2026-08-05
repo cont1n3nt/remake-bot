@@ -223,6 +223,43 @@ async def test_sync_prices_skips_unchanged_prices(connection: aiosqlite.Connecti
     sheets.batch_update.assert_not_called()
 
 
+async def test_sync_prices_does_not_wipe_price_on_unparseable_cell(
+    connection: aiosqlite.Connection,
+) -> None:
+    """APP-3: garbage in the price cell must not read as "price cleared".
+
+    `_cell_decimal` used to return `None` for both an empty cell and one
+    with unparseable garbage — indistinguishable from the operator actually
+    clearing the price, so it generated a real `PriceChange` that wiped an
+    existing price both on the sheet and in the cache.
+    """
+    items = ItemsCacheRepository(connection)
+    await items.replace_all(
+        [
+            _item(
+                id=1, name="Топот", category=ItemCategory.RESOURCE, price_buy=Decimal(250000), row=5
+            )
+        ]
+    )
+    sheets = _fake_sheets(
+        batch_get_result={
+            "'Мейн скуп'!C1:C31": [["Топот"]],
+            "'Мейн скуп'!D1:D31": [["#REF!"]],
+        }
+    )
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service = _service(connection, sheets=sheets, clock=clock)
+
+    report = await service.sync_prices()
+
+    assert report.updated == ()
+    assert report.unparseable == ("Топот",)
+    sheets.batch_update.assert_not_called()
+    updated = await items.get_by_id(1)
+    assert updated is not None
+    assert updated.price_buy == Decimal(250000)  # untouched, not wiped to None
+
+
 async def test_sync_prices_reports_names_not_found_in_the_catalog(
     connection: aiosqlite.Connection,
 ) -> None:

@@ -99,6 +99,24 @@ async def test_upsert_many_updates_existing_row(connection: aiosqlite.Connection
     assert item.price_buy == Decimal(2000)
 
 
+async def test_get_by_ids_returns_only_the_ids_found(connection: aiosqlite.Connection) -> None:
+    repo = ItemsCacheRepository(connection)
+    await repo.replace_all([_item(1), _item(2, name="Кристалл"), _item(3, name="Хвост")])
+
+    found = await repo.get_by_ids([1, 3, 999])
+
+    assert set(found) == {1, 3}
+    assert found[1].name == "Хвост тушкана"
+    assert found[3].name == "Хвост"
+
+
+async def test_get_by_ids_empty_input_returns_empty_dict(connection: aiosqlite.Connection) -> None:
+    repo = ItemsCacheRepository(connection)
+    await repo.replace_all([_item(1)])
+
+    assert await repo.get_by_ids([]) == {}
+
+
 async def test_item_with_no_prices_round_trips_as_none(connection: aiosqlite.Connection) -> None:
     repo = ItemsCacheRepository(connection)
     await repo.replace_all([_item(1, price_buy=None, price_sell=None, emoji=None, updated_at=None)])

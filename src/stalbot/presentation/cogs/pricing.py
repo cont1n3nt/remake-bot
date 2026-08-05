@@ -105,6 +105,12 @@ class PricingCog(commands.Cog):
             if extra > 0:
                 names += f" и ещё {extra}"
             lines.append(f"⚠️ Не найдено в базе: {names}")
+        if report.unparseable:
+            names = ", ".join(report.unparseable[:_NOT_FOUND_PREVIEW_LIMIT])
+            extra = len(report.unparseable) - _NOT_FOUND_PREVIEW_LIMIT
+            if extra > 0:
+                names += f" и ещё {extra}"
+            lines.append(f"❌ Не удалось распознать цену (не изменено): {names}")
 
         embed = self._embeds.success("🔄 Синхронизация цен", "\n".join(lines))
         await interaction.followup.send(embed=embed, ephemeral=True)
