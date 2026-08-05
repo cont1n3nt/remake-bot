@@ -124,8 +124,12 @@ class DateRange:
 _RELATIVE_HOURS_RE: Final = re.compile(r"^через\s+(\d+)\s*час(?:а|ов)?$", re.IGNORECASE)
 _RELATIVE_MINUTES_RE: Final = re.compile(r"^через\s+(\d+)\s*минут[уы]?$", re.IGNORECASE)
 _RELATIVE_DAY_RE: Final = re.compile(r"^(завтра|сегодня)(?:\s+(\d{1,2}):(\d{2}))?$", re.IGNORECASE)
+#: The year group only accepts exactly 2 or 4 digits (DOM-5) — `\d{2,4}` also
+#: matched a bare 3-digit run (e.g. "202"), which is nobody's real year and
+#: not an unambiguous typo of a 2- or 4-digit one either; it used to be
+#: accepted as literal year 202 instead of being rejected.
 _ABSOLUTE_RE: Final = re.compile(
-    r"^(?P<day>\d{1,2})[./-](?P<month>\d{1,2})(?:[./-](?P<year>\d{2,4}))?"
+    r"^(?P<day>\d{1,2})[./-](?P<month>\d{1,2})(?:[./-](?P<year>\d{4}|\d{2}))?"
     r"(?:\s+(?P<hour>\d{1,2}):(?P<minute>\d{2}))?$"
 )
 
@@ -181,14 +185,23 @@ def _parse_relative_hours(text: str, now: datetime) -> datetime | None:
     match = _RELATIVE_HOURS_RE.match(text)
     if match is None:
         return None
-    return now + timedelta(hours=int(match.group(1)))
+    try:
+        return now + timedelta(hours=int(match.group(1)))
+    except OverflowError as exc:
+        # An unbounded digit run (the regex has no length cap) overflows
+        # timedelta's underlying C-int representation, either at
+        # construction or at the addition above (DOM-2/SEC-2).
+        raise DeadlineParseError(_DEADLINE_HINT) from exc
 
 
 def _parse_relative_minutes(text: str, now: datetime) -> datetime | None:
     match = _RELATIVE_MINUTES_RE.match(text)
     if match is None:
         return None
-    return now + timedelta(minutes=int(match.group(1)))
+    try:
+        return now + timedelta(minutes=int(match.group(1)))
+    except OverflowError as exc:
+        raise DeadlineParseError(_DEADLINE_HINT) from exc
 
 
 def _parse_relative_day(text: str, now: datetime) -> datetime | None:

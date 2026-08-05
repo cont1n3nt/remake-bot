@@ -12,6 +12,7 @@ from stalbot.domain.clock import (
     format_duration,
     parse_date,
     parse_deadline,
+    parse_sheet_datetime,
 )
 from stalbot.domain.errors import DeadlineParseError, InvalidPeriodError
 
@@ -112,6 +113,10 @@ class TestParseDeadline:
             "30.07.2026 12:00",  # in the past
             "32.13.2026 21:00",  # invalid calendar date
             "01.01.2027 00:00",  # more than 90 days ahead
+            # DOM-2/SEC-2: an unbounded digit run overflows timedelta's C-int
+            # internals (OverflowError) both at construction and at `now + ...`.
+            "через 999999999999999999999999999999 часов",
+            "через 999999999999999999999999999999 минут",
         ],
     )
     def test_invalid(self, raw: str) -> None:
@@ -149,3 +154,33 @@ class TestParseDate:
     def test_invalid(self, raw: str) -> None:
         with pytest.raises(InvalidPeriodError):
             parse_date(raw)
+
+
+class TestParseSheetDatetime:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("31.07.2026 21:45", datetime(2026, 7, 31, 21, 45, tzinfo=GMT3)),
+            ("31.07.26 02:56", datetime(2026, 7, 31, 2, 56, tzinfo=GMT3)),
+            ("1.8.2026", datetime(2026, 8, 1, 0, 0, tzinfo=GMT3)),
+        ],
+    )
+    def test_valid(self, raw: str, expected: datetime) -> None:
+        assert parse_sheet_datetime(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "",
+            "   ",
+            "not a date",
+            "31.07",  # no year at all — parse_deadline may default it, this must not
+            "32.13.2026 21:00",  # invalid calendar date
+            # DOM-5: a 3-digit year is ambiguous, not a typo`d 2- or 4-digit one —
+            # must be rejected (None), not silently parsed as literal year 202.
+            "31.7.202 02:56",
+            "1.1.100",
+        ],
+    )
+    def test_invalid_returns_none(self, raw: str) -> None:
+        assert parse_sheet_datetime(raw) is None
