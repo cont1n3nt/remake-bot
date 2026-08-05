@@ -13,6 +13,7 @@ import pytest_asyncio
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.services.boost_orders import (
+    MAX_ORDER_LINES,
     MAX_QUANTITY,
     MIN_QUANTITY,
     BoostOrderService,
@@ -86,6 +87,67 @@ async def test_apply_page_selection_removes_newly_unchecked_items(
 
     lines = await service.list_lines(111)
     assert [line.item_id for line in lines] == [1]
+
+
+async def test_apply_page_selection_reports_no_rejections_under_the_cap(
+    connection: aiosqlite.Connection,
+) -> None:
+    service = await _service(connection, [_BOOST_A, _BOOST_B])
+
+    rejected = await service.apply_page_selection(111, [_BOOST_A, _BOOST_B], frozenset({1, 2}))
+
+    assert rejected == frozenset()
+
+
+async def test_apply_page_selection_caps_the_draft_at_max_order_lines(
+    connection: aiosqlite.Connection,
+) -> None:
+    """TICK-5: the editor renders one Select with one option per line — Discord hard-caps
+    a Select at 25 options, so the draft itself must never grow past that."""
+    items = [
+        _item(i, f"Boost {i}", price_sell=Decimal(1000), category=ItemCategory.BOOST)
+        for i in range(1, MAX_ORDER_LINES + 2)
+    ]
+    service = await _service(connection, items)
+    full_page, overflow_item = items[:MAX_ORDER_LINES], items[MAX_ORDER_LINES]
+    await service.apply_page_selection(111, full_page, frozenset(item.id for item in full_page))
+
+    rejected = await service.apply_page_selection(
+        111, [overflow_item], frozenset({overflow_item.id})
+    )
+
+    assert rejected == frozenset({overflow_item.id})
+    lines = await service.list_lines(111)
+    assert len(lines) == MAX_ORDER_LINES
+    assert overflow_item.id not in {line.item_id for line in lines}
+
+
+async def test_apply_page_selection_lets_a_same_page_swap_through_at_the_cap(
+    connection: aiosqlite.Connection,
+) -> None:
+    """A page can uncheck one item and check another in the same submission — the freed
+    slot must count toward the cap immediately, regardless of catalog id order."""
+    items = [
+        _item(i, f"Boost {i}", price_sell=Decimal(1000), category=ItemCategory.BOOST)
+        for i in range(1, MAX_ORDER_LINES + 2)
+    ]
+    service = await _service(connection, items)
+    full_page = items[1 : MAX_ORDER_LINES + 1]  # ids 2..26, filling the draft to the cap
+    await service.apply_page_selection(111, full_page, frozenset(item.id for item in full_page))
+    swap_in, swap_out = items[0], items[1]  # id 1 (not in the draft), id 2 (in the draft)
+
+    # Same page submit: id 1 newly checked, id 2 newly unchecked — a page
+    # always reports every option's current state, so both appear here.
+    rejected = await service.apply_page_selection(
+        111, [swap_in, swap_out], frozenset({swap_in.id})
+    )
+
+    assert rejected == frozenset()
+    lines = await service.list_lines(111)
+    line_ids = {line.item_id for line in lines}
+    assert len(lines) == MAX_ORDER_LINES
+    assert swap_in.id in line_ids
+    assert swap_out.id not in line_ids
 
 
 async def test_apply_page_selection_leaves_other_pages_alone(
