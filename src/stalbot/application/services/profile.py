@@ -77,10 +77,13 @@ class ProfileService:
         )
 
         referred_nicks = await self._transactions.list_referral_targets(view.profile.nick)
+        # Two batched lookups instead of two per referred nick (APP-6).
+        referred_profiles = await self._users.get_by_nicks(referred_nicks)
+        referred_displays = await self._users.get_nick_displays(referred_nicks)
         referred: list[ReferredPlayer] = []
         for referred_nick in referred_nicks:
-            referred_profile = await self._users.get_by_nick(referred_nick)
-            display = await self._users.get_nick_display(referred_nick) or referred_nick
+            referred_profile = referred_profiles.get(referred_nick)
+            display = referred_displays.get(referred_nick) or referred_nick
             referred.append(
                 ReferredPlayer(
                     nick_display=display,
