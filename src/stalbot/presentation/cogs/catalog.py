@@ -20,7 +20,7 @@ from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.presentation.autocomplete import item_choices
 from stalbot.presentation.checks import admin_only
-from stalbot.presentation.embeds.factory import EmbedFactory
+from stalbot.presentation.embeds.factory import EmbedFactory, enforce_limits
 from stalbot.presentation.views.base import AuthorLockedView
 
 _CATEGORY_LABEL: Final[dict[ItemCategory, str]] = {
@@ -162,16 +162,25 @@ class CatalogCog(commands.Cog):
         chunks = _chunk(items, _PRICE_LIST_PAGE_SIZE) or [()]
         pages: list[discord.Embed] = []
         for index, chunk in enumerate(chunks, start=1):
-            lines = [self._format_price_line(item) for item in chunk] or ["Пока нет предметов."]
             title = "📋 Цены" if len(chunks) == 1 else f"📋 Цены (стр. {index}/{len(chunks)})"
-            pages.append(self._embeds.info(title, "\n".join(lines)))
+            if not chunk:
+                pages.append(self._embeds.info(title, "Пока нет предметов."))
+                continue
+            embed = self._embeds.info(title)
+            for item in chunk:
+                name, value = self._format_price_field(item)
+                embed.add_field(name=name, value=value, inline=True)
+            pages.append(enforce_limits(embed))
         return pages
 
-    def _format_price_line(self, item: Item) -> str:
+    def _format_price_field(self, item: Item) -> tuple[str, str]:
         emoji = self._emojis.resolve(item.emoji) or "•"
-        buy = format_amount(item.price_buy) if item.price_buy is not None else "—"
-        sell = format_amount(item.price_sell) if item.price_sell is not None else "—"
-        return f"{emoji} **{item.name}**\n└ Скуп: {buy} • Продажа: {sell}"
+        lines = []
+        if item.price_buy is not None:
+            lines.append(f"Скуп: {format_amount(item.price_buy)}")
+        if item.price_sell is not None:
+            lines.append(f"Продажа: {format_amount(item.price_sell)}")
+        return f"{emoji} {item.name}", "\n".join(lines) or "—"
 
 
 class _PriceListView(AuthorLockedView):
