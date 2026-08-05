@@ -98,14 +98,11 @@ class PricingCog(commands.Cog):
     @app_commands.checks.cooldown(1, _HEAVY_COMMAND_COOLDOWN_SECONDS)
     @admin_only()
     async def sync_prices(self, interaction: discord.Interaction) -> None:
-        """Handle `/sync_prices`: pull every price sheet into the item database."""
+        """Handle `/sync_prices`: push item-database prices onto every price sheet (UX #7)."""
         await interaction.response.defer(ephemeral=True)
         report = await self._pricing.sync_prices()
 
-        lines = [
-            f"✅ Обновлено: {len(report.updated)}",
-            f"➖ Без изменений: {report.unchanged_count}",
-        ]
+        lines = [f"➖ Без изменений: {report.unchanged_count}"]
         if report.not_found:
             names = ", ".join(report.not_found[:_NOT_FOUND_PREVIEW_LIMIT])
             extra = len(report.not_found) - _NOT_FOUND_PREVIEW_LIMIT
@@ -117,9 +114,16 @@ class PricingCog(commands.Cog):
             extra = len(report.unparseable) - _NOT_FOUND_PREVIEW_LIMIT
             if extra > 0:
                 names += f" и ещё {extra}"
-            lines.append(f"❌ Не удалось распознать цену (не изменено): {names}")
+            lines.append(f"❌ Была нечитаемая цена в ячейке (перезаписано): {names}")
 
-        embed = self._embeds.success("🔄 Синхронизация цен", "\n".join(lines))
+        if report.updated:
+            catalog = await self._items.all()
+            diff_text = render_price_change_report(report.updated, catalog)
+            description = f"{diff_text}\n\n" + "\n".join(lines)
+        else:
+            description = "\n".join(lines)
+
+        embed = self._embeds.success("🔄 Синхронизация цен", description)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="new_price", description="🛡️ [Админ] 📥 Импортировать цены из TXT")

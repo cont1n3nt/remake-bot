@@ -114,12 +114,16 @@ class SheetLayout:
     price_field: PriceField
 
 
-#: Declarative price-sheet map read by `/sync_prices` (M6). Adding a sheet
-#: is one entry here, no code changes elsewhere.
+#: Declarative price-sheet map `/sync_prices` writes to (UX #7 — item database
+#: is the source of truth, these sheets are the destination). Adding a sheet
+#: is one entry here, no code changes elsewhere. Start rows confirmed live
+#: (each sheet's title/header rows occupy everything above): "Мейн скуп" from
+#: row 5, "БУСТЫ" from row 4, "Скуп бустов" from row 3 — end rows unchanged
+#: from before this fix, to avoid reading/writing past real data.
 SYNC_LAYOUTS: Final[tuple[SheetLayout, ...]] = (
     SheetLayout(
         sheet="Мейн скуп",
-        rows=range(1, 32),
+        rows=range(5, 32),
         name_columns=("C", "J", "Q", "X", "AE", "AL", "AS"),
         price_columns=("D", "K", "R", "Y", "AF", "AM", "AT"),
         category=ItemCategory.RESOURCE,
@@ -127,7 +131,7 @@ SYNC_LAYOUTS: Final[tuple[SheetLayout, ...]] = (
     ),
     SheetLayout(
         sheet="Скуп бустов",
-        rows=range(1, 10),
+        rows=range(3, 10),
         name_columns=("C", "J", "Q", "X"),
         price_columns=("D", "K", "R", "Y"),
         category=ItemCategory.RESOURCE,
@@ -135,7 +139,7 @@ SYNC_LAYOUTS: Final[tuple[SheetLayout, ...]] = (
     ),
     SheetLayout(
         sheet="БУСТЫ",
-        rows=range(1, 10),
+        rows=range(4, 10),
         name_columns=("C", "J", "Q", "X", "AE", "AL", "AS"),
         price_columns=("D", "K", "R", "Y", "AF", "AM", "AT"),
         category=ItemCategory.BOOST,

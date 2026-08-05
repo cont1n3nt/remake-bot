@@ -147,6 +147,7 @@ async def test_setboost_autocomplete_scopes_to_boosts() -> None:
 
 
 async def test_sync_prices_reports_updated_and_unchanged_counts() -> None:
+    """UX #7: the diff itself (`render_price_change_report`) is shown, not just a count."""
     report = SyncPricesReport(updated=(_change(),), not_found=(), unchanged_count=3)
     cog, pricing, _items = _cog(sync_report=report)
     interaction = _interaction()
@@ -156,7 +157,7 @@ async def test_sync_prices_reports_updated_and_unchanged_counts() -> None:
 
     pricing.sync_prices.assert_awaited_once()
     embed = interaction.followup.send.call_args.kwargs["embed"]
-    assert "Обновлено: 1" in (embed.description or "")
+    assert "Хвост тушкана" in (embed.description or "")
     assert "Без изменений: 3" in (embed.description or "")
 
 
@@ -174,8 +175,9 @@ async def test_sync_prices_reports_not_found_names_with_overflow_count() -> None
 
 
 async def test_sync_prices_reports_unparseable_cells() -> None:
-    """APP-3: surfaced separately from "not found" — this is an existing item
-    whose price cell couldn't be read, not an unknown item."""
+    """UX #7: surfaced separately from "not found" — this is an existing item
+    whose stale price cell had unreadable content, now overwritten with the
+    catalog's price (not left alone — the sheet is the destination now)."""
     report = SyncPricesReport(unparseable=("Топот",))
     cog, _pricing, _items = _cog(sync_report=report)
     interaction = _interaction()
@@ -185,7 +187,24 @@ async def test_sync_prices_reports_unparseable_cells() -> None:
 
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "Топот" in (embed.description or "")
-    assert "не изменено" in (embed.description or "")
+    assert "перезаписано" in (embed.description or "")
+
+
+async def test_sync_prices_shows_the_diff_report_when_prices_changed() -> None:
+    """UX #7: /sync_prices must show which item's price changed to what."""
+    change = _change(item_name="Хвост тушкана", old_price=Decimal(18000), new_price=Decimal(19500))
+    report = SyncPricesReport(updated=(change,), unchanged_count=0)
+    cog, _pricing, items = _cog(sync_report=report, all_items=[_item()])
+    interaction = _interaction()
+
+    callback: Any = PricingCog.sync_prices.callback
+    await callback(cog, interaction)
+
+    items.all.assert_awaited_once()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    description = embed.description or ""
+    assert "Хвост тушкана" in description
+    assert "→" in description
 
 
 # --- new_price -----------------------------------------------------------
