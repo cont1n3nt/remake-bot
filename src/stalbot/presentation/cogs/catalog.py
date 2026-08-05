@@ -21,6 +21,7 @@ from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.presentation.autocomplete import item_choices
 from stalbot.presentation.checks import admin_only
 from stalbot.presentation.embeds.factory import EmbedFactory
+from stalbot.presentation.views.base import AuthorLockedView
 
 _CATEGORY_LABEL: Final[dict[ItemCategory, str]] = {
     ItemCategory.RESOURCE: "📦 Ресурс",
@@ -173,7 +174,7 @@ class CatalogCog(commands.Cog):
         return f"{emoji} **{item.name}**\n└ Скуп: {buy} • Продажа: {sell}"
 
 
-class _PriceListView(discord.ui.View):
+class _PriceListView(AuthorLockedView):
     """Category toggle + internal pagination for `/price_list` (PLAN.md §10.4)."""
 
     def __init__(
@@ -190,27 +191,16 @@ class _PriceListView(discord.ui.View):
             author_id: The only Discord user id allowed to interact.
             timeout: Seconds before the view disables itself.
         """
-        super().__init__(timeout=timeout)
+        super().__init__(author_id=author_id, timeout=timeout)
         self._pages = pages
-        self._author_id = author_id
         self._category = ItemCategory.RESOURCE
         self._index = 0
-        #: Set by the caller after sending, so `on_timeout` can disable the
-        #: view on the original message — discord.py does not track this.
-        self.message: discord.Message | None = None
         self._sync()
 
     @property
     def current(self) -> discord.Embed:
         """The embed for the current category/page."""
         return self._pages[self._category][self._index]
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Reject interactions from anyone but the original author."""
-        if interaction.user.id != self._author_id:
-            await interaction.response.send_message("Эта кнопка не для вас.", ephemeral=True)
-            return False
-        return True
 
     @discord.ui.button(label="📦 Цены на ресурсы", style=discord.ButtonStyle.primary, row=0)
     async def show_resources(
@@ -245,14 +235,6 @@ class _PriceListView(discord.ui.View):
         """Go forward one page within the current category."""
         self._index = min(len(self._pages[self._category]) - 1, self._index + 1)
         await self._render(interaction)
-
-    async def on_timeout(self) -> None:
-        """Disable every control on the original message once the view expires."""
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-        if self.message is not None:
-            await self.message.edit(view=self)
 
     async def _render(self, interaction: discord.Interaction) -> None:
         self._sync()

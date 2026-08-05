@@ -10,10 +10,12 @@ from typing import Final
 
 import discord
 
+from stalbot.presentation.views.base import AuthorLockedView
+
 _DEFAULT_TIMEOUT_SECONDS: Final = 300.0
 
 
-class LogsPagerView(discord.ui.View):
+class LogsPagerView(AuthorLockedView):
     """`⏮ ◀ n/m ▶ ⏭` + `🔢 К странице`, locked to one author.
 
     Usage::
@@ -37,13 +39,9 @@ class LogsPagerView(discord.ui.View):
             author_id: The only Discord user id allowed to interact.
             timeout: Seconds before the view disables itself.
         """
-        super().__init__(timeout=timeout)
+        super().__init__(author_id=author_id, timeout=timeout)
         self._pages = pages
-        self._author_id = author_id
         self._index = 0
-        #: Set by the caller after sending, so `on_timeout` can disable the
-        #: view on the original message — discord.py does not track this.
-        self.message: discord.Message | None = None
         self._sync()
 
     @property
@@ -55,13 +53,6 @@ class LogsPagerView(discord.ui.View):
     def page_count(self) -> int:
         """Total number of pages."""
         return len(self._pages)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Reject interactions from anyone but the original author."""
-        if interaction.user.id != self._author_id:
-            await interaction.response.send_message("Эта кнопка не для вас.", ephemeral=True)
-            return False
-        return True
 
     @discord.ui.button(label="⏮", style=discord.ButtonStyle.secondary, row=0)
     async def first_page(
@@ -113,14 +104,6 @@ class LogsPagerView(discord.ui.View):
         self._index = index
         self._sync()
         await interaction.response.edit_message(embed=self.current, view=self)
-
-    async def on_timeout(self) -> None:
-        """Disable every control on the original message once the view expires."""
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-        if self.message is not None:
-            await self.message.edit(view=self)
 
     def _sync(self) -> None:
         self.first_page.disabled = self._index == 0

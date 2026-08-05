@@ -10,10 +10,12 @@ from typing import Final
 
 import discord
 
+from stalbot.presentation.views.base import AuthorLockedView
+
 _DEFAULT_TIMEOUT_SECONDS: Final = 180.0
 
 
-class PaginatedEmbedView(discord.ui.View):
+class PaginatedEmbedView(AuthorLockedView):
     """Prev/Next pager over pre-built embeds, locked to one author.
 
     Usage::
@@ -37,26 +39,15 @@ class PaginatedEmbedView(discord.ui.View):
             author_id: The only Discord user id allowed to press a button.
             timeout: Seconds before the view disables itself.
         """
-        super().__init__(timeout=timeout)
+        super().__init__(author_id=author_id, timeout=timeout)
         self._pages = pages
-        self._author_id = author_id
         self._index = 0
-        #: Set by the caller after sending, so `on_timeout` can disable the
-        #: buttons on the original message — discord.py does not track this.
-        self.message: discord.Message | None = None
         self._sync_buttons()
 
     @property
     def current(self) -> discord.Embed:
         """The embed for the current page."""
         return self._pages[self._index]
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Reject button presses from anyone but the original author."""
-        if interaction.user.id != self._author_id:
-            await interaction.response.send_message("Эта кнопка не для вас.", ephemeral=True)
-            return False
-        return True
 
     @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
     async def previous_page(
@@ -73,14 +64,6 @@ class PaginatedEmbedView(discord.ui.View):
         """Go forward one page."""
         self._index = min(len(self._pages) - 1, self._index + 1)
         await self._render(interaction)
-
-    async def on_timeout(self) -> None:
-        """Disable the buttons on the original message once the view expires."""
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-        if self.message is not None:
-            await self.message.edit(view=self)
 
     async def _render(self, interaction: discord.Interaction) -> None:
         self._sync_buttons()
