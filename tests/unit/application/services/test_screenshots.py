@@ -121,6 +121,69 @@ async def test_on_attached_keeps_a_sample_when_enabled(tmp_path: Path) -> None:
     assert saved.read_bytes() == _DATA
 
 
+async def test_on_attached_prefers_mime_over_a_mismatched_filename_extension(
+    tmp_path: Path,
+) -> None:
+    """INFRA2-5: an uploader's OS can rename a file without touching its
+    bytes — the mime Discord itself reports is the more trustworthy source
+    for what format the sample actually is."""
+    service = ScreenshotService(
+        _fake_analyses(),
+        _fake_ocr(),
+        _settings(ocr_keep_samples=True, samples_dir=tmp_path),
+        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+    )
+
+    await service.on_attached(
+        111, _DATA, filename="screenshot.png", mime="image/webp", image_url=None
+    )
+
+    sha = hashlib.sha256(_DATA).hexdigest()
+    assert (tmp_path / f"{sha}.webp").exists()
+    assert not (tmp_path / f"{sha}.png").exists()
+
+
+async def test_on_attached_strips_mime_parameters_before_matching(tmp_path: Path) -> None:
+    """A `content_type` carrying `; charset=...`/other parameters must still
+    match the allowlist — otherwise every parameterized mime silently falls
+    through to the filename, quietly reintroducing INFRA2-5."""
+    service = ScreenshotService(
+        _fake_analyses(),
+        _fake_ocr(),
+        _settings(ocr_keep_samples=True, samples_dir=tmp_path),
+        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+    )
+
+    await service.on_attached(
+        111,
+        _DATA,
+        filename="screenshot.png",
+        mime="image/webp; charset=binary",
+        image_url=None,
+    )
+
+    sha = hashlib.sha256(_DATA).hexdigest()
+    assert (tmp_path / f"{sha}.webp").exists()
+
+
+async def test_on_attached_falls_back_to_filename_for_an_unrecognized_mime(
+    tmp_path: Path,
+) -> None:
+    service = ScreenshotService(
+        _fake_analyses(),
+        _fake_ocr(),
+        _settings(ocr_keep_samples=True, samples_dir=tmp_path),
+        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+    )
+
+    await service.on_attached(
+        111, _DATA, filename="screenshot.tiff", mime="application/octet-stream", image_url=None
+    )
+
+    sha = hashlib.sha256(_DATA).hexdigest()
+    assert (tmp_path / f"{sha}.tiff").exists()
+
+
 async def test_on_attached_skips_the_sample_when_disabled(tmp_path: Path) -> None:
     analyses = _fake_analyses()
     service = ScreenshotService(
