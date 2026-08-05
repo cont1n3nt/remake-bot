@@ -127,21 +127,57 @@ optional-комментариев; `security-auditor` отдельно на DOM-
 ## Этап 2 — Application (`application/**`)
 
 Зависит от: этапа 1 (использует `domain/money.py` после фикса DOM-1/DOM-3).
-Статус: **not started**
+Статус: **done**
 
 - [x] APP-1 — исправлено в Этапе 0 (CLUSTER-1)
 - [x] APP-2 — исправлено в Этапе 0
-- [ ] APP-3 — `/sync_prices` тихо обнуляет цену при непарсящейся ячейке
-- [ ] APP-4 — `/del_item` не синкает `active_order_item_id`
-- [ ] APP-5 — `add_item` race на устаревшем кэше
-- [ ] APP-6 — N+1 обращения к кэшу (perf, не корректность)
-- [ ] APP-7 — `set_quantity` без клэмпинга диапазона
-- [ ] APP-8 — `ScreenshotService.on_attached` без try/except вокруг OCR
+- [x] APP-3 — `/sync_prices` тихо обнуляет цену при непарсящейся ячейке
+- [x] APP-4 — `/del_item` не синкает `active_order_item_id`
+- [x] APP-5 — `add_item` race на устаревшем кэше
+- [x] APP-6 — N+1 обращения к кэшу (perf, не корректность) — сделано, хоть и
+      Suggestion-уровня: чётко ограничено, каждый вызывающий сайт получил тест
+- [x] APP-7 — `set_quantity` без клэмпинга диапазона
+- [x] APP-8 — `ScreenshotService.on_attached` без try/except вокруг OCR
 
 Заметки после исправления:
-_(заполнить)_
+- **APP-3** (`application/services/pricing.py`, `application/dto/sync_prices_report.py`,
+  `presentation/cogs/pricing.py`): `_cell_decimal` больше не глотает `InvalidOperation` —
+  непарсящаяся (не пустая) ячейка репортится в новом поле `SyncPricesReport.unparseable`
+  и пропускается без записи, вместо генерации `PriceChange`, обнуляющего цену. Cog
+  показывает список отдельно от `not_found`.
+- **APP-4** (`application/services/catalog.py`,
+  `infrastructure/cache/repositories/ticket_sessions.py`, `presentation/bot.py`):
+  `CatalogService` получил новую зависимость `TicketSessionsRepository` (по той же
+  причине, по которой там уже был `BoostOrderLinesRepository` — обе хранят указатель на
+  `item_id`, которому нужна перепрошивка при ренумерации). Новые методы
+  `reassign_active_order_item`/`clear_active_order_item_for` зеркалят существующий паттерн
+  `boost_order_lines.reassign_item_id`/`delete_by_name`. **Важный порядок**: clear для
+  удалённого id идёт ПЕРЕД циклом ренумерации-переприсвоения — иначе он стирает сессию,
+  только что корректно переприсвоенную на тот же (переиспользованный) id. Поймано
+  собственным regression-тестом в процессе (red перед фиксом порядка, green после).
+- **APP-5** (`application/services/catalog.py`): `add_item` читает живой блок листа
+  (`_read_block()`), как `delete_item`, а не кэш — и для id/row, и для duplicate-check
+  (один и тот же read на обе цели).
+- **APP-7** (`application/services/boost_orders.py`): `set_quantity` клэмпит к
+  `MIN_QUANTITY..MAX_QUANTITY`, как уже делает `adjust_quantity`.
+- **APP-8** (`application/services/screenshots.py`): `on_attached` оборачивает
+  `OcrGateway.recognize()` в `try/except Exception` (не `BaseException` — `CancelledError`
+  должен продолжать всплывать), деградирует в `OcrResult(status="failed", error=...)`,
+  логирует warning.
+- **APP-6** (2 репозитория + 4 сервиса): новые батч-методы `ItemsCacheRepository.get_by_ids`,
+  `UsersCacheRepository.get_by_nicks`/`get_nick_displays`; заменили N+1 циклы в
+  `BoostOrderService.list_lines_with_items`, `PricingService.apply_import`,
+  `StatsService.report`, `ProfileService.list_referrals`. `# noqa: S608` на построение
+  `IN (...)` — обоснование (интерполируется только количество `?`-плейсхолдеров, не данные)
+  независимо проверено ревью.
+- Прогнан `agent-skills:code-reviewer` (five-axis) по всему диффу этапа — вердикт
+  **APPROVE**, 0 critical/required. Один not-blocking finding (неограниченный `IN(...)` —
+  залогирован как **INFRA1-12**, отложено в Этап 3) и две мелкие suggestion-заметки
+  (добавлены как комментарии в код сразу).
+- Все 896 unit-теста зелёные (+7 к концу Этапа 1), `mypy`/`ruff` чисты по всему `src`+`tests`.
+- Новых блокирующих багов не найдено; один low/FYI найден и отложен (INFRA1-12, см. выше).
 
-Review passed: ☐
+Review passed: да (`agent-skills:code-reviewer`, five-axis, APPROVE)
 
 ---
 
@@ -163,6 +199,10 @@ Review passed: ☐
 - [ ] INFRA1-11 — (найдено при фиксе CLUSTER-1 в Этапе 0) нет таймаута на Sheets-вызовы
       внутри залоченного `TransactionService.register()` — зависший вызов теперь блокирует
       весь процесс, не только одного вызывающего. Делит корень с INFRA1-3.
+- [ ] INFRA1-12 — (найдено при ревью Этапа 2) батч-методы `get_by_ids`/`get_by_nicks`/
+      `get_nick_displays` (добавлены для APP-6) строят неограниченный `IN (...)` —
+      недостижимо сегодняшними вызывающими, но не защищено/не задокументировано против
+      предела SQLite на число параметров запроса. Low/FYI.
 
 Заметки после исправления:
 _(заполнить)_
@@ -282,7 +322,7 @@ Review passed: ☐
 |---|---|---|---|---|
 | 0 | Критично + Security (кросс-модульно) | 6 | 6 | done |
 | 1 | Domain | 10 | 1 (DOM-1 дублирован из эт.0) | done |
-| 2 | Application | 8 | 2 (APP-1/2 дублированы из эт.0) | not started |
+| 2 | Application | 8 | 2 (APP-1/2 дублированы из эт.0) | done |
 | 3 | Infrastructure: Sheets+Cache | 10 | 2 (дублированы из эт.0) | not started |
 | 4 | Infrastructure: Discord/OCR/Logging/Config | 9 | 0 (2 high) | not started |
 | 5 | Presentation (non-ticket) | 9 | 1 (PRES-1 дублирован из эт.0) | not started |
@@ -292,5 +332,5 @@ Review passed: ☐
 
 **Итого уникальных находок: ~55** (с учётом дублей CLUSTER-1 и DOM-8/PRES-8, DOM-2/SEC-2, посчитанных один раз).
 
-Этапы 0 и 1 исправлены и прошли ревью (2026-08-05). Этап 2 (Application) — следующий по
-очереди, ждёт явной команды на продолжение (правило "один этап за раз").
+Этапы 0, 1 и 2 исправлены и прошли ревью (2026-08-05). Этап 3 (Infrastructure: Sheets+Cache)
+— следующий по очереди, ждёт явной команды на продолжение (правило "один этап за раз").
