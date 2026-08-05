@@ -138,9 +138,7 @@ async def test_apply_page_selection_lets_a_same_page_swap_through_at_the_cap(
 
     # Same page submit: id 1 newly checked, id 2 newly unchecked — a page
     # always reports every option's current state, so both appear here.
-    rejected = await service.apply_page_selection(
-        111, [swap_in, swap_out], frozenset({swap_in.id})
-    )
+    rejected = await service.apply_page_selection(111, [swap_in, swap_out], frozenset({swap_in.id}))
 
     assert rejected == frozenset()
     lines = await service.list_lines(111)

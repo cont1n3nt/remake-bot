@@ -107,8 +107,7 @@ class TicketSessionsRepository:
         if old_item_id == new_item_id:
             return
         await self._conn.execute(
-            "UPDATE ticket_sessions SET active_order_item_id = ?"
-            " WHERE active_order_item_id = ?",
+            "UPDATE ticket_sessions SET active_order_item_id = ? WHERE active_order_item_id = ?",
             (new_item_id, old_item_id),
         )
         await self._conn.commit()
@@ -120,8 +119,7 @@ class TicketSessionsRepository:
             item_id: The deleted item's id, before renumbering.
         """
         await self._conn.execute(
-            "UPDATE ticket_sessions SET active_order_item_id = NULL"
-            " WHERE active_order_item_id = ?",
+            "UPDATE ticket_sessions SET active_order_item_id = NULL WHERE active_order_item_id = ?",
             (item_id,),
         )
         await self._conn.commit()

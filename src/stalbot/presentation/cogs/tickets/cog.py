@@ -217,8 +217,7 @@ class TicketsCog(commands.Cog):
 
         embed = self._embeds.info(
             "📮 Выберите способ передачи",
-            "Ник: Scaryyyyy\n"
-            "Отправлять предметы / деньги на этот ник при выборе «Почта».",
+            "Ник: Scaryyyyy\nОтправлять предметы / деньги на этот ник при выборе «Почта».",
         )
         view = DeliveryMethodView(self._on_delivery_selected)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -941,8 +940,7 @@ def _image_attachments(
     return [
         attachment
         for attachment in attachments
-        if (attachment.content_type or "").split(";")[0].strip().lower()
-        in _ALLOWED_CONTENT_TYPES
+        if (attachment.content_type or "").split(";")[0].strip().lower() in _ALLOWED_CONTENT_TYPES
     ]
 
 

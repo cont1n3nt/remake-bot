@@ -333,9 +333,7 @@ def _eval_node(node: ast.expr, tokens: Mapping[str, Decimal]) -> Decimal:
         operand = _eval_node(node.operand, tokens)
         return -operand if isinstance(node.op, ast.USub) else operand
     if isinstance(node, ast.BinOp):
-        return _apply_binop(
-            node.op, _eval_node(node.left, tokens), _eval_node(node.right, tokens)
-        )
+        return _apply_binop(node.op, _eval_node(node.left, tokens), _eval_node(node.right, tokens))
     raise AmountParseError(f"disallowed expression element: {type(node).__name__}")
 
 

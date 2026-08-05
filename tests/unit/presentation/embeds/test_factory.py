@@ -169,9 +169,7 @@ class TestEnforceLimits:
         assert embed.fields[0].value is not None
         assert len(embed.fields[0].value) <= 1024
 
-    def test_clamps_field_name_to_256_even_when_total_is_small(
-        self, factory: EmbedFactory
-    ) -> None:
+    def test_clamps_field_name_to_256_even_when_total_is_small(self, factory: EmbedFactory) -> None:
         embed = factory.info("Заголовок")
         embed.add_field(name="N" * 300, value="v", inline=False)
         enforce_limits(embed)

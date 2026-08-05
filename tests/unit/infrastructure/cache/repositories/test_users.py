@@ -72,9 +72,7 @@ async def test_get_by_nicks_returns_only_the_nicks_found(
         [_profile("alice"), _profile("bob")], nick_displays={}, synced_at=synced_at
     )
 
-    found = await repo.get_by_nicks(
-        [NormalizedNick("alice"), NormalizedNick("ghost")]
-    )
+    found = await repo.get_by_nicks([NormalizedNick("alice"), NormalizedNick("ghost")])
 
     assert set(found) == {NormalizedNick("alice")}
     assert found[NormalizedNick("alice")].nick == "alice"

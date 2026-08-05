@@ -115,9 +115,7 @@ class ProfileCog(commands.Cog):
         embed.add_field(
             name="🪙 Coins", value=format_amount(profile.coins, currency=False), inline=True
         )
-        embed.add_field(
-            name="⚡ XP", value=format_amount(profile.xp, currency=False), inline=True
-        )
+        embed.add_field(name="⚡ XP", value=format_amount(profile.xp, currency=False), inline=True)
         embed.add_field(name="🏅 Ранг", value=rank_label, inline=True)
         embed.add_field(name="🤝 Реф-роль", value=referral_label, inline=True)
         embed.add_field(name="👥 Приглашено", value=str(profile.referrals_count), inline=True)

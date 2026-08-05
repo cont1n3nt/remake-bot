@@ -872,9 +872,7 @@ async def test_order_line_selected_rejects_a_non_participant() -> None:
 
 async def test_order_line_selected_rejects_an_already_confirmed_ticket() -> None:
     """TICK-3: every editor mutator must reject once the ticket is confirmed, not just confirm."""
-    session = _session(
-        kind=TicketKind.ORDER_BOOSTS, author_id=42, status=TicketStatus.CONFIRMED
-    )
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, status=TicketStatus.CONFIRMED)
     cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
     interaction = _interaction()
 
@@ -943,7 +941,9 @@ async def test_qty_submitted_rejects_an_out_of_range_amount() -> None:
 async def test_qty_submitted_rejects_an_already_confirmed_ticket() -> None:
     """TICK-3: the modal-submit path re-fetches its own session, so it needs its own check."""
     session = _session(
-        kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7,
+        kind=TicketKind.ORDER_BOOSTS,
+        author_id=42,
+        active_order_item_id=7,
         status=TicketStatus.CONFIRMED,
     )
     cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
