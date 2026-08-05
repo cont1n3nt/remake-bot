@@ -491,18 +491,82 @@ Review passed: да (`agent-skills:code-reviewer`, five-axis; первый пр�
 ## Этап 7 — Security (остаточные, не покрытые кластерами выше)
 
 Может идти параллельно с этапами 1-6 после этапа 0.
-Статус: **not started**
+Статус: **done**
 
-- [ ] SEC-1 — `evaluate_amount` принимает scientific notation → `Infinity`/`OverflowError` (тот же файл, что DOM-1/DOM-3 — рассмотреть в одном PR с этапом 1)
-- [ ] SEC-2 — см. DOM-2 (этап 1)
-- [ ] SEC-4 — общий `on_error` для всех `discord.ui.Modal` в проекте
-- [ ] SEC-5 — cooldown на тяжёлых админ-командах (не срочно)
-- [ ] SEC-6 — доп. sandboxing-директивы `deploy/stalbot.service` (info, не блокирует)
+- [x] SEC-1 — `evaluate_amount` принимает scientific notation → `Infinity`/`OverflowError`
+- [x] SEC-2 — см. DOM-2 (уже исправлено в Этапе 1, дубликат)
+- [x] SEC-4 — общий `on_error` для всех `discord.ui.Modal` в проекте
+- [x] SEC-5 — cooldown на тяжёлых админ-командах
+- [x] SEC-6 — доп. sandboxing-директивы `deploy/stalbot.service`
 
 Заметки после исправления:
-_(заполнить)_
+- **SEC-1** (`domain/money.py`): `evaluate_amount` уходил в `Decimal('Infinity')` на
+  `"1e400"` (Python сам распознаёт scientific notation как float-литерал, который
+  собственный regex денежных токенов вообще не видит) — и отдельно, независимо
+  найдено при работе над багом: несколько вложенных `** 12` (каждый по отдельности в
+  рамках `_MAX_POWER_EXPONENT`) переполняют `Emax` decimal-контекста и поднимают
+  необработанный `decimal.Overflow`. Трёхслойный фикс: `_check_ast` отклоняет
+  нефинитные float-константы на уровне AST (самая ранняя и дешёвая точка);
+  `evaluate_amount` также ловит `decimal.DecimalException` вокруг вычисления (нужно
+  именно для случая вложенного `**` — там нет ни одного нефинитного литерала);
+  финальный `is_finite()`-чек на результате — подтверждено ревью, что сейчас
+  недостижим при двух предыдущих слоях, оставлен как страховка на случай будущего
+  изменения `_ARITHMETIC_PRECISION`/контекста (задокументировано явно, чтобы не
+  выглядел мёртвым кодом). Прогнан через `security-auditor` дважды (сам фикс +
+  контракты вызывающих сторон) — вердикт: закрывает весь класс уязвимости, не только
+  два репродуцированных случая.
+- **SEC-4** (`presentation/errors.py`, новый `presentation/views/error_modal.py`, все
+  5 классов `discord.ui.Modal` в проекте): ни одна модалка не переопределяла
+  `on_error` — исключение из `on_submit` (включая свежепойманные SEC-1 decimal-
+  исключения) попадало в дефолтный хендлер discord.py, который просто логирует и
+  ничего не отвечает пользователю. `_resolve_message` (`errors.py`) разделён на
+  app_commands-специфичную часть (разворачивает `CommandInvokeError.__cause__`) и
+  общую `_resolve_cause_message` (маппинг исключение → текст, включая инвариант
+  PRES-1 «не течёт `str(cause)` для не-`DomainError`») — теперь используется и новым
+  `on_modal_error`. Новый `ErrorReportingModal` — общий базовый класс для модалок,
+  принимает `EmbedFactory`, маршрутизирует `on_error` через `on_modal_error`. Все 4
+  модалки тикет-флоу + `_JumpToPageModal` (`views/logs_pager.py`) унаследованы от
+  него; `embeds` протянут от каждого места конструирования (без дефолтного значения
+  — пропущенный call site упал бы сразу на конструировании, не тихо). `# type:
+  ignore[override]` на `on_error` — подтверждённый (независимо воспроизведённый)
+  баг стабов discord.py/mypy: даже дословно повторённая сигнатура `Modal.on_error`
+  из документации discord.py триггерит эту ошибку, т.к. mypy сравнивает с
+  `BaseView.on_error` (3 параметра), а не с промежуточным `Modal.on_error` (2).
+- **SEC-5** (`presentation/cogs/pricing.py`, `errors.py`): `@app_commands.checks
+  .cooldown(1, 15.0)` на `/sync_prices` и `/new_price` (оба уже `@admin_only()`).
+  `_resolve_message` теперь проверяет `CommandOnCooldown` раньше общего
+  `CheckFailure` (т.к. `CommandOnCooldown` — подкласс `CheckFailure`) — иначе
+  сработавший кулдаун показывал бы «недостаточно прав» вместо «попробуйте через N
+  секунд». Порядок чеков (`admin_only()` реально выполняется раньше cooldown-чека,
+  несмотря на то что декоратор cooldown написан выше в исходнике — `app_commands
+  .check` добавляет в список снизу вверх) подтверждён и закрыт regression-тестом:
+  отклонённый неадмин не потребляет чужой/свой будущий cooldown-токен.
+- **SEC-6** (`deploy/stalbot.service`): добавлены `ProtectKernelModules`,
+  `ProtectKernelTunables`, `ProtectControlGroups`, `RestrictSUIDSGID`,
+  `RestrictNamespaces`, `LockPersonality`, пустой `CapabilityBoundingSet`,
+  `SystemCallFilter=@system-service` + `SystemCallErrorNumber=EPERM` (пробел в
+  allowlist деградирует в пойманное Python-исключение, а не `SIGSYS`-килл),
+  `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX` (последнее — добавлено по
+  Medium-находке `security-auditor`, не было в исходном списке из bugfix.md). Не
+  проверено end-to-end (нет Linux/systemd-хоста в этой рабочей среде) —
+  задокументировано в файле, что нужно свериться через `journalctl -u stalbot`
+  после установки юнита.
+- Обязательный `agent-skills:code-reviewer` — **APPROVE** с первого прохода, 0
+  critical/important; 4 suggestion-находки — все устранены: округление
+  `retry_after` вверх (`math.ceil`, не показывать «через 0 с.» пока ещё на
+  кулдауне), докстринг-пояснение недостижимости третьего SEC-1-слоя, regression-тест
+  на порядок admin/cooldown-чеков, end-to-end тест реального `AmountModal` через
+  `on_submit` → `on_error` (закрывает именно тот путь, что был мотивацией SEC-4).
+- Все 996 unit-тестов зелёные (+59 к концу Этапа 6), `mypy --strict`/`ruff` чисты по
+  всему `src`+`tests`.
+- Коммиты атомарные: SEC-1 (`0e4e7a6`), SEC-4+SEC-5 (`ac253c6`, один коммит — оба
+  трогают `errors.py`, разделять без риска частично сломанного коммита не стали),
+  SEC-6 (`c9ed209`), ревью-фиксы (`7cdfb5c`).
+- Новых блокирующих багов по пути не найдено.
 
-Review passed: ☐
+Review passed: да (`agent-skills:code-reviewer`, five-axis, APPROVE с первого
+прохода; `security-auditor` дважды — SEC-1 отдельно, затем SEC-4/5/6 вместе; mypy
+--strict/ruff/полный прогон тестов зелёные)
 
 ---
 
@@ -535,12 +599,12 @@ Review passed: ☐
 | 4 | Infrastructure: Discord/OCR/Logging/Config | 9 | 0 (2 high) | done |
 | 5 | Presentation (non-ticket) | 9 | 1 (PRES-1 дублирован из эт.0) | done |
 | 6 | Presentation: Tickets | 10 | 1 (TICK-1 дублирован из эт.0) | done |
-| 7 | Security (остаточные) | 5 | 0 | not started |
+| 7 | Security (остаточные) | 5 | 1 (SEC-1, medium) | done |
 | 8 | Test-coverage backfill | 4 | — | not started |
 
 **Итого уникальных находок: ~57** (с учётом дублей CLUSTER-1 и DOM-8/PRES-8, DOM-2/SEC-2,
 посчитанных один раз; +2 за INFRA2-10/INFRA2-11, найденные при ревью Этапа 4).
 
-Этапы 0, 1, 2, 3, 4, 5 и 6 исправлены и прошли ревью (2026-08-05). Этап 7 (Security,
-остаточные) — следующий по очереди (может идти параллельно с Этапом 8), ждёт явной
-команды на продолжение (правило "один этап за раз").
+Этапы 0, 1, 2, 3, 4, 5, 6 и 7 исправлены и прошли ревью (2026-08-05). Этап 8
+(Test-coverage backfill) — единственный оставшийся, ждёт явной команды на
+продолжение (правило "один этап за раз").
