@@ -52,7 +52,7 @@ class TestDateRange:
         assert rng.start == rng.end == date(2026, 7, 31)
 
     def test_week(self) -> None:
-        rng = DateRange.week(date(2026, 7, 1), date(2026, 7, 7))
+        rng = DateRange.week(date(2026, 7, 1), date(2026, 7, 7), today=date(2026, 7, 7))
         assert rng.start == date(2026, 7, 1)
         assert rng.end == date(2026, 7, 7)
 
@@ -72,7 +72,23 @@ class TestDateRange:
 
     def test_end_before_start_raises(self) -> None:
         with pytest.raises(InvalidPeriodError):
-            DateRange.week(date(2026, 7, 10), date(2026, 7, 1))
+            DateRange.week(date(2026, 7, 10), date(2026, 7, 1), today=date(2026, 7, 10))
+
+    def test_week_rejects_a_future_end_date(self) -> None:
+        with pytest.raises(InvalidPeriodError):
+            DateRange.week(date(2026, 7, 1), date(2026, 7, 7), today=date(2026, 7, 6))
+
+    def test_week_rejects_a_range_over_31_days(self) -> None:
+        with pytest.raises(InvalidPeriodError):
+            DateRange.week(date(2026, 6, 1), date(2026, 7, 31), today=date(2026, 7, 31))
+
+    def test_week_allows_end_equal_to_today(self) -> None:
+        rng = DateRange.week(date(2026, 7, 1), date(2026, 7, 7), today=date(2026, 7, 7))
+        assert rng.end == date(2026, 7, 7)
+
+    def test_week_allows_exactly_31_days(self) -> None:
+        rng = DateRange.week(date(2026, 7, 1), date(2026, 7, 31), today=date(2026, 7, 31))
+        assert (rng.end - rng.start).days + 1 == 31
 
     def test_contains(self) -> None:
         rng = DateRange.month(2026, 7)

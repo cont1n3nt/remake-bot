@@ -18,6 +18,10 @@ GMT3: Final = timezone(timedelta(hours=3))
 _DATE_FORMAT: Final = "%d.%m.%Y"
 _DATETIME_FORMAT: Final = "%d.%m.%Y %H:%M"
 
+#: `/week`'s business rule (PLAN.md §10.11): an explicit range may not span
+#: more days than this.
+_WEEK_MAX_DAYS: Final = 31
+
 _DEFAULT_DEADLINE_HOUR: Final = 23
 _DEFAULT_DEADLINE_MINUTE: Final = 59
 _MAX_DEADLINE_DAYS_AHEAD: Final = 90
@@ -103,9 +107,24 @@ class DateRange:
         return cls(start=day, end=day)
 
     @classmethod
-    def week(cls, start: date, end: date) -> "DateRange":
-        """Build a range from an explicit start/end pair."""
-        return cls(start=start, end=end)
+    def week(cls, start: date, end: date, *, today: date) -> "DateRange":
+        """Build a range from an explicit start/end pair (`/week`'s command).
+
+        Args:
+            start: First day of the range, inclusive.
+            end: Last day of the range, inclusive.
+            today: The caller's current date — *end* may not be after it.
+
+        Raises:
+            InvalidPeriodError: If *end* precedes *start*, *end* is in the
+                future, or the range spans more than `_WEEK_MAX_DAYS` days.
+        """
+        if end > today:
+            raise InvalidPeriodError("конец периода не может быть в будущем")
+        range_ = cls(start=start, end=end)
+        if (end - start).days + 1 > _WEEK_MAX_DAYS:
+            raise InvalidPeriodError(f"диапазон не может превышать {_WEEK_MAX_DAYS} дней")
+        return range_
 
     @classmethod
     def month(cls, year: int, month: int) -> "DateRange":

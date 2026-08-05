@@ -154,7 +154,9 @@ async def test_week_sends_report_for_valid_range() -> None:
 
     await _call_week(cog, interaction, начало="25.07.2026", конец="31.07.2026")
 
-    stats.report.assert_awaited_once_with(DateRange.week(date(2026, 7, 25), date(2026, 7, 31)))
+    stats.report.assert_awaited_once_with(
+        DateRange.week(date(2026, 7, 25), date(2026, 7, 31), today=date(2026, 7, 31))
+    )
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "25.07.2026" in (embed.title or "")
     assert "31.07.2026" in (embed.title or "")

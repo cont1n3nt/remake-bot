@@ -4,7 +4,6 @@ PLAN.md §10.10, §10.11.
 """
 
 from collections.abc import Sequence
-from datetime import date
 from typing import Final
 
 import discord
@@ -16,7 +15,6 @@ from stalbot.application.dto.period_report import PeriodReport, PlayerPeriodStat
 from stalbot.application.services.stats import StatsService
 from stalbot.domain.clock import DateRange, SystemClock, format_date, format_datetime, parse_date
 from stalbot.domain.enums import DealType
-from stalbot.domain.errors import InvalidPeriodError
 from stalbot.domain.money import format_amount
 from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
 from stalbot.presentation.checks import admin_only
@@ -27,7 +25,6 @@ from stalbot.presentation.views.paginated_embed import PaginatedEmbedView
 _SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━"
 _PLAYERS_PAGE_SIZE: Final = 20
 _LOGS_PAGE_SIZE: Final = 25
-_MAX_WEEK_DAYS: Final = 31
 
 _MONTH_NAMES: Final[dict[int, str]] = {
     1: "Январь",
@@ -110,8 +107,7 @@ class StatsCog(commands.Cog):
         """Handle `/week`: aggregate every deal within an explicit date range."""
         await interaction.response.defer(ephemeral=True)
         start, end = parse_date(начало), parse_date(конец)
-        _validate_week_range(start, end, today=self._clock.today())
-        report = await self._stats.report(DateRange.week(start, end))
+        report = await self._stats.report(DateRange.week(start, end, today=self._clock.today()))
         title = f"📊 Статистика с {format_date(start)} по {format_date(end)}"
         await self._send_report(interaction, title=title, report=report)
 
@@ -158,14 +154,6 @@ class StatsCog(commands.Cog):
             title = f"🧾 Архив сделок (стр. {page_index + 1}/{page_count})"
             pages.append(self._embeds.info(title, "\n".join(lines)))
         return pages
-
-
-def _validate_week_range(start: date, end: date, *, today: date) -> None:
-    """Enforce `/week`'s range rules (PLAN.md §10.11): `end >= start` is `DateRange`'s job."""
-    if end > today:
-        raise InvalidPeriodError("конец периода не может быть в будущем")
-    if (end - start).days + 1 > _MAX_WEEK_DAYS:
-        raise InvalidPeriodError(f"диапазон не может превышать {_MAX_WEEK_DAYS} дней")
 
 
 def _format_log_line(entry: LogEntry) -> str:
