@@ -16,7 +16,7 @@ from stalbot.domain.errors import (
     SheetStructureError,
     SheetsWriteConflictError,
 )
-from stalbot.infrastructure.sheets.client import SheetsClient
+from stalbot.infrastructure.sheets.client import CellGrid, SheetsClient
 from stalbot.infrastructure.sheets.layouts import DATABASE_BLOCKS, EXPECTED_SHEET_TITLES
 
 
@@ -126,6 +126,31 @@ async def test_write_verified_succeeds_when_readback_matches() -> None:
     assert spreadsheet.values_batch_update.call_count == 1  # only the real write, no compensation
 
 
+async def test_write_verified_tolerates_trailing_empty_cell_trimmed_from_readback() -> None:
+    """The Sheets API trims a trailing empty cell from its reply instead of padding it back."""
+    spreadsheet = _fake_spreadsheet()
+    written = {"DataBase!A3:E3": [["31.07.2026", "nick", 100, "purchase", ""]]}
+    spreadsheet.values_batch_get.return_value = _value_ranges(
+        {"DataBase!A3:E3": [["31.07.2026", "nick", 100, "purchase"]]}
+    )
+    client = _client_with_fake_spreadsheet(spreadsheet)
+
+    await client.write_verified(written)  # must not raise
+
+    assert spreadsheet.values_batch_update.call_count == 1  # only the real write, no compensation
+
+
+async def test_write_verified_tolerates_trailing_empty_row_trimmed_from_readback() -> None:
+    spreadsheet = _fake_spreadsheet()
+    written: dict[str, CellGrid] = {"DataBase!I3:I4": [[123], [""]]}
+    spreadsheet.values_batch_get.return_value = _value_ranges({"DataBase!I3:I4": [[123]]})
+    client = _client_with_fake_spreadsheet(spreadsheet)
+
+    await client.write_verified(written)  # must not raise
+
+    assert spreadsheet.values_batch_update.call_count == 1
+
+
 async def test_write_verified_clears_and_raises_on_mismatch() -> None:
     spreadsheet = _fake_spreadsheet()
     spreadsheet.values_batch_get.return_value = _value_ranges({"DataBase!I3": [[999]]})
@@ -137,6 +162,16 @@ async def test_write_verified_clears_and_raises_on_mismatch() -> None:
     assert spreadsheet.values_batch_update.call_count == 2
     compensation_body = spreadsheet.values_batch_update.call_args.args[0]
     assert compensation_body["data"] == [{"range": "DataBase!I3", "values": [[""]]}]
+
+
+async def test_write_verified_rejects_a_genuinely_shorter_readback_row() -> None:
+    """A missing non-empty trailing cell is a real mismatch, not trimming."""
+    spreadsheet = _fake_spreadsheet()
+    spreadsheet.values_batch_get.return_value = _value_ranges({"DataBase!A3:B3": [["nick"]]})
+    client = _client_with_fake_spreadsheet(spreadsheet)
+
+    with pytest.raises(SheetsWriteConflictError):
+        await client.write_verified({"DataBase!A3:B3": [["nick", 100]]})
 
 
 async def test_read_until_stops_at_first_ready_result() -> None:

@@ -137,10 +137,18 @@ class SheetsClient:
     async def write_verified(self, data: Mapping[str, CellGrid]) -> None:
         """Write cells, then read them back to confirm the write took.
 
-        On a mismatch the written ranges are cleared again (best-effort
-        compensation) and `SheetsWriteConflictError` is raised — the caller
-        must not treat a verification failure as a partial success
-        (PLAN.md §7.4).
+        The read-back is compared cell-by-cell against what was sent, with
+        the (shorter) read-back grid right-padded with `""` before
+        comparing: the Sheets API trims trailing empty cells/rows from a
+        read reply rather than padding them back in, so a written row that
+        legitimately ends in an empty cell (e.g. no referrer) would
+        otherwise come back shorter than what was sent and look like a
+        mismatch that never happened.
+
+        On a genuine mismatch, the written ranges are cleared again
+        (best-effort compensation) and `SheetsWriteConflictError` is raised
+        — the caller must not treat a verification failure as a partial
+        success (PLAN.md §7.4).
 
         Args:
             data: Mapping from A1 range to the cell grid to write there.
@@ -151,7 +159,9 @@ class SheetsClient:
         """
         await self.batch_update(data)
         readback = await self.batch_get(list(data.keys()))
-        mismatched = [ref for ref, values in data.items() if readback.get(ref, []) != list(values)]
+        mismatched = [
+            ref for ref, values in data.items() if not _grid_matches(values, readback.get(ref, []))
+        ]
         if not mismatched:
             return
 
@@ -333,6 +343,23 @@ def _header_range(block: DatabaseBlock) -> str:
 
 def _blank_like(values: CellGrid) -> CellGrid:
     return [["" for _ in row] for row in values]
+
+
+def _grid_matches(written: CellGrid, read: CellGrid) -> bool:
+    """Compare a written grid against its read-back, right-padding `read`.
+
+    The Sheets API trims trailing empty cells/rows from a read reply rather
+    than padding them back to the requested shape, so a missing trailing
+    row or cell in `read` is treated as an explicit `""` rather than a
+    mismatch.
+    """
+    for row_index, written_row in enumerate(written):
+        read_row = read[row_index] if row_index < len(read) else []
+        for col_index, written_cell in enumerate(written_row):
+            read_cell = read_row[col_index] if col_index < len(read_row) else ""
+            if written_cell != read_cell:
+                return False
+    return True
 
 
 class _AcquireAll:
