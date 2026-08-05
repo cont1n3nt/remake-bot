@@ -19,6 +19,7 @@ from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.application.dto.transaction_request import TransactionRegistrationResult
 from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
+from stalbot.domain.entities.screenshot import OcrResult
 from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType, DeliveryMethod, ItemCategory, TicketKind, TicketStatus
 from stalbot.domain.errors import AmountParseError
@@ -32,6 +33,14 @@ _SELL_ITEMS_CATEGORY = next(
 _ORDER_BOOSTS_CATEGORY = next(
     cid for cid, kind in TICKET_CATEGORIES.items() if kind is TicketKind.ORDER_BOOSTS
 )
+
+
+class _FixedClock:
+    def __init__(self, now: datetime) -> None:
+        self._now = now
+
+    def now(self) -> datetime:
+        return self._now
 
 
 def _session(**overrides: object) -> TicketSession:
@@ -132,6 +141,7 @@ def _cog(
     boost_orders: MagicMock | None = None,
     transactions: MagicMock | None = None,
     progression: MagicMock | None = None,
+    embeds: EmbedFactory | None = None,
     tool_wait_timeout: float = 0.05,
     log_channel_id: int = 555,
 ) -> tuple[TicketsCog, MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
@@ -147,7 +157,7 @@ def _cog(
         boost_orders,
         transactions,
         progression,
-        EmbedFactory(),
+        embeds or EmbedFactory(),
         settings,
         tool_wait_timeout_seconds=tool_wait_timeout,
     )
@@ -573,6 +583,91 @@ async def test_handle_screenshot_archives_and_updates_the_card() -> None:
     tickets.record_screenshot.assert_awaited_once()
     screenshots.on_attached.assert_awaited_once()
     ticket_channel.fetch_message.assert_awaited_once_with(321)
+
+
+async def test_handle_screenshot_is_byte_identical_regardless_of_the_ocr_outcome() -> None:
+    """TEST-6: decision A7 says OCR must never affect the ticket flow — v1.0
+    hardcodes `NullOcrGateway`, but that alone doesn't prove `_handle_screenshot`
+    stays indifferent to whatever `ScreenshotService.on_attached()` returns;
+    it just means today's only OCR outcome happens to be `"disabled"`. This
+    drives the same screenshot through three very different outcomes (the
+    real v1.0 `"disabled"` result, a hypothetical M13 `"done"` result with
+    recognized items, and a raised exception — `on_attached` itself already
+    swallows OCR errors per APP-8, but a *caller*-side bug could still let
+    one through) and asserts every effect `_handle_screenshot` produces
+    before/independent of that call — the card edit and the archive upload —
+    comes out byte-for-byte the same every time, and that the discarded
+    return value never reaches a branch.
+
+    Uses a fixed-clock `EmbedFactory` rather than the real one `_cog()`
+    defaults to: `render_ticket_card`'s footer is timestamped at minute
+    precision, so a wall-clock minute rollover between loop iterations
+    would otherwise make the embed snapshots differ for a reason that has
+    nothing to do with OCR — a false red unrelated to the contract this
+    test actually guards.
+    """
+    embeds = EmbedFactory(clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)))
+    outcomes: list[AsyncMock] = [
+        AsyncMock(return_value=OcrResult(status="disabled")),
+        AsyncMock(
+            return_value=OcrResult(
+                status="done",
+                items=(),
+                total_estimate="123.45",
+                confidence=0.97,
+            )
+        ),
+        AsyncMock(side_effect=RuntimeError("a caller-side bug let this through")),
+    ]
+
+    def _call_snapshot(call: Any) -> dict[str, Any]:
+        # `discord.Embed`/`discord.File` are distinct objects on every call
+        # (no value equality) even when built from identical data — compare
+        # their actual content instead of object identity.
+        kwargs = call.kwargs
+        return {
+            "embed": kwargs["embed"].to_dict(),
+            "attachment_filenames": [f.filename for f in kwargs.get("attachments", [])]
+            or ([kwargs["file"].filename] if "file" in kwargs else []),
+        }
+
+    edit_calls: list[dict[str, Any]] = []
+    archive_calls: list[dict[str, Any]] = []
+    record_screenshot_calls: list[Any] = []
+
+    for on_attached in outcomes:
+        session = _session(summary_message_id=321)
+        cog, tickets, screenshots, *_ = _cog(
+            tickets=_fake_tickets(get_return=session), embeds=embeds
+        )
+        screenshots.on_attached = on_attached
+
+        log_channel = _text_channel(channel_id=555)
+        guild = MagicMock(spec=discord.Guild)
+        guild.get_channel = MagicMock(return_value=log_channel)
+        ticket_channel = _text_channel()
+        ticket_channel.guild = guild
+        summary_message = MagicMock(spec=discord.Message, edit=AsyncMock())
+        ticket_channel.fetch_message = AsyncMock(return_value=summary_message)
+        message = _message(author_id=1, channel=ticket_channel)
+        message.id = 777
+        message.guild = guild
+        message.attachments = []
+        attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+        attachment.read = AsyncMock(return_value=b"fake-bytes")
+
+        try:
+            await cog._handle_screenshot(message, session, attachment)
+        except RuntimeError:
+            pass  # only the third outcome raises — the point is everything *before* it already ran
+
+        edit_calls.append(_call_snapshot(summary_message.edit.call_args))
+        archive_calls.append(_call_snapshot(log_channel.send.call_args))
+        record_screenshot_calls.append(tickets.record_screenshot.call_args)
+
+    assert edit_calls[0] == edit_calls[1] == edit_calls[2]
+    assert archive_calls[0] == archive_calls[1] == archive_calls[2]
+    assert record_screenshot_calls[0] == record_screenshot_calls[1] == record_screenshot_calls[2]
 
 
 # -- Order-boosts form & editor --------------------------------------------
