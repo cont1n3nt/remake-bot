@@ -9,7 +9,17 @@ the time M13 starts.
 """
 
 import asyncio
+import re
 from pathlib import Path
+
+#: Bare alphanumeric extension, 1-8 characters — long enough for any real
+#: image format (`png`, `jpeg`, `webp`, ...), short enough to reject
+#: anything trying to smuggle a path separator or `..` through this
+#: parameter (INFRA2-4). Not reachable via today's one caller (which always
+#: passes a constant or a filename-derived extension that already looks
+#: like this), but validated at this function's own boundary rather than
+#: trusted from whichever caller happens to exist today.
+_EXTENSION_RE = re.compile(r"[A-Za-z0-9]{1,8}")
 
 
 async def save_sample(samples_dir: Path, sha256: str, data: bytes, *, extension: str) -> Path:
@@ -26,7 +36,13 @@ async def save_sample(samples_dir: Path, sha256: str, data: bytes, *, extension:
 
     Returns:
         The path written to.
+
+    Raises:
+        ValueError: If `extension` is not a bare alphanumeric token —
+            guards against a path separator or `..` reaching the filename.
     """
+    if not _EXTENSION_RE.fullmatch(extension):
+        raise ValueError(f"unsafe sample file extension: {extension!r}")
     samples_dir.mkdir(parents=True, exist_ok=True)
     path = samples_dir / f"{sha256}.{extension}"
     await asyncio.to_thread(path.write_bytes, data)

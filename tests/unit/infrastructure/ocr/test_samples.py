@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from stalbot.infrastructure.ocr.samples import save_sample
 
 
@@ -30,3 +32,19 @@ async def test_reusing_the_same_sha_overwrites_the_same_file(tmp_path: Path) -> 
 
     assert first == second
     assert first.read_bytes() == b"second"
+
+
+@pytest.mark.parametrize(
+    "extension",
+    ["../../etc/passwd", "png/../../evil", "a/b", "a\\b", "", "png.", "a" * 9],
+)
+async def test_rejects_an_unsafe_extension(tmp_path: Path, extension: str) -> None:
+    """INFRA2-4: a path separator or `..` reaching the filename would let a
+    caller escape `samples_dir` — validated at this function's own boundary
+    rather than trusted from whichever caller happens to exist today."""
+    samples_dir = tmp_path / "ocr_samples"
+
+    with pytest.raises(ValueError, match="unsafe"):
+        await save_sample(samples_dir, "sha", b"data", extension=extension)
+
+    assert not samples_dir.exists()  # rejected before anything was written
