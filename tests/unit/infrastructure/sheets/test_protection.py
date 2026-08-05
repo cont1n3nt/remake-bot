@@ -59,3 +59,9 @@ def test_same_column_letters_are_writable_on_other_sheets(column: str) -> None:
 
 def test_read_only_columns_match_plan_spec() -> None:
     assert READ_ONLY_COLUMNS == frozenset({"F", "G", "J", "K", "L", "M", "N", "O", "P", "R", "S"})
+
+
+def test_inverted_range_is_rejected_instead_of_skipping_checks() -> None:
+    """`range(start, end + 1)` is silently empty when end < start (fail-open) — must not be."""
+    with pytest.raises(ValueError, match="inverted"):
+        ensure_writable("DataBase!G3:F3")  # G(7) before F(6): reversed
