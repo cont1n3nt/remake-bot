@@ -276,9 +276,13 @@ def evaluate_amount(expression: str) -> Decimal:
             # exception type that must never reach the caller unwrapped.
             raise AmountParseError(f"invalid arithmetic result: {expression!r}") from exc
         if not result.is_finite():
-            # Belt and suspenders alongside `_check_ast`'s `ast.Constant`
-            # check: catches a non-finite `Decimal` that evaluation produced
-            # without raising, however that might happen.
+            # Not currently reachable: the `Overflow`/`InvalidOperation` traps
+            # this context inherits (see `_ARITHMETIC_PRECISION`) mean layer 1
+            # (`_check_ast`'s `ast.Constant` check) or layer 2 (the
+            # `DecimalException` catch above) already catches every path we
+            # could construct. Kept as insurance against a future change to
+            # that context (e.g. `_ARITHMETIC_PRECISION` widening `Emax` or a
+            # trap getting disabled) silently reopening this gap.
             raise AmountParseError(f"amount is not finite: {expression!r}")
         return result
 

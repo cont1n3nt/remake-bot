@@ -293,6 +293,30 @@ def _admin_interaction(user_id: int = 1) -> MagicMock:
 
 
 @pytest.mark.parametrize(
+    "command", [PricingCog.sync_prices, PricingCog.new_price], ids=["sync_prices", "new_price"]
+)
+async def test_a_non_admins_call_does_not_consume_the_cooldown_bucket(
+    command: app_commands.Command[PricingCog, ..., None],
+) -> None:
+    """`admin_only()`'s check must run before the cooldown check in the accumulated
+    `checks` list — decorator order in source has `@app_commands.checks.cooldown(...)`
+    above `@admin_only()`, but `app_commands.check` appends bottom-up, so the
+    textually-inner `admin_only()` check ends up evaluated first. If that ordering
+    were ever reversed, a non-admin's rejected attempt would still consume the
+    cooldown token for their user id — this proves it doesn't, by reusing the exact
+    same identity and moment for a follow-up admin call that must still succeed.
+    """
+    user_id = 4001 if command is PricingCog.sync_prices else 4002
+
+    non_admin = _admin_interaction(user_id)
+    non_admin.user.guild_permissions = MagicMock(administrator=False)
+    assert await command._check_can_run(non_admin) is False  # type: ignore[attr-defined]
+
+    admin = _admin_interaction(user_id)  # same identity, same `created_at` moment
+    assert await command._check_can_run(admin) is True  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
     ("command", "user_id"), [(PricingCog.sync_prices, 1001), (PricingCog.new_price, 1002)]
 )
 async def test_heavy_command_rejects_a_second_call_within_the_cooldown_window(

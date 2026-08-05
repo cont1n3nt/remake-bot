@@ -34,7 +34,15 @@ def test_command_on_cooldown_maps_to_a_retry_message_not_permission_denied() -> 
     error = app_commands.CommandOnCooldown(app_commands.checks.Cooldown(1, 15.0), 12.3)
     message = _resolve_message(error, "abc123")
     assert "Недостаточно прав" not in message
-    assert "12" in message
+    assert "13" in message
+
+
+def test_command_on_cooldown_rounds_up_a_sub_second_retry_after() -> None:
+    """A `retry_after` under 0.5s must not round down to "0 с." while still rate-limited."""
+    error = app_commands.CommandOnCooldown(app_commands.checks.Cooldown(1, 15.0), 0.2)
+    message = _resolve_message(error, "abc123")
+    assert "0 с" not in message
+    assert "1 с" in message
 
 
 def _wrap(original: Exception) -> app_commands.CommandInvokeError:

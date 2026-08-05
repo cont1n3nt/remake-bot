@@ -7,6 +7,7 @@ the trace id shown to the user.
 """
 
 import logging
+import math
 
 import discord
 from discord import app_commands
@@ -94,7 +95,9 @@ def _resolve_message(error: app_commands.AppCommandError, trace_id: str) -> str:
         # SEC-5: `CommandOnCooldown` is itself a `CheckFailure` subclass —
         # checked first so a cooldown hit says so, instead of the generic
         # (and here actively misleading) "insufficient permissions".
-        return f"Слишком часто. Попробуйте снова через {error.retry_after:.0f} с."
+        # ceil, not round: rounding a sub-second retry_after down to "0 с."
+        # would tell an admin to retry immediately while still rate-limited.
+        return f"Слишком часто. Попробуйте снова через {math.ceil(error.retry_after)} с."
     if isinstance(error, app_commands.CheckFailure):
         return _PERMISSION_DENIED_MESSAGE
 

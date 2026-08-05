@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
+import pytest
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.ticket_session import TicketSession
@@ -20,7 +21,9 @@ from stalbot.application.dto.transaction_request import TransactionRegistrationR
 from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
 from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType, DeliveryMethod, ItemCategory, TicketKind, TicketStatus
+from stalbot.domain.errors import AmountParseError
 from stalbot.presentation.cogs.tickets.cog import TicketsCog, _infer_author_id, _resolve_member
+from stalbot.presentation.cogs.tickets.modals import AmountModal
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 _SELL_ITEMS_CATEGORY = next(
@@ -398,6 +401,38 @@ async def test_confirm_button_opens_the_amount_modal_for_a_filled_ticket() -> No
     await cog._on_confirm_button(interaction)
 
     interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_amount_modal_error_reaches_the_admin_end_to_end() -> None:
+    """SEC-4 integration: `_on_amount_submitted` calls `evaluate_amount(...)` with no
+    try/except of its own — before this fix, a bad amount would raise past `on_submit`
+    into discord.py's default `Modal.on_error`, which just logs and returns, leaving
+    the admin staring at a hung "thinking..." indicator. Exercises the real
+    `AmountModal` the cog actually constructs (via `_on_confirm_button`), not a stub,
+    through `on_submit` raising and `on_error` handling it — the same two steps
+    discord.py's own dispatcher performs in production.
+    """
+    session = _session(game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    open_interaction = _interaction()
+    open_interaction.user.guild_permissions.administrator = True
+
+    await cog._on_confirm_button(open_interaction)
+    modal = open_interaction.response.send_modal.call_args.args[0]
+    assert isinstance(modal, AmountModal)
+
+    modal.amount._value = "not an amount"
+    submit_interaction = _interaction()
+    submit_interaction.response.is_done = MagicMock(return_value=True)  # already deferred
+
+    with pytest.raises(AmountParseError) as excinfo:
+        await modal.on_submit(submit_interaction)
+
+    await modal.on_error(submit_interaction, excinfo.value)
+
+    submit_interaction.followup.send.assert_awaited_once()
+    embed = submit_interaction.followup.send.call_args.kwargs["embed"]
+    assert "распознать сумму" in (embed.description or "")
 
 
 async def test_amount_submitted_rejects_a_ticket_confirmed_since_the_modal_was_opened() -> None:
