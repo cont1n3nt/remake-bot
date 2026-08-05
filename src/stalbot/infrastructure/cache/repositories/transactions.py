@@ -1,9 +1,19 @@
 """SQLite-backed cache of the `Тикеты` block (PLAN.md §8.1).
 
 Transactions only ever grow (rows are never deleted or renumbered), so
-unlike `items`/`users` this repository has no `replace_all` — sync is
-always incremental, `upsert_many` from the last known row onward (PLAN.md
-§8.2).
+unlike `items`/`users` this repository has no `replace_all` — the schema is
+append-only and `upsert_many` is idempotent regardless of how much of the
+sheet a given sync cycle re-reads.
+
+INFRA1-8: `CacheSync.sync_users_and_transactions` currently re-reads the
+*entire* `Тикеты` range every cycle and feeds all of it through
+`upsert_many`, rather than starting from `last_row()` as PLAN.md §8.2
+describes ("инкрементально, от последней известной строки"). That is a
+missed read-quota optimization, not a correctness bug — `upsert_many`'s
+`ON CONFLICT` makes re-upserting already-cached rows a no-op — so it is
+left as-is for now rather than risking new edge cases (e.g. around the
+formula-extent check, which also derives from this same read) for a
+low-severity perf gap.
 
 The `transactions` table itself has no display-cased nick column (§8.1's
 schema does not give it one — only `users.nick_display` carries it, sourced

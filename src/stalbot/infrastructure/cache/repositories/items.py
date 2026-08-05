@@ -55,6 +55,14 @@ class ItemsCacheRepository:
     async def get_by_ids(self, item_ids: Sequence[int]) -> dict[int, Item]:
         """Look up several items by id in one query (APP-6: avoids an N+1 `get_by_id` loop).
 
+        INFRA1-12: builds one `?` placeholder per id, and SQLite caps the
+        number of parameters in a single statement
+        (`SQLITE_MAX_VARIABLE_NUMBER`: 999 on older builds, 32766 on
+        Python's bundled SQLite). No caller today passes anywhere near that
+        many ids (a channel's boost-order draft, one price import) — this is
+        not chunked, so a future caller must keep its input below that limit
+        itself.
+
         Args:
             item_ids: Catalog ids to look up; duplicates are fine.
 

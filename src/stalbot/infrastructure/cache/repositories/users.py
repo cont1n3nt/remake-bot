@@ -44,6 +44,13 @@ class UsersCacheRepository:
     ) -> dict[NormalizedNick, UserProfile]:
         """Look up several profiles by nick in one query (APP-6: avoids an N+1 `get_by_nick` loop).
 
+        INFRA1-12: builds one `?` placeholder per nick, and SQLite caps the
+        number of parameters in a single statement
+        (`SQLITE_MAX_VARIABLE_NUMBER`). No caller today passes anywhere near
+        that many nicks (one referral list, one period's traders) — this is
+        not chunked, so a future caller must keep its input below that limit
+        itself.
+
         Args:
             nicks: Normalized nicks to look up; duplicates are fine.
 
@@ -67,6 +74,9 @@ class UsersCacheRepository:
 
     async def get_nick_displays(self, nicks: Sequence[NormalizedNick]) -> dict[NormalizedNick, str]:
         """Look up several original-case nicks in one query (APP-6: avoids an N+1 loop).
+
+        INFRA1-12: same unbounded `IN (...)` caveat as `get_by_nicks` — see
+        its docstring.
 
         Args:
             nicks: Normalized nicks to look up; duplicates are fine.
