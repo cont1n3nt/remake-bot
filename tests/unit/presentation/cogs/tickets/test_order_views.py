@@ -131,7 +131,7 @@ def _multiselect(
         selected,
         author_id=1,
         embeds=EmbedFactory(),
-        on_change=on_change or AsyncMock(),
+        on_change=on_change or AsyncMock(return_value=frozenset()),
     )
 
 
@@ -159,7 +159,7 @@ def test_multiselect_shows_the_quantity_for_selected_items() -> None:
         frozenset({1}),
         author_id=1,
         embeds=EmbedFactory(),
-        on_change=AsyncMock(),
+        on_change=AsyncMock(return_value=frozenset()),
         quantities={1: 3},
     )
 
@@ -190,7 +190,7 @@ async def test_multiselect_next_page_preserves_selection() -> None:
 
 async def test_multiselect_change_reconciles_the_current_page_and_calls_on_change() -> None:
     items = [_item(1, "Топот"), _item(2, "Ускорение")]
-    on_change = AsyncMock()
+    on_change = AsyncMock(return_value=frozenset())
     view = _multiselect(items, frozenset(), on_change=on_change)
     view._select._values = ["1"]
     interaction = _interaction()
@@ -203,6 +203,58 @@ async def test_multiselect_change_reconciles_the_current_page_and_calls_on_chang
     assert {item.id for item in page_items} == {1, 2}
     assert chosen_ids == frozenset({1})
     interaction.response.edit_message.assert_awaited_once()
+
+
+async def test_multiselect_change_acks_before_calling_on_change() -> None:
+    """TICK-9: `_on_change` can be slow (it posts/edits the public order-editor message) —
+    the interaction must be acked first, or it can expire before the ack ever goes out."""
+    order: list[str] = []
+    interaction = _interaction()
+
+    async def slow_on_change(
+        _interaction: MagicMock, _page_items: object, _chosen_ids: object
+    ) -> frozenset[int]:
+        order.append("on_change")
+        return frozenset()
+
+    async def tracking_edit_message(**_kwargs: object) -> None:
+        order.append("ack")
+
+    interaction.response.edit_message = tracking_edit_message
+    view = _multiselect([_item(1, "Топот")], frozenset(), on_change=slow_on_change)
+    view._select._values = ["1"]
+
+    await view._handle_change(interaction)
+
+    assert order == ["ack", "on_change"]
+
+
+async def test_multiselect_change_rolls_back_and_warns_about_rejected_items() -> None:
+    """TICK-5: an item `_on_change` reports as rejected must not stay checked locally."""
+    items = [_item(1, "Топот"), _item(2, "Ускорение")]
+    on_change = AsyncMock(return_value=frozenset({2}))
+    view = _multiselect(items, frozenset(), on_change=on_change)
+    view._select._values = ["1", "2"]
+    interaction = _interaction()
+
+    await view._handle_change(interaction)
+
+    options = {opt.value: opt.default for opt in view._select.options}
+    assert options == {"1": True, "2": False}
+    interaction.edit_original_response.assert_awaited_once()
+    embed = interaction.edit_original_response.call_args.kwargs["embed"]
+    assert "Не добавлено: 1" in (embed.description or "")
+
+
+async def test_multiselect_change_skips_the_follow_up_edit_when_nothing_is_rejected() -> None:
+    on_change = AsyncMock(return_value=frozenset())
+    view = _multiselect([_item(1, "Топот")], frozenset(), on_change=on_change)
+    view._select._values = ["1"]
+    interaction = _interaction()
+
+    await view._handle_change(interaction)
+
+    interaction.edit_original_response.assert_not_called()
 
 
 async def test_multiselect_change_updates_local_selection_state() -> None:
