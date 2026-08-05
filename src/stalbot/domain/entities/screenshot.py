@@ -7,6 +7,14 @@ one, so plugging in a real engine at M13 touches no calling code.
 """
 
 from dataclasses import dataclass
+from typing import Final
+
+#: INFRA2-8: single source of truth for the "OCR not implemented yet"
+#: status — was previously duplicated as two independently-defined string
+#: constants (`infrastructure/ocr/null.py`, `application/services/tickets.py`),
+#: a repeated literal that signaled a missing shared abstraction rather than
+#: two things that happened to coincide.
+OCR_STATUS_DISABLED: Final = "disabled"
 
 
 @dataclass(frozen=True, slots=True)

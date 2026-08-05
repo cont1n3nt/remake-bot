@@ -4,9 +4,7 @@ Always disabled; real recognition ships in M13. Tickets call this
 unconditionally so the call site never needs an `if OCR_ENABLED` branch.
 """
 
-from stalbot.domain.entities.screenshot import OcrResult, ScreenshotImage
-
-_DISABLED_STATUS = "disabled"
+from stalbot.domain.entities.screenshot import OCR_STATUS_DISABLED, OcrResult, ScreenshotImage
 
 
 class NullOcrGateway:
@@ -23,4 +21,4 @@ class NullOcrGateway:
         Args:
             image: Ignored.
         """
-        return OcrResult(status=_DISABLED_STATUS)
+        return OcrResult(status=OCR_STATUS_DISABLED)
