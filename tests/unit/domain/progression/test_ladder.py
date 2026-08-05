@@ -1,8 +1,20 @@
 """Tests for `stalbot.domain.progression.ladder.Ladder`, via the real ladders."""
 
-from stalbot.domain.progression.ladder import Tier
+from dataclasses import dataclass
+
+import pytest
+
+from stalbot.domain.progression.ladder import Ladder, Tier
 from stalbot.domain.progression.ranks import RankLadder
 from stalbot.domain.progression.referrals import ReferralLadder
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeTier:
+    key: str
+    label: str
+    role_id: int
+    perks: tuple[str, ...] = ()
 
 
 def _key(tier: Tier | None) -> str:
@@ -101,6 +113,34 @@ def test_threshold_of_returns_the_tiers_unlock_value() -> None:
     elite = ladder.by_label("💎 Elite")
     assert elite is not None
     assert ladder.threshold_of(elite) == 3500
+
+
+# --- DOM-6/DOM-7: `pct` must stay within [0, 99] while a tier is still ahead ---
+
+
+def test_progress_clamps_pct_at_zero_for_a_negative_value() -> None:
+    """Below the first tier, `base` is 0 — a negative `value` (shouldn't happen
+    upstream, but nothing here guarantees it) must not produce a negative pct."""
+    progress = RankLadder().progress(-10)
+    assert progress.pct == 0
+
+
+def test_progress_never_reports_100_percent_while_a_tier_is_still_ahead() -> None:
+    """6999/7000 XP to "standard"->"legend" rounds to 100% via plain `round()`,
+    even though `next()` still reports "legend" as not yet reached (DOM-7)."""
+    ladder = RankLadder()
+    progress = ladder.progress(6999)
+    assert _key(ladder.next(6999)) == "legend"
+    assert progress.pct == 99
+
+
+# --- DOM-9: reject a ladder whose thresholds aren't strictly increasing ---
+
+
+def test_construction_rejects_duplicate_thresholds() -> None:
+    tiers = [_FakeTier("a", "A", 1), _FakeTier("b", "B", 2)]
+    with pytest.raises(ValueError, match="strictly increasing"):
+        Ladder(tiers, threshold_of=lambda _t: 100)
 
 
 def test_referral_ladder_current_and_progress() -> None:
