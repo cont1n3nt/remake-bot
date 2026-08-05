@@ -82,10 +82,10 @@ def _resolve_cause_message(cause: BaseException | None, trace_id: str) -> str:
         # rooted in DomainError) may carry internal details — sheet/column
         # names, header diffs — that must never reach Discord. Log it under
         # the trace id shown to the user instead of leaking `str(cause)`.
-        logger.warning("infrastructure error (trace=%s): %s", trace_id, cause, exc_info=cause)
+        logger.warning("infrastructure error (trace %s): %s", trace_id, cause, exc_info=cause)
         return f"Внутренняя ошибка, обратитесь к администратору. Trace: `{trace_id}`"
 
-    logger.error("unhandled error (trace=%s)", trace_id, exc_info=cause)
+    logger.error("unhandled error (trace %s)", trace_id, exc_info=cause)
     return f"Внутренняя ошибка, обратитесь к администратору. Trace: `{trace_id}`"
 
 

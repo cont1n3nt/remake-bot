@@ -321,8 +321,8 @@ class StalbotBot(commands.Bot):
             return
         status = await self.health_service.snapshot()
         logger.info(
-            "metrics: sheets reads=%d writes=%d, cache hit-rate=%s age=%ss, "
-            "audit queue=%d, ocr samples=%d confirmed=%d",
+            "metrics: sheets reads %d, writes %d, cache hit-rate %s, cache age %ss, "
+            "audit queue %d, ocr samples %d, confirmed %d",
             status.sheets_read_requests,
             status.sheets_write_requests,
             f"{status.cache_hit_rate:.0%}" if status.cache_hit_rate is not None else "n/a",
@@ -350,7 +350,7 @@ class StalbotBot(commands.Bot):
     async def on_ready(self) -> None:
         """Log a successful connection, start the audit worker, flush startup warnings."""
         user = self.user
-        logger.info("logged in as %s (id=%s)", user, user.id if user else None)
+        logger.info("logged in as %s (id %s)", user, user.id if user else None)
         if self.audit_service is not None:
             self.audit_service.start()
         if self._startup_warnings:

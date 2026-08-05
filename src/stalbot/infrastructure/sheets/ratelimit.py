@@ -247,7 +247,7 @@ async def retry_with_backoff[T](
         delay = min(_MAX_BACKOFF_SECONDS, _BASE_BACKOFF_SECONDS * 2 ** (attempt - 1))
         jitter = random.uniform(0, delay / 2)  # noqa: S311 - retry jitter, not security-sensitive
         logger.warning(
-            "sheets API error (attempt %d/%d, code=%s), retrying in %.1fs",
+            "sheets API error (attempt %d/%d, code %s), retrying in %.1fs",
             attempt,
             max_attempts,
             error_code,
