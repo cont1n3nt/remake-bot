@@ -194,7 +194,7 @@ class TicketsCog(commands.Cog):
 
         embed = self._embeds.info(
             "📮 Выберите способ передачи",
-            f"Ник: {interaction.user.display_name}\n"
+            "Ник: Scaryyyyy\n"
             "Отправлять предметы / деньги на этот ник при выборе «Почта».",
         )
         view = DeliveryMethodView(self._on_delivery_selected)
@@ -603,6 +603,18 @@ class TicketsCog(commands.Cog):
 
         session = await self._tickets.get(interaction.channel_id or 0)
         assert session is not None and session.game_nick is not None  # noqa: S101 - checked in _on_confirm_button
+        if session.status is TicketStatus.CONFIRMED:
+            # Re-checked here, not just in `_confirm_precheck` before the modal was
+            # shown: two admins (or one double-clicking) can both pass that earlier
+            # check before either finishes filling in the modal. This catches the
+            # *staggered* case, where one submission's `record_confirmed()` below
+            # has already landed by the time this one reads the session. A truly
+            # simultaneous double-submit (both read the session before either has
+            # confirmed) slips past this check too — that's caught below instead,
+            # via `result.replayed`.
+            embed = self._embeds.warning("⚠️ Уже подтверждено", "Эта заявка уже была подтверждена.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
 
         amount = evaluate_amount(amount_text)
         request = AddTransactionRequest(
@@ -615,6 +627,22 @@ class TicketsCog(commands.Cog):
             force_rebind=False,
         )
         result = await self._transactions.register(request)
+        if result.replayed:
+            # `TransactionService`'s lock (CLUSTER-1) guarantees only one concurrent
+            # submission actually wrote — this one lost the race. The winner already
+            # ran every post-confirm side effect below (screenshots, progression
+            # sync, the public announcement); running them again here would just
+            # duplicate them for the same deal. Still mark the session confirmed
+            # (idempotent) so it doesn't get stuck if this happened to be the call
+            # that reached here first.
+            await self._tickets.record_confirmed(session.channel_id)
+            embed = self._embeds.success(
+                "✅ Сделка уже зафиксирована",
+                f"Сумма: {format_amount(result.record.amount)} — строка {result.record.row}.",
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
         await self._tickets.record_confirmed(session.channel_id)
         await self._screenshots.record_confirmed_amount(session.channel_id, amount)
         if session.kind is TicketKind.ORDER_BOOSTS:

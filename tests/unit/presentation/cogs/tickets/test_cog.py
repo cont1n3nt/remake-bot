@@ -375,6 +375,68 @@ async def test_confirm_button_opens_the_amount_modal_for_a_filled_ticket() -> No
     interaction.response.send_modal.assert_awaited_once()
 
 
+async def test_amount_submitted_rejects_a_ticket_confirmed_since_the_modal_was_opened() -> None:
+    """TICK-1: a double confirm (double-click, two admins) must not double-register.
+
+    `_confirm_precheck` only ran when the modal was opened; by the time the
+    modal is submitted, a concurrent submission may have already confirmed
+    the ticket. Re-checking here avoids re-running every post-confirm side
+    effect for a deal that is already recorded.
+    """
+    session = _session(game_nick="Scaryyyyy", status=TicketStatus.CONFIRMED)
+    cog, tickets, screenshots, _boost_orders, transactions, progression = _cog(
+        tickets=_fake_tickets(get_return=session)
+    )
+    interaction = _interaction()
+
+    await cog._on_amount_submitted(interaction, "100 000")
+
+    transactions.register.assert_not_called()
+    tickets.record_confirmed.assert_not_called()
+    screenshots.record_confirmed_amount.assert_not_called()
+    progression.sync.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "уже была подтверждена" in (embed.description or "")
+
+
+async def test_amount_submitted_skips_duplicate_side_effects_on_a_replayed_registration() -> None:
+    """TICK-1/TICK-11: a truly simultaneous double-submit both pass the pre-register status
+    check (neither has confirmed yet), but only one of them actually writes — the other gets
+    `TransactionService.register()`'s idempotent replay back and must not re-run announcements.
+    """
+    session = _session(game_nick="Scaryyyyy")
+    replayed_record = TransactionRecord(
+        row=3,
+        at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        nick="scaryyyyy",  # type: ignore[arg-type]
+        nick_display="Scaryyyyy",
+        deal_type=DealType.SALE,
+        amount=Decimal(100000),
+        coins=1,
+        xp=10,
+        referrer=None,
+    )
+    replayed_result = TransactionRegistrationResult(
+        record=replayed_record, discord_bound=False, formula_pending=False, replayed=True
+    )
+    cog, tickets, screenshots, boost_orders, _transactions, progression = _cog(
+        tickets=_fake_tickets(get_return=session),
+        transactions=_fake_transactions(register_result=replayed_result),
+    )
+    channel = _text_channel()
+    interaction = _interaction(channel=channel)
+
+    await cog._on_amount_submitted(interaction, "100 000")
+
+    tickets.record_confirmed.assert_awaited_once_with(session.channel_id)
+    screenshots.record_confirmed_amount.assert_not_called()
+    boost_orders.clear.assert_not_called()
+    progression.sync.assert_not_called()
+    channel.send.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "уже зафиксирована" in (embed.title or "")
+
+
 async def test_amount_submitted_registers_the_deal_and_confirms() -> None:
     session = _session(game_nick="Scaryyyyy", referrer_nick="OtherNick")
     cog, tickets, screenshots, _boost_orders, transactions, progression = _cog(
