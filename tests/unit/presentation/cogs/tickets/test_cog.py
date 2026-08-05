@@ -78,7 +78,7 @@ def _fake_boost_orders() -> MagicMock:
     boost_orders.list_available_boosts = AsyncMock(return_value=[])
     boost_orders.list_lines = AsyncMock(return_value=[])
     boost_orders.list_lines_with_items = AsyncMock(return_value=[])
-    boost_orders.apply_page_selection = AsyncMock()
+    boost_orders.apply_page_selection = AsyncMock(return_value=frozenset())
     boost_orders.set_quantity = AsyncMock()
     boost_orders.adjust_quantity = AsyncMock(return_value=1)
     boost_orders.remove_line = AsyncMock()
@@ -246,6 +246,17 @@ async def test_on_guild_channel_create_posts_the_panel_as_soon_as_tool_speaks() 
     tickets.open_ticket.assert_awaited_once()
 
 
+async def test_on_guild_channel_create_survives_the_channel_disappearing() -> None:
+    """TICK-6: the channel can be deleted before the panel is posted — must not raise."""
+    cog, tickets, *_ = _cog(tool_wait_timeout=0.02)
+    channel = _text_channel()
+    channel.send = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404, reason=""), "gone"))
+
+    await cog.on_guild_channel_create(channel)  # must not raise
+
+    tickets.record_panel.assert_not_called()
+
+
 async def test_on_message_ignores_bot_authors_that_are_not_ticket_tool() -> None:
     cog, tickets, *_ = _cog()
 
@@ -265,25 +276,17 @@ async def test_on_message_ignores_messages_without_attachments_in_a_tracked_chan
 # -- Form flow ------------------------------------------------------------
 
 
-async def test_on_start_sets_the_author_when_still_unknown() -> None:
+async def test_on_start_does_not_touch_the_author() -> None:
+    """TICK-2: the first click of the shared panel button no longer decides authorship."""
     cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session(author_id=0)))
     interaction = _interaction(user_id=777)
 
     await cog._on_start(interaction, TicketKind.SELL_ITEMS)
 
-    tickets.set_author.assert_awaited_once_with(interaction.channel_id, 777)
+    tickets.set_author.assert_not_called()
     interaction.response.send_message.assert_awaited_once()
     kwargs = interaction.response.send_message.call_args.kwargs
     assert kwargs["ephemeral"] is True
-
-
-async def test_on_start_does_not_overwrite_a_known_author() -> None:
-    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session(author_id=555)))
-    interaction = _interaction(user_id=777)
-
-    await cog._on_start(interaction, TicketKind.SELL_ITEMS)
-
-    tickets.set_author.assert_not_called()
 
 
 async def test_on_delivery_selected_records_and_opens_the_form() -> None:
@@ -324,6 +327,28 @@ async def test_on_form_submitted_resolves_a_mentioned_referrer() -> None:
 
     _args, kwargs = tickets.record_form.call_args
     assert kwargs["referrer_discord_id"] == 888
+
+
+async def test_on_form_submitted_sets_the_author_to_whoever_submitted_it() -> None:
+    """TICK-2: authorship is decided at form submission, not at the button click."""
+    cog, tickets, *_ = _cog()
+    interaction = _interaction(user_id=777)
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", None, None)
+
+    tickets.set_author.assert_awaited_once_with(interaction.channel_id, 777)
+
+
+async def test_on_form_submitted_drops_a_case_insensitive_self_referral() -> None:
+    """TICK-8: a referral matching the submitter's own (normalized) nick is discarded."""
+    cog, tickets, *_ = _cog()
+    interaction = _interaction()
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", "  scaryyyyy ", "<@888>")
+
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["referrer_nick"] is None
+    assert kwargs["referrer_discord_id"] is None
 
 
 # -- Confirmation -----------------------------------------------------------
@@ -554,7 +579,34 @@ async def test_order_form_submitted_reopens_the_modal_on_a_bad_deadline() -> Non
     await cog._on_order_form_submitted(interaction, "Scaryyyyy", "not a date", "Ref", None)
 
     tickets.record_form.assert_not_called()
+    tickets.set_author.assert_not_called()
     interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_order_form_submitted_sets_the_author_to_whoever_submitted_it() -> None:
+    """TICK-2, same as `_on_form_submitted`."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=777)
+
+    await cog._on_order_form_submitted(interaction, "Scaryyyyy", "через 3 часа", None, None)
+
+    tickets.set_author.assert_awaited_once_with(interaction.channel_id, 777)
+
+
+async def test_order_form_submitted_drops_a_case_insensitive_self_referral() -> None:
+    """TICK-8, same as `_on_form_submitted`."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_form_submitted(
+        interaction, "Scaryyyyy", "через 3 часа", "  scaryyyyy ", "<@888>"
+    )
+
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["referrer_nick"] is None
+    assert kwargs["referrer_discord_id"] is None
 
 
 async def test_order_line_selected_stores_the_active_item_and_edits_in_place() -> None:
@@ -578,6 +630,21 @@ async def test_order_line_selected_rejects_a_non_participant() -> None:
     tickets.set_active_order_item.assert_not_called()
     embed = interaction.response.send_message.call_args.kwargs["embed"]
     assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_order_line_selected_rejects_an_already_confirmed_ticket() -> None:
+    """TICK-3: every editor mutator must reject once the ticket is confirmed, not just confirm."""
+    session = _session(
+        kind=TicketKind.ORDER_BOOSTS, author_id=42, status=TicketStatus.CONFIRMED
+    )
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_line_selected(interaction, 42)
+
+    tickets.set_active_order_item.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "уже была подтверждена" in (embed.description or "")
 
 
 async def test_adjust_quantity_warns_when_nothing_is_selected() -> None:
@@ -633,6 +700,35 @@ async def test_qty_submitted_rejects_an_out_of_range_amount() -> None:
     await cog._on_order_qty_submitted(interaction, "10000")
 
     boost_orders.set_quantity.assert_not_called()
+
+
+async def test_qty_submitted_rejects_an_already_confirmed_ticket() -> None:
+    """TICK-3: the modal-submit path re-fetches its own session, so it needs its own check."""
+    session = _session(
+        kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7,
+        status=TicketStatus.CONFIRMED,
+    )
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_qty_submitted(interaction, "5")
+
+    boost_orders.set_quantity.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "уже была подтверждена" in (embed.description or "")
+
+
+async def test_qty_submitted_rejects_a_fractional_amount() -> None:
+    """TICK-10: "9999.9" must be rejected, not silently truncated to 9999."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7)
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_qty_submitted(interaction, "9999.9")
+
+    boost_orders.set_quantity.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "целым числом" in (embed.description or "")
 
 
 async def test_qty_submitted_rejects_a_non_participant() -> None:

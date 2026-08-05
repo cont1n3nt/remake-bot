@@ -138,18 +138,31 @@ class TicketsCog(commands.Cog):
         if kind not in _HANDLED_KINDS:
             return
 
-        await self._tickets.open_ticket(channel.id, kind, _infer_author_id(channel))
-
+        # TICK-7: registered before the `await` below (not after), narrowing
+        # the window where Ticket Tool's first message could be dispatched
+        # and processed by `on_message` before this channel is tracked here
+        # — a miss just means a needless wait for the full timeout, not a
+        # crash, but there is no reason to leave any of the gap open.
         event = asyncio.Event()
         self._tool_wait[channel.id] = event
         try:
-            await asyncio.wait_for(event.wait(), timeout=self._tool_wait_timeout)
-        except TimeoutError:
-            pass
+            await self._tickets.open_ticket(channel.id, kind, _infer_author_id(channel))
+            try:
+                await asyncio.wait_for(event.wait(), timeout=self._tool_wait_timeout)
+            except TimeoutError:
+                pass
         finally:
             self._tool_wait.pop(channel.id, None)
 
-        await self._post_panel(channel, kind)
+        try:
+            await self._post_panel(channel, kind)
+        except discord.HTTPException:
+            # TICK-6: the channel can be gone (deleted by Ticket Tool
+            # automation, or an admin) by the time the wait above finishes —
+            # nothing left to post to, and nothing more this listener can do.
+            logger.warning(
+                "could not post the ticket panel: channel %s unavailable", channel.id, exc_info=True
+            )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -179,11 +192,6 @@ class TicketsCog(commands.Cog):
     # -- Form flow (PLAN.md §11.3, §11.4) ------------------------------------
 
     async def _on_start(self, interaction: discord.Interaction, kind: TicketKind) -> None:
-        channel_id = interaction.channel_id or 0
-        session = await self._tickets.get(channel_id)
-        if session is not None and session.author_id == 0:
-            await self._tickets.set_author(channel_id, interaction.user.id)
-
         if kind is TicketKind.ORDER_BOOSTS:
             # No delivery method for a boost order — straight to the form
             # modal, same as any other button-triggered modal (PLAN.md §11.4).
@@ -213,13 +221,24 @@ class TicketsCog(commands.Cog):
         referrer_nick: str | None,
         referrer_discord_text: str | None,
     ) -> None:
+        referrer_nick, referrer_discord_text = _drop_self_referral(
+            nick, referrer_nick, referrer_discord_text
+        )
         referrer_member = (
             _resolve_member(interaction.guild, referrer_discord_text)
             if referrer_discord_text
             else None
         )
+        channel_id = interaction.channel_id or 0
+        # TICK-2: whoever actually fills in and submits the form is the
+        # ticket's author — a far stronger signal than whoever first clicked
+        # the shared persistent "Заполнить заявку" button (which could be
+        # staff with category-role access, not the real opener), and unlike
+        # that first click, this can't lock in a wrong guess: the form can
+        # only be submitted once per session before status leaves `FILLED`.
+        await self._tickets.set_author(channel_id, interaction.user.id)
         session = await self._tickets.record_form(
-            interaction.channel_id or 0,
+            channel_id,
             game_nick=nick,
             referrer_nick=referrer_nick,
             referrer_discord_id=referrer_member.id if referrer_member else None,
@@ -260,13 +279,18 @@ class TicketsCog(commands.Cog):
             )
             return
 
+        referrer_nick, referrer_discord_text = _drop_self_referral(
+            nick, referrer_nick, referrer_discord_text
+        )
         referrer_member = (
             _resolve_member(interaction.guild, referrer_discord_text)
             if referrer_discord_text
             else None
         )
+        channel_id = interaction.channel_id or 0
+        await self._tickets.set_author(channel_id, interaction.user.id)  # TICK-2, see above
         session = await self._tickets.record_form(
-            interaction.channel_id or 0,
+            channel_id,
             game_nick=nick,
             referrer_nick=referrer_nick,
             referrer_discord_id=referrer_member.id if referrer_member else None,
@@ -338,14 +362,26 @@ class TicketsCog(commands.Cog):
             embed = self._embeds.error("Ошибка", "Недостаточно прав для этого действия.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
+        if session.status is TicketStatus.CONFIRMED:  # TICK-3, see `_require_order_participant`
+            embed = self._embeds.warning("⚠️ Уже подтверждено", "Эта заявка уже была подтверждена.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
         if session.active_order_item_id is None:
             await interaction.response.defer(ephemeral=True)
             return
 
         try:
-            quantity = int(parse_amount(qty_text))
+            parsed_quantity = parse_amount(qty_text)
         except AmountParseError:
             embed = self._embeds.error("Ошибка", "Не удалось распознать количество.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        quantity = int(parsed_quantity)
+        if quantity != parsed_quantity:
+            # TICK-10: reject a fractional quantity instead of silently
+            # truncating it — "9999.9" becoming "9999" with no feedback
+            # would look like the modal just dropped a digit.
+            embed = self._embeds.error("Ошибка", "Количество должно быть целым числом.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         if not (MIN_QUANTITY <= quantity <= MAX_QUANTITY):
@@ -374,12 +410,24 @@ class TicketsCog(commands.Cog):
     async def _require_order_participant(
         self, interaction: discord.Interaction
     ) -> TicketSession | None:
-        """Fetch the session, rejecting anyone but its author or an admin (PLAN.md §11.6)."""
+        """Fetch the session, rejecting anyone but its author or an admin (PLAN.md §11.6).
+
+        Also rejects once the ticket is `CONFIRMED` (TICK-3): every other
+        editor handler routes through this (or `_active_order_session`,
+        which wraps it) except the confirm button itself, which already had
+        this check (`_confirm_precheck`) — without it here too, the draft
+        stayed mutable forever after confirmation, resurrecting lines
+        `TransactionService`'s post-confirm side effects already cleared.
+        """
         session = await self._tickets.get(interaction.channel_id or 0)
         if session is None:
             return None
         if not (interaction.user.id == session.author_id or _is_admin(interaction.user)):
             embed = self._embeds.error("Ошибка", "Недостаточно прав для этого действия.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return None
+        if session.status is TicketStatus.CONFIRMED:
+            embed = self._embeds.warning("⚠️ Уже подтверждено", "Эта заявка уже была подтверждена.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return None
         return session
@@ -423,14 +471,15 @@ class TicketsCog(commands.Cog):
         interaction: discord.Interaction,
         page_items: Sequence[Item],
         chosen_ids: frozenset[int],
-    ) -> None:
+    ) -> frozenset[int]:
         channel_id = interaction.channel_id or 0
-        await self._boost_orders.apply_page_selection(channel_id, page_items, chosen_ids)
+        rejected = await self._boost_orders.apply_page_selection(channel_id, page_items, chosen_ids)
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
             session = await self._tickets.get(channel_id)
             if session is not None:
                 await self._post_or_update_order_editor(channel, session)
+        return rejected
 
     async def _on_order_confirm(self, interaction: discord.Interaction) -> None:
         session = await self._confirm_precheck(interaction)
@@ -679,7 +728,8 @@ def _infer_author_id(channel: discord.TextChannel) -> int:
     `on_guild_channel_create` carries no explicit "who opened this" field;
     Ticket Tool grants the opener an explicit member-level overwrite, which
     this picks out. `0` (never a valid Discord id) means "unknown yet" —
-    `_on_start` fills it in from the first real interaction instead.
+    this is only ever a placeholder until the form is actually submitted
+    (TICK-2), never trusted for access control before then.
     """
     for target in channel.overwrites:
         if isinstance(target, discord.Member) and not target.bot:
@@ -700,6 +750,29 @@ def _resolve_member(guild: discord.Guild | None, text: str) -> discord.Member | 
         if member.name.lower() == lowered or member.display_name.lower() == lowered:
             return member
     return None
+
+
+def _drop_self_referral(
+    nick: str, referrer_nick: str | None, referrer_discord_text: str | None
+) -> tuple[str | None, str | None]:
+    """Discard a referral where the typed referrer nick is the submitter's own (TICK-8).
+
+    Same rule `/set_referral` already enforces (`presentation/cogs/manual.py`)
+    for admin-entered referrals — applied here too so a player can't credit
+    themselves through the ticket form instead. Silently dropped (treated as
+    if the field was left blank) rather than rejecting the whole submission,
+    matching how an unresolved `referrer_discord_text` is already handled.
+
+    Only compares nicks: a blank `referrer_nick` with a self-mentioning
+    `referrer_discord_text` slips through untouched. Inert today —
+    `TransactionService` only credits off `referrer_nick`, and the card only
+    shows `referrer_discord_id` alongside a truthy `referrer_nick` — but
+    revisit this if `referrer_discord_id` ever starts being trusted on its
+    own.
+    """
+    if referrer_nick is not None and normalize_nick(referrer_nick) == normalize_nick(nick):
+        return None, None
+    return referrer_nick, referrer_discord_text
 
 
 def _first_image_attachment(
