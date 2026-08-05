@@ -184,30 +184,79 @@ Review passed: да (`agent-skills:code-reviewer`, five-axis, APPROVE)
 ## Этап 3 — Infrastructure: Sheets + Cache
 
 Зависит от: этапа 0 (INFRA1-1/INFRA1-2 там же) и этапа 2 (используется `application`-слоем).
-Статус: **not started**
+Статус: **done**
 
 - [x] INFRA1-1 — исправлено в Этапе 0
 - [x] INFRA1-2 — исправлено в Этапе 0
-- [ ] INFRA1-3 — `retry_with_backoff` не ловит сетевые сбои вне `APIError`
-- [ ] INFRA1-4 — `_to_int` тихо превращает мусорные `coins`/`xp` в `0`
-- [ ] INFRA1-5 — наивная `bool()`-коэрсия `purchase`/`sale`
-- [ ] INFRA1-6 — write-lock не покрывает полный read-modify-write (делит фикс с CLUSTER-1)
-- [ ] INFRA1-7 — `_AcquireAll` не освобождает локи при отмене (latent)
-- [ ] INFRA1-8 — docstring vs реализация: синк не инкрементальный
-- [ ] INFRA1-9 — `SCHEMA_VERSION` не делает реальный `ALTER TABLE` (уже осознанно принято, low)
-- [ ] INFRA1-10 — лок по листу целиком, не по блоку (informational)
-- [ ] INFRA1-11 — (найдено при фиксе CLUSTER-1 в Этапе 0) нет таймаута на Sheets-вызовы
-      внутри залоченного `TransactionService.register()` — зависший вызов теперь блокирует
-      весь процесс, не только одного вызывающего. Делит корень с INFRA1-3.
-- [ ] INFRA1-12 — (найдено при ревью Этапа 2) батч-методы `get_by_ids`/`get_by_nicks`/
-      `get_nick_displays` (добавлены для APP-6) строят неограниченный `IN (...)` —
-      недостижимо сегодняшними вызывающими, но не защищено/не задокументировано против
-      предела SQLite на число параметров запроса. Low/FYI.
+- [x] INFRA1-3 — `retry_with_backoff` не ловит сетевые сбои вне `APIError`
+- [x] INFRA1-4 — `_to_int` тихо превращает мусорные `coins`/`xp` в `0`
+- [x] INFRA1-5 — наивная `bool()`-коэрсия `purchase`/`sale`
+- [x] INFRA1-6 — write-lock не покрывает полный read-modify-write (делит фикс с CLUSTER-1)
+- [x] INFRA1-7 — `_AcquireAll` не освобождает локи при отмене (latent)
+- [x] INFRA1-8 — docstring vs реализация: синк не инкрементальный — решение принято:
+      не баг (см. заметки), докстринг поправлен
+- [x] INFRA1-9 — `SCHEMA_VERSION` не делает реальный `ALTER TABLE` — не баг, уже осознанно
+      принято (изменений не вносилось)
+- [x] INFRA1-10 — лок по листу целиком, не по блоку — informational, не баг, оставлено как есть
+- [x] INFRA1-11 — нет таймаута на Sheets-вызовы внутри залоченного пути. Делит корень с INFRA1-3.
+- [x] INFRA1-12 — неограниченный `IN (...)` в батч-методах — задокументировано в докстрингах
+      (не чанковано — недостижимо сегодняшними вызывающими, low/FYI)
 
 Заметки после исправления:
-_(заполнить)_
+- **INFRA1-3/INFRA1-11** (`infrastructure/sheets/ratelimit.py`): `retry_with_backoff` теперь
+  ловит `requests.exceptions.RequestException` (сетевые сбои ниже `gspread`'s `APIError` —
+  DNS, reset, TLS) в дополнение к `APIError`, но только транзиентное подмножество
+  (`ConnectionError`/`Timeout`/`ChunkedEncodingError` — `_RETRYABLE_TRANSPORT_ERRORS`);
+  не-транзиентные (`MissingSchema` и т.п. — баг конфигурации, не сети) падают сразу, без
+  ретраев. Каждая попытка обёрнута в `asyncio.wait_for(..., timeout=REQUEST_TIMEOUT_SECONDS)`
+  (20с) — закрывает INFRA1-11 (зависший вызов больше не блокирует лок навечно). Добавлен
+  новый `ReentrantAsyncLock` (task-identity + depth counter) — нужен для INFRA1-6.
+- **INFRA1-6** (`infrastructure/sheets/client.py::SheetsClient.locked()`,
+  `application/services/catalog.py`): публичный реентерабельный лок по листу — вызывающий
+  оборачивает весь read→compute→write (не только сетевой вызов, как раньше). `CatalogService
+  .add_item`/`delete_item` теперь держат его на весь метод (у `delete_item` — включая
+  reassignment сессий/boost-order-lines, изначально это было упущено при первом проходе
+  фикса, поймано ревью — см. ниже). Также `SheetsClient._gspread_client()` ставит
+  `gspread`'s `HTTPClient.set_timeout(REQUEST_TIMEOUT_SECONDS)` — транспортный таймаут,
+  который реально прерывает зависший сокет (не только `asyncio.wait_for`, который лишь
+  бросает поток, а тот может завершиться позже и затереть более новую запись).
+- **INFRA1-7** (`infrastructure/sheets/client.py::_AcquireAll`): `__aenter__` теперь
+  try/except с освобождением уже взятых локов перед re-raise.
+- **INFRA1-4** (`infrastructure/cache/sync.py`): новый `_to_int_strict` (возвращает `None`
+  на непустой-но-непарсящийся `coins`/`xp`, `0` на пустую ячейку). Для Тикеты — строка
+  пропускается (как `amount`, уже был прецедент). Для Юзеры — **профиль не пропускается**
+  (первая версия фикса пропускала весь профиль — ревью поймало, что `replace_all`'s полный
+  wipe стирает заодно оборот/ранг/реф-роль/Discord-биндинг, что хуже временного нуля на
+  одном поле; исправлено — профиль сохраняется, только `coins`/`xp` падают в `0` с громким
+  warning). `_to_int`/`_to_int_strict` также защищены от `nan`/`inf` (`int(nan/inf)`
+  падает необработанным иначе — тоже поймано ревью).
+- **INFRA1-5** (`infrastructure/cache/sync.py`): `_to_bool` — строгий whitelist truthy-строк
+  вместо `bool(value)` (`bool("FALSE") == True` в чистом Python).
+- **INFRA1-8**: докстринг `transactions.py`-репозитория утверждал, что синк инкрементальный;
+  реальность — `CacheSync` перечитывает весь диапазон Тикеты каждый цикл. Решение: не
+  корректность (upsert идемпотентен), не менять диапазон чтения ради риска новых edge-кейсов
+  вокруг formula-extent проверки, читающей тот же блок — докстринг приведён в соответствие
+  с реальным поведением.
+- **INFRA1-9/INFRA1-10**: без изменений кода, отмечены как рассмотренные (не баги).
+- **INFRA1-12**: докстринги `get_by_ids`/`get_by_nicks`/`get_nick_displays` документируют
+  предел `SQLITE_MAX_VARIABLE_NUMBER`, чанкинг не добавлен (недостижимо).
+- Обязательный `agent-skills:code-reviewer` прогонялся **дважды**: первый проход — **request
+  changes** (1 critical: INFRA1-4's первая версия стирала весь профиль пользователя через
+  `replace_all`; 3 important: `delete_item`'s reassignment-цикл оставался вне лока,
+  `asyncio.wait_for` без транспортного таймаута оставляет риск отложенной перезаписи от
+  осиротевшего потока, `ReentrantAsyncLock` не документировал latent deadlock-ловушку с
+  `asyncio.wait_for`'s child-task). Все 4 исправлены; второй проход подтвердил все фиксы
+  (плюс добавлен недостающий тест на `set_timeout`, отмеченный ревью как непокрытый).
+  Regression-тесты на конкурентность (`add_item`/`delete_item`) сначала были too weak
+  (проходили даже без фикса) — переписаны на прямое наблюдение порядка событий
+  (`read_start`/`write_end`/`reassign_end`), вручную проверено red→green на обеих.
+- Все 925 unit-тестов зелёные (+14 к концу Этапа 2), `mypy --strict`/`ruff` чисты по
+  всему `src`+`tests`.
+- Новых блокирующих багов не найдено.
 
-Review passed: ☐
+Review passed: да (`agent-skills:code-reviewer`, five-axis; первый проход — request changes
+на INFRA1-4/INFRA1-6/`ReentrantAsyncLock`-документации, все устранены; второй проход —
+подтверждено, плюс закрыт один тест-гэп, найденный при верификации)
 
 ---
 
@@ -323,7 +372,7 @@ Review passed: ☐
 | 0 | Критично + Security (кросс-модульно) | 6 | 6 | done |
 | 1 | Domain | 10 | 1 (DOM-1 дублирован из эт.0) | done |
 | 2 | Application | 8 | 2 (APP-1/2 дублированы из эт.0) | done |
-| 3 | Infrastructure: Sheets+Cache | 10 | 2 (дублированы из эт.0) | not started |
+| 3 | Infrastructure: Sheets+Cache | 10 | 2 (дублированы из эт.0) | done |
 | 4 | Infrastructure: Discord/OCR/Logging/Config | 9 | 0 (2 high) | not started |
 | 5 | Presentation (non-ticket) | 9 | 1 (PRES-1 дублирован из эт.0) | not started |
 | 6 | Presentation: Tickets | 10 | 1 (TICK-1 дублирован из эт.0) | not started |
@@ -332,5 +381,6 @@ Review passed: ☐
 
 **Итого уникальных находок: ~55** (с учётом дублей CLUSTER-1 и DOM-8/PRES-8, DOM-2/SEC-2, посчитанных один раз).
 
-Этапы 0, 1 и 2 исправлены и прошли ревью (2026-08-05). Этап 3 (Infrastructure: Sheets+Cache)
-— следующий по очереди, ждёт явной команды на продолжение (правило "один этап за раз").
+Этапы 0, 1, 2 и 3 исправлены и прошли ревью (2026-08-05). Этап 4 (Infrastructure:
+Discord/OCR/Logging/Config) — следующий по очереди, ждёт явной команды на продолжение
+(правило "один этап за раз").
