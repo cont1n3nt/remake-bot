@@ -60,21 +60,38 @@ class DiscordRoleGateway:
         to_grant = target.desired - current
         to_revoke = (current & target.universe) - target.desired
 
-        try:
-            if to_grant:
+        # Grant and revoke are two independent try/except blocks, not one
+        # (INFRA2-2): if grant succeeds and revoke then fails, the member
+        # really did end up holding both the new and an old (mutually
+        # exclusive) role — `granted`/`revoked` must reflect what actually
+        # happened, not silently report "nothing changed" and hide that a
+        # role was, in fact, granted.
+        #
+        # `discord.HTTPException`, not just `discord.Forbidden` (INFRA2-1):
+        # a transient 5xx or a deleted role id raises the broader type, and
+        # letting it escape here would kill the *entire* background poll
+        # over every remaining player, not just this one member's sync.
+        granted: tuple[int, ...] = ()
+        if to_grant:
+            try:
                 await member.add_roles(
                     *(discord.Object(id=role_id) for role_id in to_grant), reason="progression sync"
                 )
-            if to_revoke:
+            except discord.HTTPException as exc:
+                logger.warning("role grant failed for member %s: %s", member_id, exc)
+            else:
+                granted = tuple(to_grant)
+
+        revoked: tuple[int, ...] = ()
+        if to_revoke:
+            try:
                 await member.remove_roles(
                     *(discord.Object(id=role_id) for role_id in to_revoke),
                     reason="progression sync",
                 )
-        except discord.Forbidden:
-            logger.warning(
-                "role sync failed for member %s: bot lacks permission (check role hierarchy)",
-                member_id,
-            )
-            return RoleDiff(granted=(), revoked=())
+            except discord.HTTPException as exc:
+                logger.warning("role revoke failed for member %s: %s", member_id, exc)
+            else:
+                revoked = tuple(to_revoke)
 
-        return RoleDiff(granted=tuple(to_grant), revoked=tuple(to_revoke))
+        return RoleDiff(granted=granted, revoked=revoked)
