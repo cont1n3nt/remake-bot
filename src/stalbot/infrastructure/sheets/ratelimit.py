@@ -63,17 +63,28 @@ REQUEST_TIMEOUT_SECONDS: Final = 20.0
 class TokenBucket:
     """A classic token bucket: `capacity` tokens, refilled continuously."""
 
-    def __init__(self, capacity: int, *, per_seconds: float = 60.0) -> None:
+    def __init__(
+        self,
+        capacity: int,
+        *,
+        per_seconds: float = 60.0,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
         """Build a bucket that refills to `capacity` every `per_seconds`.
 
         Args:
             capacity: Maximum (and initial) number of tokens.
             per_seconds: Time window the capacity refills over.
+            clock: Monotonic time source (TEST-8). Defaults to
+                `time.monotonic`; overridable so tests can assert exact
+                refill math against a controlled clock instead of the real
+                one, without sleeping for real seconds.
         """
         self._capacity = capacity
         self._refill_rate = capacity / per_seconds
         self._tokens = float(capacity)
-        self._updated_at = time.monotonic()
+        self._clock = clock or time.monotonic
+        self._updated_at = self._clock()
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> None:
@@ -89,7 +100,7 @@ class TokenBucket:
             await asyncio.sleep(wait_seconds)
 
     def _refill(self) -> None:
-        now = time.monotonic()
+        now = self._clock()
         elapsed = now - self._updated_at
         self._tokens = min(self._capacity, self._tokens + elapsed * self._refill_rate)
         self._updated_at = now

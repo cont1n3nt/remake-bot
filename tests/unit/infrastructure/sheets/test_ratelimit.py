@@ -51,6 +51,77 @@ async def test_token_bucket_blocks_once_exhausted() -> None:
     assert elapsed >= 0.1
 
 
+async def test_token_bucket_refill_math_is_exact_with_a_fake_clock() -> None:
+    """TEST-8: assert the exact fractional refill amount, not just "eventually
+    unblocks" — `test_token_bucket_blocks_once_exhausted` above sleeps on the
+    real clock and only proves rough timing, not that `_refill()`'s
+    arithmetic is correct to sub-token precision. `_tokens`/`_refill()` are
+    accessed directly (white-box): there is no black-box way to observe a
+    fractional token count without either blocking (defeating the point of
+    a fake clock) or draining the bucket to probe it, which would change
+    the very state being measured.
+    """
+    now = 1_000.0
+
+    def clock() -> float:
+        return now
+
+    bucket = TokenBucket(capacity=10, per_seconds=10.0, clock=clock)  # 1 token/sec
+    assert bucket._tokens == 10.0
+
+    for _ in range(10):
+        await bucket.acquire()  # elapsed=0 each time (clock frozen) — exact drain
+    assert bucket._tokens == 0.0
+
+    now += 3.7
+    bucket._refill()
+    assert bucket._tokens == pytest.approx(3.7)
+
+    now += 0.3
+    bucket._refill()
+    assert bucket._tokens == pytest.approx(4.0)
+
+    now += 100.0  # far beyond capacity — must clamp, not overflow past it
+    bucket._refill()
+    assert bucket._tokens == 10.0
+
+
+async def test_token_bucket_acquire_waits_exactly_as_long_as_the_deficit_requires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TEST-8: `acquire()`'s computed `wait_seconds` for a fractional deficit
+    must be exact, not just "long enough" — verified by having the fake
+    `asyncio.sleep` advance the same fake clock `acquire()` reads, so a
+    wrong (too short) wait would leave `_tokens` short of a whole token and
+    the second `acquire()` below would spin through another real iteration
+    instead of returning.
+    """
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        nonlocal now
+        sleep_calls.append(seconds)
+        now += seconds
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    bucket = TokenBucket(capacity=5, per_seconds=2.5, clock=clock)  # 2 tokens/sec
+    for _ in range(5):
+        await bucket.acquire()
+    assert bucket._tokens == 0.0
+
+    now += 0.2  # 0.2s * 2 tokens/s = 0.4 tokens accrued -> deficit 0.6 -> wait 0.3s
+    await bucket.acquire()
+
+    assert sleep_calls == [pytest.approx(0.3)]
+    assert bucket._tokens == pytest.approx(0.0, abs=1e-9)
+
+
 def test_write_lock_returns_same_lock_for_same_key() -> None:
     limiter = SheetsRateLimiter()
     assert limiter.write_lock("DataBase") is limiter.write_lock("DataBase")
