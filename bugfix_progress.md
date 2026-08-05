@@ -331,22 +331,72 @@ Review passed: да (`agent-skills:code-reviewer`, five-axis, APPROVE после
 ## Этап 5 — Presentation (non-ticket)
 
 Зависит от: этапов 1-4 (cogs вызывают application/infrastructure).
-Статус: **not started**
+Статус: **done**
 
 - [x] PRES-1 — исправлено в Этапе 0
-- [ ] PRES-2 — `enforce_limits()` не гарантирует лимит 1024 на поле независимо от суммы
-- [ ] PRES-3 — потенциально бесконечный цикл обрезки embed (latent DoS)
-- [ ] PRES-4 — необработанный `NotFound`/`Forbidden` в `on_timeout()` × 5 мест (+ структурный рефактор в общий базовый класс)
-- [ ] PRES-5 — мёртвый код `PaginatedItemSelect` (спросить перед удалением)
-- [ ] PRES-6 — autocomplete не защищён runtime-проверкой (FYI, Discord-модель permissions — фактический барьер)
-- [ ] PRES-7 — валидация `/week` в cog вместо domain/application слоя
-- [ ] PRES-8 — см. DOM-8
-- [ ] PRES-9 — `close()` не дожидается фоновых петель перед закрытием `cache_db` (FYI, требует подтверждения)
+- [x] PRES-2 — `enforce_limits()` не гарантирует лимит 1024 на поле независимо от суммы
+- [x] PRES-3 — потенциально бесконечный цикл обрезки embed (latent DoS)
+- [x] PRES-4 — необработанный `NotFound`/`Forbidden` в `on_timeout()` × 5 мест (+ структурный рефактор в общий базовый класс)
+- [x] PRES-5 — мёртвый код `PaginatedItemSelect` — подтверждено пользователем 2026-08-05, удалено
+- [x] PRES-6 — autocomplete не защищён runtime-проверкой — не баг, FYI подтверждён, действий не требуется
+- [x] PRES-7 — валидация `/week` в cog вместо domain/application слоя
+- [x] PRES-8 — см. DOM-8 (уже исправлено в Этапе 1, дубликат)
+- [x] PRES-9 — `close()` не дожидается фоновых петель перед закрытием `cache_db` — подтверждено воспроизведением, исправлено
 
 Заметки после исправления:
-_(заполнить)_
+- **PRES-2/PRES-3** (`presentation/embeds/factory.py`): `enforce_limits()` теперь безусловно
+  клэмпит `field.value`/`field.name` к 1024/256 сразу после ограничения числа полей — до
+  проверки суммарной длины (закрывает PRES-2). Цикл обрезки по суммарной длине останавливается,
+  как только значение выбранного (самого длинного) поля уже стало плейсхолдером `"—"` — раньше
+  тот же вызов `set_field_at` повторялся бесконечно (закрывает PRES-3, реальный infinite loop,
+  воспроизведён напрямую: `python repro.py` с 25 полями по 256-символьному имени и значением
+  `"—"` не завершался за 8с до фикса, мгновенно завершается после).
+- **PRES-4** (новый `presentation/views/base.py::AuthorLockedView`, `confirm.py`,
+  `logs_pager.py`, `paginated_embed.py`, `cogs/catalog.py::_PriceListView`): общий базовый
+  класс вместо 4 независимых копий `interaction_check`/`on_timeout` (5-е место, `_PriceListView`
+  из PRES-4 включало и то, что стало PRES-5-кандидатом, `PaginatedItemSelect` — тоже
+  унаследовано от базового класса перед удалением). `on_timeout` теперь ловит
+  `discord.NotFound`/`discord.Forbidden` вокруг `message.edit(...)` — раньше падало
+  необработанным, если сообщение удалено или бот потерял доступ к каналу до истечения таймаута.
+- **PRES-5**: `PaginatedItemSelect` удалён (вместе с тестами) — пользователь подтвердил, что
+  ничего в `src/` на него не ссылается (M10 использовал собственный пикер).
+  `AuthorLockedView`'s докстринг обновлён, ссылка на класс убрана.
+- **PRES-6**: рассмотрено, не баг — реальный барьер — Discord-модель permissions
+  (`default_member_permissions`), не runtime-проверка autocomplete; действий не требуется.
+- **PRES-7** (`domain/clock.py::DateRange.week`, `presentation/cogs/stats.py`): бизнес-правило
+  `/week` (диапазон ≤31 дня, конец не в будущем) перенесено из cog-уровневой свободной функции
+  `_validate_week_range` в `DateRange.week(start, end, *, today)` — домен теперь владеет всем
+  правилом целиком (включая уже существовавшую проверку `end < start` в `__post_init__`), а не
+  делит его между слоями. Порядок проверок (future-check → конструирование → >31-дней-check)
+  подтверждён ревью как поведенчески идентичный старому двухшаговому варианту для всех входов.
+- **PRES-8**: дубликат DOM-8, уже исправлено в Этапе 1 (`domain/errors.py::PermissionError`
+  удалён) — действий в этом этапе не потребовалось.
+- **PRES-9** (`presentation/bot.py::StalbotBot.close()`): `close()` раньше звал `.cancel()` на
+  4 фоновых `tasks.Loop` и сразу закрывал `cache_db` — `Loop.cancel()` только запрашивает отмену,
+  не дожидается реального разворачивания итерации, так что закрытие `cache_db` могло гоняться с
+  ещё не завершившимся запросом к ней. Подтверждено эмпирически: `sqlite3.ProgrammingError:
+  Cannot operate on a closed database` в шумных логах прогона тестов (фоновый `_run_metrics_log`)
+  до фикса. `close()` теперь собирает `asyncio.Task` каждой петли через `Loop.get_task()` и
+  дожидается их через `asyncio.gather(..., return_exceptions=True)` перед закрытием кэша,
+  обёрнуто в `asyncio.wait_for(..., timeout=_SHUTDOWN_TIMEOUT_SECONDS)` (60с, добавлено по
+  итогам ревью — без таймаута зависшая задача блокировала бы shutdown навсегда).
+- Обязательный `agent-skills:code-reviewer` — **APPROVE** с первого прохода; 2 important-finding
+  (нет таймаута на `asyncio.gather` в `close()`; новый regression-тест PRES-9 покрывал только
+  happy path, не случай, когда задача петли реально бросает исключение) — оба устранены сразу
+  (таймаут с логированием + fallback на закрытие кэша; добавлен тест
+  `test_close_still_closes_the_cache_when_a_loop_task_raises`). 1 suggestion (расширение
+  `_disable_children` на `discord.ui.Select`, не только `Button`, — задокументировано
+  однострочным комментарием как намеренное).
+- Все 958 unit-тестов зелёные (+7 к концу Этапа 4, минус 6 удалённых тестов
+  `PaginatedItemSelect`, итого чистый +33/-26 с учётом удаления), `mypy --strict`/`ruff` чисты
+  по всему `src`+`tests`.
+- Коммиты атомарные по одной находке/группе: PRES-2/PRES-3 (`79c00f1`), PRES-4 (`33c62d2`),
+  PRES-5 (`788171b`), PRES-7 (`406be97`), PRES-9 (`64cecb5`).
+- Новых блокирующих багов по пути не найдено.
 
-Review passed: ☐
+Review passed: да (`agent-skills:code-reviewer`, five-axis, APPROVE после устранения двух
+important-findings по `close()`'s таймауту и test-coverage; mypy --strict/ruff/полный прогон
+тестов зелёные)
 
 ---
 
@@ -420,7 +470,7 @@ Review passed: ☐
 | 2 | Application | 8 | 2 (APP-1/2 дублированы из эт.0) | done |
 | 3 | Infrastructure: Sheets+Cache | 10 | 2 (дублированы из эт.0) | done |
 | 4 | Infrastructure: Discord/OCR/Logging/Config | 9 | 0 (2 high) | done |
-| 5 | Presentation (non-ticket) | 9 | 1 (PRES-1 дублирован из эт.0) | not started |
+| 5 | Presentation (non-ticket) | 9 | 1 (PRES-1 дублирован из эт.0) | done |
 | 6 | Presentation: Tickets | 10 | 1 (TICK-1 дублирован из эт.0) | not started |
 | 7 | Security (остаточные) | 5 | 0 | not started |
 | 8 | Test-coverage backfill | 4 | — | not started |
@@ -428,6 +478,6 @@ Review passed: ☐
 **Итого уникальных находок: ~57** (с учётом дублей CLUSTER-1 и DOM-8/PRES-8, DOM-2/SEC-2,
 посчитанных один раз; +2 за INFRA2-10/INFRA2-11, найденные при ревью Этапа 4).
 
-Этапы 0, 1, 2, 3 и 4 исправлены и прошли ревью (2026-08-05). Этап 5 (Presentation,
-non-ticket) — следующий по очереди, ждёт явной команды на продолжение (правило "один
+Этапы 0, 1, 2, 3, 4 и 5 исправлены и прошли ревью (2026-08-05). Этап 6 (Presentation:
+Ticket flow) — следующий по очереди, ждёт явной команды на продолжение (правило "один
 этап за раз").
