@@ -166,7 +166,9 @@ class TransactionService:
         )
 
     async def _find_free_row(self) -> int:
-        candidate = max(await self._transactions.last_row() + 1, DATA_START_ROW)
+        cached_last_row = await self._transactions.last_row()
+        candidate = max(cached_last_row + 1, DATA_START_ROW)
+        start = candidate
         for _ in range(_MAX_ROW_SEARCH_ATTEMPTS):
             ref = a1_range(DATABASE_SHEET, "B", candidate)
             result = await self._sheets.batch_get([ref])
@@ -174,6 +176,12 @@ class TransactionService:
             if not cell or not cell[0] or not str(cell[0][0]).strip():
                 return candidate
             candidate += 1
+        logger.warning(
+            "no free row found in Тикеты: cached last_row=%d, searched B%d..B%d",
+            cached_last_row,
+            start,
+            candidate - 1,
+        )
         raise SheetsWriteConflictError(
             f"no free row found in Тикеты after {_MAX_ROW_SEARCH_ATTEMPTS} attempts"
         )
