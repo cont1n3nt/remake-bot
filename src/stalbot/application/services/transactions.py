@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 _FORMULA_COLUMNS: tuple[str, str] = ("F", "G")
 _FORMULA_WAIT_ATTEMPTS = 3
 _FORMULA_WAIT_DELAY_SECONDS = 0.7
-_MAX_ROW_SEARCH_ATTEMPTS = 5
+_MAX_ROW_SEARCH_ATTEMPTS = 50
 
 
 class TransactionService:
