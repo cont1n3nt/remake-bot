@@ -52,6 +52,39 @@ class ItemsCacheRepository:
         row = await cursor.fetchone()
         return _row_to_item(row) if row is not None else None
 
+    async def get_by_ids(self, item_ids: Sequence[int]) -> dict[int, Item]:
+        """Look up several items by id in one query (APP-6: avoids an N+1 `get_by_id` loop).
+
+        INFRA1-12: builds one `?` placeholder per id, and SQLite caps the
+        number of parameters in a single statement
+        (`SQLITE_MAX_VARIABLE_NUMBER`: 999 on older builds, 32766 on
+        Python's bundled SQLite). No caller today passes anywhere near that
+        many ids (a channel's boost-order draft, one price import) — this is
+        not chunked, so a future caller must keep its input below that limit
+        itself.
+
+        Args:
+            item_ids: Catalog ids to look up; duplicates are fine.
+
+        Returns:
+            Mapping from id to `Item`, containing only the ids that were
+            actually found — a caller must handle a missing key the same
+            way `get_by_id` returning `None` would.
+        """
+        unique_ids = list(dict.fromkeys(item_ids))
+        if not unique_ids:
+            return {}
+        # The f-string only interpolates a run of "?" placeholders (one per
+        # id) — every actual value still goes through parameter binding, so
+        # this isn't the string-built-query injection risk the rule guards
+        # against.
+        placeholders = ",".join("?" * len(unique_ids))
+        cursor = await self._conn.execute(
+            f"SELECT * FROM items WHERE id IN ({placeholders})",  # noqa: S608
+            unique_ids,
+        )
+        return {row["id"]: _row_to_item(row) async for row in cursor}
+
     async def find(self, name: str, category: ItemCategory | None) -> Item | None:
         """Look up one item by name, optionally scoped to a category.
 

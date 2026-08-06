@@ -36,12 +36,17 @@ def ensure_writable(ref: str) -> None:
     Raises:
         ProtectedRangeWriteError: If any column the range spans is
             formula-owned on the `DataBase` sheet.
+        ValueError: If `ref`'s end column comes before its start column —
+            an inverted range would otherwise make `range(start, end + 1)`
+            empty and skip every column check (fail loudly instead).
     """
     parsed = parse_a1_range(ref)
     if parsed.sheet != DATABASE_SHEET:
         return
     start = column_letter_to_index(parsed.col_start)
     end = column_letter_to_index(parsed.col_end)
+    if end < start:
+        raise ValueError(f"inverted column range: {ref!r} (end column before start column)")
     for index in range(start, end + 1):
         letter = column_index_to_letter(index)
         if letter in READ_ONLY_COLUMNS:

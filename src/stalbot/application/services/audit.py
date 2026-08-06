@@ -19,6 +19,7 @@ import logging
 
 from stalbot.application.dto.audit_event import AuditEvent
 from stalbot.application.ports.audit_gateway import AuditGateway
+from stalbot.infrastructure.logging.trace import new_trace_id, set_trace_id
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,14 @@ class AuditService:
     async def _run(self) -> None:
         while True:
             batch = await self._collect_batch()
+            # This worker is one long-lived `asyncio.Task` for the whole
+            # process, so `current_trace_id()`'s "generate once, cache
+            # forever" fallback would otherwise stick to whatever the first
+            # batch generated for every later delivery-failure log line
+            # (INFRA2-3) — each individual `AuditEvent` already carries its
+            # own `trace_id` captured at the moment it was recorded, this
+            # only affects this worker's own logging about the batch itself.
+            set_trace_id(new_trace_id())
             try:
                 embeds = [self._embed_factory.audit(event) for event in batch]
                 await self._gateway.send_batch(embeds)

@@ -163,7 +163,43 @@ async def test_price_list_sends_default_resource_page() -> None:
 
     kwargs = interaction.followup.send.call_args.kwargs
     assert isinstance(kwargs["view"], _PriceListView)
-    assert "Хвост" in (kwargs["embed"].description or "")
+    embed = kwargs["embed"]
+    field_names = [field.name for field in embed.fields]
+    assert any("Хвост" in name for name in field_names)
+
+
+async def test_price_list_field_omits_missing_price_instead_of_a_dash() -> None:
+    resources = [_item(id=1, name="Хвост", price_buy=Decimal(18000), price_sell=None)]
+    cog, _catalog, _pricing, _items = _cog(
+        by_category={ItemCategory.RESOURCE: resources, ItemCategory.BOOST: []}
+    )
+    interaction = _interaction()
+
+    callback: Any = CatalogCog.price_list.callback
+    await callback(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    field = next(field for field in embed.fields if "Хвост" in (field.name or ""))
+    assert "Скуп" in field.value
+    assert "Продажа" not in field.value
+    assert "—" not in field.value
+
+
+async def test_price_list_field_shows_boost_emoji_before_name() -> None:
+    boosts = [_item(id=2, name="Топот", category=ItemCategory.BOOST, price_sell=Decimal(1))]
+    cog, _catalog, _pricing, _items = _cog(
+        by_category={ItemCategory.RESOURCE: [], ItemCategory.BOOST: boosts},
+        emojis=EmojiResolver(),
+    )
+    interaction = _interaction()
+
+    callback: Any = CatalogCog.price_list.callback
+    await callback(cog, interaction)
+
+    view = interaction.followup.send.call_args.kwargs["view"]
+    boost_page = view._pages[ItemCategory.BOOST][0]
+    field = next(field for field in boost_page.fields if "Топот" in (field.name or ""))
+    assert field.name.startswith("•")  # no custom emoji registered, but name is still prefixed
 
 
 async def test_price_list_paginates_200_items_within_embed_limits() -> None:
@@ -184,7 +220,7 @@ async def test_price_list_paginates_200_items_within_embed_limits() -> None:
     assert len(resource_pages) == 14  # ceil(200 / 15)
     for page in resource_pages:
         assert len(page) <= 6000
-        assert len(page.description or "") <= 4096
+        assert len(page.fields) <= 25
 
 
 async def test_give_price_sends_a_txt_attachment() -> None:

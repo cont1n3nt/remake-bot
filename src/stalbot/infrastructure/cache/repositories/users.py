@@ -39,6 +39,62 @@ class UsersCacheRepository:
         row = await cursor.fetchone()
         return _row_to_profile(row) if row is not None else None
 
+    async def get_by_nicks(
+        self, nicks: Sequence[NormalizedNick]
+    ) -> dict[NormalizedNick, UserProfile]:
+        """Look up several profiles by nick in one query (APP-6: avoids an N+1 `get_by_nick` loop).
+
+        INFRA1-12: builds one `?` placeholder per nick, and SQLite caps the
+        number of parameters in a single statement
+        (`SQLITE_MAX_VARIABLE_NUMBER`). No caller today passes anywhere near
+        that many nicks (one referral list, one period's traders) — this is
+        not chunked, so a future caller must keep its input below that limit
+        itself.
+
+        Args:
+            nicks: Normalized nicks to look up; duplicates are fine.
+
+        Returns:
+            Mapping from nick to `UserProfile`, containing only the nicks
+            that were actually found.
+        """
+        unique_nicks = list(dict.fromkeys(nicks))
+        if not unique_nicks:
+            return {}
+        # The f-string only interpolates a run of "?" placeholders (one per
+        # nick) — every actual value still goes through parameter binding,
+        # so this isn't the string-built-query injection risk the rule
+        # guards against.
+        placeholders = ",".join("?" * len(unique_nicks))
+        cursor = await self._conn.execute(
+            f"SELECT * FROM users WHERE nick_norm IN ({placeholders})",  # noqa: S608
+            unique_nicks,
+        )
+        return {NormalizedNick(row["nick_norm"]): _row_to_profile(row) async for row in cursor}
+
+    async def get_nick_displays(self, nicks: Sequence[NormalizedNick]) -> dict[NormalizedNick, str]:
+        """Look up several original-case nicks in one query (APP-6: avoids an N+1 loop).
+
+        INFRA1-12: same unbounded `IN (...)` caveat as `get_by_nicks` — see
+        its docstring.
+
+        Args:
+            nicks: Normalized nicks to look up; duplicates are fine.
+
+        Returns:
+            Mapping from nick to its original-case display text, containing
+            only the nicks that were actually found.
+        """
+        unique_nicks = list(dict.fromkeys(nicks))
+        if not unique_nicks:
+            return {}
+        placeholders = ",".join("?" * len(unique_nicks))  # see get_by_nicks re: S608
+        cursor = await self._conn.execute(
+            f"SELECT nick_norm, nick_display FROM users WHERE nick_norm IN ({placeholders})",  # noqa: S608
+            unique_nicks,
+        )
+        return {NormalizedNick(row["nick_norm"]): row["nick_display"] async for row in cursor}
+
     async def get_by_discord_id(self, discord_id: int) -> UserProfile | None:
         """Look up a profile by bound Discord id.
 

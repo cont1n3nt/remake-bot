@@ -459,24 +459,29 @@ def admin_only() -> Callable[[T], T]:
 
 ### 6.2 Листы цен (для `/sync_prices`)
 
+> **Обновлено (UX #7):** `/sync_prices` переносит цены из item database
+> **на** эти листы (item database — источник истины), а не наоборот, как
+> было изначально описано ниже. Строки начинаются не с 1 — выше реальных
+> данных на каждом листе идут строки заголовка/названия.
+
 Декларативно в `infrastructure/sheets/layouts.py`:
 
 ```python
 SYNC_LAYOUTS: Final[tuple[SheetLayout, ...]] = (
     SheetLayout(
-        sheet="Мейн Скуп", rows=range(1, 32),
+        sheet="Мейн скуп", rows=range(5, 32),
         name_columns=("C", "J", "Q", "X", "AE", "AL", "AS"),
         price_columns=("D", "K", "R", "Y", "AF", "AM", "AT"),
         category=ItemCategory.RESOURCE, price_field=PriceField.BUY,
     ),
     SheetLayout(
-        sheet="Скуп бустов", rows=range(1, 10),
+        sheet="Скуп бустов", rows=range(3, 10),
         name_columns=("C", "J", "Q", "X"),
         price_columns=("D", "K", "R", "Y"),
         category=ItemCategory.RESOURCE, price_field=PriceField.BUY,
     ),
     SheetLayout(
-        sheet="БУСТЫ", rows=range(1, 10),
+        sheet="БУСТЫ", rows=range(4, 10),
         name_columns=("C", "J", "Q", "X", "AE", "AL", "AS"),
         price_columns=("D", "K", "R", "Y", "AF", "AM", "AT"),
         category=ItemCategory.BOOST, price_field=PriceField.SELL,
@@ -996,11 +1001,16 @@ ID  | Название            | Категория | Скуп      | Про�
 
 ### 10.8 `/sync_prices`
 
-1. Один `values_batch_get` по всем `SYNC_LAYOUTS` → все имена и текущие цены.
+> **Обновлено (UX #7):** item database — источник истины; направление ниже
+> перенесено на sync **из** item database **в** листы цен, не наоборот.
+
+1. Один `values_batch_get` по всем `SYNC_LAYOUTS` → все имена и текущие (на листе) цены.
 2. Для каждой ячейки: `normalize_nick`-подобная нормализация имени → поиск в item database
-   по `(name_norm, category_листа)`.
-3. Один `values_batch_update` — только реально изменившиеся ячейки.
-4. Отчёт: `✅ Обновлено N` / `⚠️ Не найдено в базе: …` / `➖ Без изменений: N`.
+   по `(name_norm, category_листа)`; цена берётся из найденной позиции item database.
+3. Один `values_batch_update` — только реально изменившиеся ячейки листа.
+4. Отчёт: diff (`render_price_change_report`, тот же рендерер, что у `/setprice`/`/new_price`)
+   / `⚠️ Не найдено в базе: …` / `➖ Без изменений: N` / `❌ Была нечитаемая цена в ячейке
+   (перезаписано): …`.
 5. Идемпотентность: повторный запуск без изменений даёт 0 записей.
 
 ### 10.9 `/item_add` / `/del_item`

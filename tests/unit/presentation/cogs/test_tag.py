@@ -16,7 +16,9 @@ def _messageable_channel(name: str = "ticket-0042") -> MagicMock:
     return channel
 
 
-def _interaction(*, channel: MagicMock | None = None) -> MagicMock:
+def _interaction(
+    *, channel: MagicMock | None = None, guild_name: str = "Клондайк Шёпота"
+) -> MagicMock:
     interaction = MagicMock(spec=discord.Interaction)
     interaction.response = MagicMock()
     interaction.response.defer = AsyncMock()
@@ -25,6 +27,8 @@ def _interaction(*, channel: MagicMock | None = None) -> MagicMock:
     interaction.guild_id = 1475147129201627208
     interaction.channel_id = 123456789
     interaction.channel = channel or _messageable_channel()
+    interaction.guild = MagicMock(spec=discord.Guild)
+    interaction.guild.name = guild_name
     return interaction
 
 
@@ -53,6 +57,7 @@ async def test_tag_sends_a_dm_with_the_ticket_link() -> None:
     kwargs = member.send.call_args.kwargs
     embed = kwargs["embed"]
     assert "ticket-0042" in (embed.description or "")
+    assert "Клондайк Шёпота" in (embed.description or "")
     view = kwargs["view"]
     button = view.children[0]
     assert button.style is discord.ButtonStyle.link

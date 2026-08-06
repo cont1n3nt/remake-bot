@@ -18,6 +18,10 @@ GMT3: Final = timezone(timedelta(hours=3))
 _DATE_FORMAT: Final = "%d.%m.%Y"
 _DATETIME_FORMAT: Final = "%d.%m.%Y %H:%M"
 
+#: `/week`'s business rule (PLAN.md §10.11): an explicit range may not span
+#: more days than this.
+_WEEK_MAX_DAYS: Final = 31
+
 _DEFAULT_DEADLINE_HOUR: Final = 23
 _DEFAULT_DEADLINE_MINUTE: Final = 59
 _MAX_DEADLINE_DAYS_AHEAD: Final = 90
@@ -103,9 +107,24 @@ class DateRange:
         return cls(start=day, end=day)
 
     @classmethod
-    def week(cls, start: date, end: date) -> "DateRange":
-        """Build a range from an explicit start/end pair."""
-        return cls(start=start, end=end)
+    def week(cls, start: date, end: date, *, today: date) -> "DateRange":
+        """Build a range from an explicit start/end pair (`/week`'s command).
+
+        Args:
+            start: First day of the range, inclusive.
+            end: Last day of the range, inclusive.
+            today: The caller's current date — *end* may not be after it.
+
+        Raises:
+            InvalidPeriodError: If *end* precedes *start*, *end* is in the
+                future, or the range spans more than `_WEEK_MAX_DAYS` days.
+        """
+        if end > today:
+            raise InvalidPeriodError("конец периода не может быть в будущем")
+        range_ = cls(start=start, end=end)
+        if (end - start).days + 1 > _WEEK_MAX_DAYS:
+            raise InvalidPeriodError(f"диапазон не может превышать {_WEEK_MAX_DAYS} дней")
+        return range_
 
     @classmethod
     def month(cls, year: int, month: int) -> "DateRange":
@@ -124,8 +143,12 @@ class DateRange:
 _RELATIVE_HOURS_RE: Final = re.compile(r"^через\s+(\d+)\s*час(?:а|ов)?$", re.IGNORECASE)
 _RELATIVE_MINUTES_RE: Final = re.compile(r"^через\s+(\d+)\s*минут[уы]?$", re.IGNORECASE)
 _RELATIVE_DAY_RE: Final = re.compile(r"^(завтра|сегодня)(?:\s+(\d{1,2}):(\d{2}))?$", re.IGNORECASE)
+#: The year group only accepts exactly 2 or 4 digits (DOM-5) — `\d{2,4}` also
+#: matched a bare 3-digit run (e.g. "202"), which is nobody's real year and
+#: not an unambiguous typo of a 2- or 4-digit one either; it used to be
+#: accepted as literal year 202 instead of being rejected.
 _ABSOLUTE_RE: Final = re.compile(
-    r"^(?P<day>\d{1,2})[./-](?P<month>\d{1,2})(?:[./-](?P<year>\d{2,4}))?"
+    r"^(?P<day>\d{1,2})[./-](?P<month>\d{1,2})(?:[./-](?P<year>\d{4}|\d{2}))?"
     r"(?:\s+(?P<hour>\d{1,2}):(?P<minute>\d{2}))?$"
 )
 
@@ -181,14 +204,23 @@ def _parse_relative_hours(text: str, now: datetime) -> datetime | None:
     match = _RELATIVE_HOURS_RE.match(text)
     if match is None:
         return None
-    return now + timedelta(hours=int(match.group(1)))
+    try:
+        return now + timedelta(hours=int(match.group(1)))
+    except OverflowError as exc:
+        # An unbounded digit run (the regex has no length cap) overflows
+        # timedelta's underlying C-int representation, either at
+        # construction or at the addition above (DOM-2/SEC-2).
+        raise DeadlineParseError(_DEADLINE_HINT) from exc
 
 
 def _parse_relative_minutes(text: str, now: datetime) -> datetime | None:
     match = _RELATIVE_MINUTES_RE.match(text)
     if match is None:
         return None
-    return now + timedelta(minutes=int(match.group(1)))
+    try:
+        return now + timedelta(minutes=int(match.group(1)))
+    except OverflowError as exc:
+        raise DeadlineParseError(_DEADLINE_HINT) from exc
 
 
 def _parse_relative_day(text: str, now: datetime) -> datetime | None:

@@ -97,7 +97,3 @@ class SheetStructureError(InfrastructureError):
     таблицы ломают структуру" — the bot refuses to run against a sheet whose
     layout it can no longer trust).
     """
-
-
-class PermissionError(StalbotError):
-    """A user without sufficient rights invoked an admin-only action."""

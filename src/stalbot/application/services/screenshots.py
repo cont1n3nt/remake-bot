@@ -8,7 +8,9 @@ a copy for the future training dataset, regardless of whether OCR is enabled.
 """
 
 import hashlib
+import logging
 from decimal import Decimal
+from typing import Final
 
 from stalbot.application.ports.clock import Clock
 from stalbot.application.ports.ocr import OcrGateway
@@ -19,7 +21,39 @@ from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
 )
 from stalbot.infrastructure.ocr.samples import save_sample
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_EXTENSION = "png"
+_FAILED_STATUS = "failed"
+
+#: INFRA2-5: the attachment's `mime` (Discord's own reported content type) is
+#: a more authoritative source for the sample's real format than its
+#: filename — a screenshot renamed by the uploader's OS keeps whatever
+#: extension it had before, regardless of what the bytes actually are. Used
+#: as the primary source; an unrecognized mime falls back to the filename's
+#: own extension (today's behavior), not an error — dataset quality, not a
+#: guarantee anything depends on.
+_MIME_EXTENSIONS: Final[dict[str, str]] = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/bmp": "bmp",
+}
+
+
+def _sample_extension(*, mime: str, filename: str) -> str:
+    # `content_type` can carry a `; charset=...`/`; boundary=...` parameter
+    # after the bare type (discord.py passes `Attachment.content_type`
+    # through verbatim) — normalized the same way `tickets/cog.py`'s
+    # `_first_image_attachment` already normalizes the same value, or a
+    # parameterized mime would always miss this dict and silently fall back
+    # to the filename-derived extension, quietly reintroducing INFRA2-5.
+    bare_mime = mime.split(";", 1)[0].strip().lower()
+    known = _MIME_EXTENSIONS.get(bare_mime)
+    if known is not None:
+        return known
+    return filename.rsplit(".", 1)[-1] if "." in filename else _DEFAULT_EXTENSION
 
 
 class ScreenshotService:
@@ -66,14 +100,28 @@ class ScreenshotService:
 
         sample_path: str | None = None
         if self._settings.ocr_keep_samples:
-            extension = filename.rsplit(".", 1)[-1] if "." in filename else _DEFAULT_EXTENSION
+            extension = _sample_extension(mime=mime, filename=filename)
             path = await save_sample(
                 self._settings.ocr_samples_dir, sha256, data, extension=extension
             )
             sample_path = str(path)
 
         image = ScreenshotImage(data=data, filename=filename, mime=mime)
-        result = await self._ocr.recognize(image)
+        try:
+            result = await self._ocr.recognize(image)
+        except Exception as exc:
+            # OCR must never block ticket confirmation (PLAN.md §11.8) — the
+            # contract is enforced only by convention today (`NullOcrGateway`
+            # never raises), not at this call site (APP-8). A future real
+            # engine failing mid-recognition must degrade the same way a
+            # clean "failed" result already does, not propagate. Deliberately
+            # `Exception`, not narrower: any recognition failure must degrade,
+            # while `asyncio.CancelledError` (a `BaseException`) still
+            # propagates normally, which is what we want on shutdown/timeout.
+            logger.warning(
+                "OCR recognition failed for channel %d: %s", channel_id, exc, exc_info=exc
+            )
+            result = OcrResult(status=_FAILED_STATUS, error=str(exc))
 
         await self._analyses.record(
             channel_id=channel_id,

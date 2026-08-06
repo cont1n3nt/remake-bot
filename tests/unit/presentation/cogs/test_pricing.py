@@ -5,12 +5,14 @@ covered in `tests/unit/application/services/test_pricing.py`. This file is
 about whether the cog validates input, confirms imports, and reports right.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
+from discord import app_commands
 
 from stalbot.application.dto.price_change import PriceChange
 from stalbot.application.dto.price_import import PriceImportIssue, PriceImportPlan
@@ -145,6 +147,7 @@ async def test_setboost_autocomplete_scopes_to_boosts() -> None:
 
 
 async def test_sync_prices_reports_updated_and_unchanged_counts() -> None:
+    """UX #7: the diff itself (`render_price_change_report`) is shown, not just a count."""
     report = SyncPricesReport(updated=(_change(),), not_found=(), unchanged_count=3)
     cog, pricing, _items = _cog(sync_report=report)
     interaction = _interaction()
@@ -154,7 +157,7 @@ async def test_sync_prices_reports_updated_and_unchanged_counts() -> None:
 
     pricing.sync_prices.assert_awaited_once()
     embed = interaction.followup.send.call_args.kwargs["embed"]
-    assert "Обновлено: 1" in (embed.description or "")
+    assert "Хвост тушкана" in (embed.description or "")
     assert "Без изменений: 3" in (embed.description or "")
 
 
@@ -169,6 +172,39 @@ async def test_sync_prices_reports_not_found_names_with_overflow_count() -> None
 
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "и ещё 2" in (embed.description or "")
+
+
+async def test_sync_prices_reports_unparseable_cells() -> None:
+    """UX #7: surfaced separately from "not found" — this is an existing item
+    whose stale price cell had unreadable content, now overwritten with the
+    catalog's price (not left alone — the sheet is the destination now)."""
+    report = SyncPricesReport(unparseable=("Топот",))
+    cog, _pricing, _items = _cog(sync_report=report)
+    interaction = _interaction()
+
+    callback: Any = PricingCog.sync_prices.callback
+    await callback(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Топот" in (embed.description or "")
+    assert "перезаписано" in (embed.description or "")
+
+
+async def test_sync_prices_shows_the_diff_report_when_prices_changed() -> None:
+    """UX #7: /sync_prices must show which item's price changed to what."""
+    change = _change(item_name="Хвост тушкана", old_price=Decimal(18000), new_price=Decimal(19500))
+    report = SyncPricesReport(updated=(change,), unchanged_count=0)
+    cog, _pricing, items = _cog(sync_report=report, all_items=[_item()])
+    interaction = _interaction()
+
+    callback: Any = PricingCog.sync_prices.callback
+    await callback(cog, interaction)
+
+    items.all.assert_awaited_once()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    description = embed.description or ""
+    assert "Хвост тушкана" in description
+    assert "→" in description
 
 
 # --- new_price -----------------------------------------------------------
@@ -262,3 +298,79 @@ async def test_new_price_waits_for_confirmation_before_applying(
     kwargs = interaction.followup.send.call_args_list[0].kwargs
     assert kwargs["embed"].title == "✏️ Подтвердите изменение цен"
     assert "view" in kwargs
+
+
+# -- SEC-5: cooldown on the two heavy admin commands ------------------------
+
+
+def _admin_interaction(user_id: int = 1) -> MagicMock:
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.user = MagicMock(spec=discord.Member, id=user_id)
+    interaction.user.guild_permissions = MagicMock(administrator=True)
+    interaction.created_at = datetime(2026, 8, 5, 12, 0, 0, tzinfo=UTC)
+    return interaction
+
+
+@pytest.mark.parametrize(
+    "command", [PricingCog.sync_prices, PricingCog.new_price], ids=["sync_prices", "new_price"]
+)
+async def test_a_non_admins_call_does_not_consume_the_cooldown_bucket(
+    command: app_commands.Command[PricingCog, ..., None],
+) -> None:
+    """`admin_only()`'s check must run before the cooldown check in the accumulated
+    `checks` list — decorator order in source has `@app_commands.checks.cooldown(...)`
+    above `@admin_only()`, but `app_commands.check` appends bottom-up, so the
+    textually-inner `admin_only()` check ends up evaluated first. If that ordering
+    were ever reversed, a non-admin's rejected attempt would still consume the
+    cooldown token for their user id — this proves it doesn't, by reusing the exact
+    same identity and moment for a follow-up admin call that must still succeed.
+    """
+    user_id = 4001 if command is PricingCog.sync_prices else 4002
+
+    non_admin = _admin_interaction(user_id)
+    non_admin.user.guild_permissions = MagicMock(administrator=False)
+    assert await command._check_can_run(non_admin) is False
+
+    admin = _admin_interaction(user_id)  # same identity, same `created_at` moment
+    assert await command._check_can_run(admin) is True
+
+
+@pytest.mark.parametrize(
+    ("command", "user_id"), [(PricingCog.sync_prices, 1001), (PricingCog.new_price, 1002)]
+)
+async def test_heavy_command_rejects_a_second_call_within_the_cooldown_window(
+    command: app_commands.Command[PricingCog, ..., None], user_id: int
+) -> None:
+    """A second invocation at the same moment (same `interaction.created_at`) must be
+    throttled — `app_commands.checks.cooldown` keys entirely off that timestamp, not
+    real wall-clock time, so this is deterministic without any sleeping/mocking.
+
+    Each command/test pair gets its own `user_id` (deliberately distinct from every
+    other cooldown test in this module) — the cooldown mapping is a closure captured
+    once when the decorator runs at class-definition time, so it persists across
+    tests in the same process; reusing a `user_id` would leak state between tests.
+    """
+    interaction = _admin_interaction(user_id)
+
+    for check in command.checks:
+        assert await discord.utils.maybe_coroutine(check, interaction) is True
+
+    with pytest.raises(app_commands.CommandOnCooldown):
+        for check in command.checks:
+            await discord.utils.maybe_coroutine(check, interaction)
+
+
+@pytest.mark.parametrize(
+    ("command", "user_id"), [(PricingCog.sync_prices, 2001), (PricingCog.new_price, 2002)]
+)
+async def test_heavy_command_allows_a_second_call_after_the_window(
+    command: app_commands.Command[PricingCog, ..., None], user_id: int
+) -> None:
+    first = _admin_interaction(user_id)
+    for check in command.checks:
+        assert await discord.utils.maybe_coroutine(check, first) is True
+
+    later = _admin_interaction(user_id)
+    later.created_at = datetime(2026, 8, 5, 12, 1, 0, tzinfo=UTC)  # +60s, well past the 15s window
+    for check in command.checks:
+        assert await discord.utils.maybe_coroutine(check, later) is True

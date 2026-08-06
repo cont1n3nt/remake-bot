@@ -32,10 +32,11 @@ class TagCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         channel_name = getattr(interaction.channel, "name", None) or "тикет"
+        guild_name = getattr(interaction.guild, "name", None) or "сервера"
         embed = self._embeds.info(
             "🔔 Уведомление по тикету",
-            f"Привет! Загляните, пожалуйста, в тикет **#{channel_name}** и ответьте, "
-            "когда будет время.",
+            f"Привет! Загляните, пожалуйста, в тикет **#{channel_name}** на сервере "
+            f"**{guild_name}** и ответьте, когда будет время.",
         )
         view = _ticket_link_view(interaction.guild_id, interaction.channel_id)
 

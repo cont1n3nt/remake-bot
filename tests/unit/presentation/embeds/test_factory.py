@@ -25,12 +25,35 @@ def factory() -> EmbedFactory:
 
 def test_footer_format(factory: EmbedFactory) -> None:
     embed = factory.info("Заголовок")
-    assert embed.footer.text == "Stalzone • 31.07.2026 21:45 (GMT+3)"
+    assert embed.footer.text == "Клондайк Шёпота • 31.07.2026 21:45 (GMT+3)"
 
 
 def test_author_uses_platform_name(factory: EmbedFactory) -> None:
     embed = factory.info("Заголовок")
-    assert embed.author.name == "Stalzone"
+    assert embed.author.name == "Клондайк Шёпота"
+
+
+def test_ticket_embed_uses_tickets_kind(factory: EmbedFactory) -> None:
+    embed = factory.ticket(TicketKind.SELL_ITEMS)
+    assert embed.author.name == "Заявки"
+    assert embed.footer.text == "Клондайк Шёпота | Заявки • 31.07.2026 21:45 (GMT+3)"
+
+
+def test_audit_embed_uses_logs_kind(factory: EmbedFactory) -> None:
+    event = AuditEvent(
+        user_id=1,
+        user_display="@x",
+        channel_display="#c",
+        command="/profile",
+        arguments="",
+        result="Успешно",
+        duration_seconds=0.1,
+        trace_id="deadbeef",
+        occurred_at=NOW,
+    )
+    embed = factory.audit(event)
+    assert embed.author.name == "Логи"
+    assert embed.footer.text == "Клондайк Шёпота | Логи • 31.07.2026 21:45 (GMT+3)"
 
 
 @pytest.mark.parametrize(
@@ -95,10 +118,10 @@ def test_audit_embed_fields(factory: EmbedFactory) -> None:
     assert embed.title == "🧾 Использование команды"
     assert embed.color is not None
     assert embed.color.value == Color.AUDIT
-    assert embed.footer.text == "Stalzone • 31.07.2026 21:45 (GMT+3)"
+    assert embed.footer.text == "Клондайк Шёпота | Логи • 31.07.2026 21:45 (GMT+3)"
 
     values = {field.name: field.value for field in embed.fields}
-    assert values["👤 Пользователь"] == "@scary (ID: 123)"
+    assert values["👤 Пользователь"] == "<@123> (@scary, ID: 123)"
     assert values["📍 Канал"] == "#ticket-0042"
     assert values["⌨️ Команда"] == "/add"
     assert values["⏱️ Длительность"] == "0.84 с"
@@ -136,3 +159,31 @@ class TestEnforceLimits:
             embed.add_field(name=f"F{i}", value="x" * 1024, inline=False)
         enforce_limits(embed)
         assert len(embed) <= 6000
+
+    def test_clamps_field_value_to_1024_even_when_total_is_small(
+        self, factory: EmbedFactory
+    ) -> None:
+        embed = factory.info("Заголовок")
+        embed.add_field(name="F", value="x" * 1200, inline=False)
+        enforce_limits(embed)
+        assert embed.fields[0].value is not None
+        assert len(embed.fields[0].value) <= 1024
+
+    def test_clamps_field_name_to_256_even_when_total_is_small(self, factory: EmbedFactory) -> None:
+        embed = factory.info("Заголовок")
+        embed.add_field(name="N" * 300, value="v", inline=False)
+        enforce_limits(embed)
+        assert embed.fields[0].name is not None
+        assert len(embed.fields[0].name) <= 256
+
+    def test_trim_loop_terminates_when_values_are_already_at_the_placeholder(
+        self, factory: EmbedFactory
+    ) -> None:
+        embed = factory.info("Заголовок")
+        for _ in range(25):
+            embed.add_field(name="N" * 256, value="—", inline=False)
+        # Must return promptly instead of looping forever: every field's
+        # value is already the placeholder, so the trim loop cannot shrink
+        # them any further and must give up rather than spin.
+        enforce_limits(embed)
+        assert all(field.value == "—" for field in embed.fields)

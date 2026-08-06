@@ -33,3 +33,10 @@ class TransactionRegistrationResult:
     formula_pending: bool
     """`True` if `F`/`G` never resolved even after the `copyPaste` fallback —
     the caller should show `coins`/`xp` as pending rather than as final."""
+    replayed: bool = False
+    """`True` if this call didn't write anything — the idempotency key was
+    already recorded by an earlier (or concurrently racing) call with the
+    same key, so `record` is that earlier write, replayed back. Callers
+    that trigger their own post-confirm side effects (announcements,
+    downstream syncs) should skip them on a replay: the winning call
+    already ran them (CLUSTER-1/TICK-1, PLAN.md §7.4)."""

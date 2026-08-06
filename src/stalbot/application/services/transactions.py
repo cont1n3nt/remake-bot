@@ -8,9 +8,11 @@ referral-count formula is a plain `COUNTIF($H:$H; nick)` — writing the
 referrer on every deal would inflate it).
 """
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from datetime import datetime
+from decimal import Decimal
 
 from stalbot.application.dto.transaction_request import (
     AddTransactionRequest,
@@ -22,6 +24,7 @@ from stalbot.domain.clock import format_datetime
 from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType
 from stalbot.domain.errors import SheetsWriteConflictError
+from stalbot.domain.money import round_for_storage
 from stalbot.domain.nick import normalize_nick
 from stalbot.infrastructure.cache.repositories.idempotency import IdempotencyRepository
 from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
@@ -68,9 +71,22 @@ class TransactionService:
         self._idempotency = idempotency
         self._cache_sync = cache_sync
         self._clock = clock
+        #: Serializes the whole find-row -> write -> verify -> record path
+        #: (CLUSTER-1): the idempotency check and `_find_free_row` are each
+        #: racy on their own, and this is the single instance shared by
+        #: `/add` and ticket confirmation, so one coarse lock closes the
+        #: concurrent-double-write window for every caller at once. Write
+        #: throughput here is inherently low (admin actions), so serializing
+        #: the whole method is cheap insurance, not a bottleneck.
+        self._lock = asyncio.Lock()
 
     async def register(self, request: AddTransactionRequest) -> TransactionRegistrationResult:
         """Record one deal, idempotently.
+
+        The entire method runs under a single lock (see `__init__`) so two
+        concurrent calls — a double-clicked confirm button, two admins
+        racing `/add` — can never both pass the idempotency replay check or
+        both compute the same "free" row before either has written.
 
         Args:
             request: What to write and who it is for.
@@ -83,6 +99,12 @@ class TransactionService:
             SheetsWriteConflictError: If no free row could be found, or the
                 read-back verification of the raw columns did not match.
         """
+        async with self._lock:
+            return await self._register_locked(request)
+
+    async def _register_locked(
+        self, request: AddTransactionRequest
+    ) -> TransactionRegistrationResult:
         replayed = await self._replay_if_seen(request.idempotency_key)
         if replayed is not None:
             return replayed
@@ -90,12 +112,15 @@ class TransactionService:
         nick = normalize_nick(request.nick)
         referrer = normalize_nick(request.referrer_nick) if request.referrer_nick else None
         now = self._clock.now()
+        stored_amount = round_for_storage(request.amount)
 
         target_row = await self._find_free_row()
         is_first_transaction = len(await self._transactions.list_by_nick(nick)) == 0
         write_referrer = is_first_transaction and request.referrer_nick is not None
 
-        await self._write_raw_columns(request, target_row, now, write_referrer=write_referrer)
+        await self._write_raw_columns(
+            request, stored_amount, target_row, now, write_referrer=write_referrer
+        )
         coins, xp, formula_pending = await self._await_formulas(target_row)
 
         await self._idempotency.record(
@@ -108,7 +133,7 @@ class TransactionService:
             nick=nick,
             nick_display=request.nick,
             deal_type=request.deal_type,
-            amount=request.amount,
+            amount=stored_amount,
             coins=coins,
             xp=xp,
             referrer=referrer if write_referrer else None,
@@ -137,7 +162,7 @@ class TransactionService:
         if cached_record is None:
             return None  # cache was cleared/never synced back; fall through and write again
         return TransactionRegistrationResult(
-            record=cached_record, discord_bound=False, formula_pending=False
+            record=cached_record, discord_bound=False, formula_pending=False, replayed=True
         )
 
     async def _find_free_row(self) -> int:
@@ -154,7 +179,13 @@ class TransactionService:
         )
 
     async def _write_raw_columns(
-        self, request: AddTransactionRequest, row: int, now: datetime, *, write_referrer: bool
+        self,
+        request: AddTransactionRequest,
+        stored_amount: Decimal,
+        row: int,
+        now: datetime,
+        *,
+        write_referrer: bool,
     ) -> None:
         values_range = a1_range(DATABASE_SHEET, "A", row, "E", row)
         data: dict[str, CellGrid] = {
@@ -164,7 +195,7 @@ class TransactionService:
                     request.nick,
                     request.deal_type is DealType.PURCHASE,
                     request.deal_type is DealType.SALE,
-                    int(request.amount),
+                    int(stored_amount),
                 ]
             ]
         }

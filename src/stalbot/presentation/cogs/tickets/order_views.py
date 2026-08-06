@@ -13,13 +13,15 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 import discord
 
+from stalbot.application.services.boost_orders import MAX_ORDER_LINES
 from stalbot.domain.entities.item import Item
 from stalbot.presentation.embeds.factory import EmbedFactory
+from stalbot.presentation.views.base import AuthorLockedView
 
 _ButtonHandler = Callable[[discord.Interaction], Awaitable[None]]
 _SelectHandler = Callable[[discord.Interaction, int], Awaitable[None]]
 _PageChangeHandler = Callable[
-    [discord.Interaction, Sequence[Item], frozenset[int]], Awaitable[None]
+    [discord.Interaction, Sequence[Item], frozenset[int]], Awaitable[frozenset[int]]
 ]
 
 _PAGE_SIZE = 25
@@ -60,8 +62,9 @@ class OrderEditorView(discord.ui.View):
             on_input_qty: `🔢 Ввести количество` — opens the quantity modal.
             on_delete: `🗑️ Удалить` — removes the active line.
             on_add: `➕ Добавить бусты` — opens the multiselect picker.
-            on_confirm: `✅ Подтвердить заказ` (admin-only, enforced by the
-                handler, not the view).
+            on_confirm: `✅ Подтвердить` — any participant (author or admin,
+                enforced by the handler, not the view); returns to the
+                read-only summary embed (`OrderSummaryView`), UX #1.
         """
         super().__init__(timeout=None)
         self.add_item(_LineSelect(options, on_select))
@@ -80,10 +83,46 @@ class OrderEditorView(discord.ui.View):
         self.add_item(_Button("➕ Добавить бусты", "order:add", on_add, row=2))
         self.add_item(
             _Button(
-                "✅ Подтвердить заказ",
+                "✅ Подтвердить",
                 "order:confirm",
                 on_confirm,
                 row=2,
+                style=discord.ButtonStyle.success,
+            )
+        )
+
+
+class OrderSummaryView(discord.ui.View):
+    """The read-only order summary's persistent controls (PLAN.md §11.6, UX #1).
+
+    Shown first after the order form is submitted, and again once the
+    editor's "✅ Подтвердить" returns to it.
+    """
+
+    def __init__(
+        self,
+        *,
+        on_edit: _ButtonHandler,
+        on_complete: _ButtonHandler,
+    ) -> None:
+        """Build the view.
+
+        Args:
+            on_edit: `✏️ Редактировать` — any participant (author or
+                admin); opens the interactive editor (`OrderEditorView`).
+            on_complete: `🏁 Завершить заказ` (admin-only, enforced by the
+                handler, not the view) — registers the deal, same
+                `AmountModal` flow the editor's confirm used to trigger
+                directly.
+        """
+        super().__init__(timeout=None)
+        self.add_item(_Button("✏️ Редактировать", "order:edit", on_edit, row=0))
+        self.add_item(
+            _Button(
+                "🏁 Завершить заказ",
+                "order:complete",
+                on_complete,
+                row=0,
                 style=discord.ButtonStyle.success,
             )
         )
@@ -121,7 +160,7 @@ class _Button(discord.ui.Button["OrderEditorView"]):
         await self._handler(interaction)
 
 
-class BoostMultiSelectView(discord.ui.View):
+class BoostMultiSelectView(AuthorLockedView):
     """Ephemeral, paginated `➕ Добавить бусты` picker (PLAN.md §11.6).
 
     Not persistent: it lives inside one ephemeral response, locked to the
@@ -158,17 +197,13 @@ class BoostMultiSelectView(discord.ui.View):
                 (PLAN.md §11.6) instead of just its name.
             timeout: Seconds before the view disables itself.
         """
-        super().__init__(timeout=timeout)
+        super().__init__(author_id=author_id, timeout=timeout)
         self._items = items
         self._selected_ids = set(selected_ids)
-        self._author_id = author_id
         self._embeds = embeds
         self._on_change = on_change
         self._quantities = dict(quantities or {})
         self._page = 0
-        #: Set by the caller after sending, so `on_timeout` can disable the
-        #: view on the original message — discord.py does not track this.
-        self.message: discord.Message | None = None
 
         self._select: discord.ui.Select[BoostMultiSelectView] = discord.ui.Select(
             placeholder="Выберите бусты…"
@@ -182,18 +217,21 @@ class BoostMultiSelectView(discord.ui.View):
         """Total number of pages (at least 1, even for an empty catalog)."""
         return max(1, -(-len(self._items) // _PAGE_SIZE))
 
-    def status_embed(self) -> discord.Embed:
-        """The "N positions selected" embed shown alongside the picker."""
-        return self._embeds.info(
-            "➕ Добавить бусты", f"Выбрано: {len(self._selected_ids)} позиций."
-        )
+    def status_embed(self, rejected_count: int = 0) -> discord.Embed:
+        """The "N positions selected" embed shown alongside the picker.
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Reject interactions from anyone but the original author."""
-        if interaction.user.id != self._author_id:
-            await interaction.response.send_message("Эта кнопка не для вас.", ephemeral=True)
-            return False
-        return True
+        Args:
+            rejected_count: Newly-checked items that were NOT added because
+                the draft was already full (TICK-5) — appended as a warning
+                line when non-zero.
+        """
+        lines = [f"Выбрано: {len(self._selected_ids)} позиций."]
+        if rejected_count:
+            lines.append(
+                f"⚠️ Не добавлено: {rejected_count} — в заказе уже максимум "
+                f"{MAX_ORDER_LINES} позиций."
+            )
+        return self._embeds.info("➕ Добавить бусты", "\n".join(lines))
 
     @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary, row=1)
     async def previous_page(
@@ -213,14 +251,6 @@ class BoostMultiSelectView(discord.ui.View):
         self._sync()
         await interaction.response.edit_message(embed=self.status_embed(), view=self)
 
-    async def on_timeout(self) -> None:
-        """Disable every control on the original message once the view expires."""
-        for item in self.children:
-            if isinstance(item, discord.ui.Button | discord.ui.Select):
-                item.disabled = True
-        if self.message is not None:
-            await self.message.edit(view=self)
-
     def _current_page_items(self) -> Sequence[Item]:
         start = self._page * _PAGE_SIZE
         return self._items[start : start + _PAGE_SIZE]
@@ -235,8 +265,21 @@ class BoostMultiSelectView(discord.ui.View):
         for item_id in chosen_ids:
             self._quantities.setdefault(item_id, 1)
         self._sync()
-        await self._on_change(interaction, page_items, chosen_ids)
+        # TICK-9: ack this interaction with the optimistic state right away
+        # — `_on_change` below can be slow (it posts/edits the separate,
+        # public order-editor message), and an un-acked interaction expires
+        # after ~3s. Any correction it reports (TICK-5's rejected ids) is
+        # applied via a second, follow-up edit instead of blocking the ack.
         await interaction.response.edit_message(embed=self.status_embed(), view=self)
+        rejected = await self._on_change(interaction, page_items, chosen_ids)
+        if rejected:
+            self._selected_ids -= rejected
+            for item_id in rejected:
+                self._quantities.pop(item_id, None)
+            self._sync()
+            await interaction.edit_original_response(
+                embed=self.status_embed(len(rejected)), view=self
+            )
 
     def _sync(self) -> None:
         page_items = self._current_page_items()

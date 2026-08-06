@@ -4,7 +4,6 @@ PLAN.md §10.10, §10.11.
 """
 
 from collections.abc import Sequence
-from datetime import date
 from typing import Final
 
 import discord
@@ -15,8 +14,8 @@ from stalbot.application.dto.log_entry import LogEntry
 from stalbot.application.dto.period_report import PeriodReport, PlayerPeriodStats
 from stalbot.application.services.stats import StatsService
 from stalbot.domain.clock import DateRange, SystemClock, format_date, format_datetime, parse_date
+from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType
-from stalbot.domain.errors import InvalidPeriodError
 from stalbot.domain.money import format_amount
 from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
 from stalbot.presentation.checks import admin_only
@@ -27,7 +26,7 @@ from stalbot.presentation.views.paginated_embed import PaginatedEmbedView
 _SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━"
 _PLAYERS_PAGE_SIZE: Final = 20
 _LOGS_PAGE_SIZE: Final = 25
-_MAX_WEEK_DAYS: Final = 31
+_DEALS_PAGE_SIZE: Final = 20
 
 _MONTH_NAMES: Final[dict[int, str]] = {
     1: "Январь",
@@ -85,7 +84,7 @@ class StatsCog(commands.Cog):
         if len(pages) == 1:
             await interaction.followup.send(embed=pages[0], ephemeral=True)
             return
-        view = LogsPagerView(pages=pages, author_id=interaction.user.id)
+        view = LogsPagerView(pages=pages, author_id=interaction.user.id, embeds=self._embeds)
         message = await interaction.followup.send(
             embed=view.current, view=view, ephemeral=True, wait=True
         )
@@ -110,8 +109,7 @@ class StatsCog(commands.Cog):
         """Handle `/week`: aggregate every deal within an explicit date range."""
         await interaction.response.defer(ephemeral=True)
         start, end = parse_date(начало), parse_date(конец)
-        _validate_week_range(start, end, today=self._clock.today())
-        report = await self._stats.report(DateRange.week(start, end))
+        report = await self._stats.report(DateRange.week(start, end, today=self._clock.today()))
         title = f"📊 Статистика с {format_date(start)} по {format_date(end)}"
         await self._send_report(interaction, title=title, report=report)
 
@@ -160,14 +158,6 @@ class StatsCog(commands.Cog):
         return pages
 
 
-def _validate_week_range(start: date, end: date, *, today: date) -> None:
-    """Enforce `/week`'s range rules (PLAN.md §10.11): `end >= start` is `DateRange`'s job."""
-    if end > today:
-        raise InvalidPeriodError("конец периода не может быть в будущем")
-    if (end - start).days + 1 > _MAX_WEEK_DAYS:
-        raise InvalidPeriodError(f"диапазон не может превышать {_MAX_WEEK_DAYS} дней")
-
-
 def _format_log_line(entry: LogEntry) -> str:
     tx = entry.transaction
     tag = f"<@{entry.discord_id}>" if entry.discord_id is not None else "—"
@@ -188,7 +178,32 @@ def _render_period_pages(
         body = ["```", *table_lines, "```", _SEPARATOR, *footer]
         page_title = title if len(chunks) == 1 else f"{title} (стр. {index}/{len(chunks)})"
         pages.append(embeds.info(page_title, "\n".join(body)))
+    pages.extend(_render_deal_pages(embeds, title, report.deals))
     return pages
+
+
+def _render_deal_pages(
+    embeds: EmbedFactory, title: str, deals: Sequence[TransactionRecord]
+) -> list[discord.Embed]:
+    """Render the individual-deal listing that follows the aggregate pages (UX #11)."""
+    if not deals:
+        return []
+    chunks = _chunk(deals, _DEALS_PAGE_SIZE)
+    pages: list[discord.Embed] = []
+    for index, chunk in enumerate(chunks, start=1):
+        lines = [_format_deal_line(deal) for deal in chunk]
+        page_title = f"🧾 Сделки — {title}"
+        if len(chunks) > 1:
+            page_title += f" (стр. {index}/{len(chunks)})"
+        pages.append(embeds.info(page_title, "\n".join(lines)))
+    return pages
+
+
+def _format_deal_line(deal: TransactionRecord) -> str:
+    return (
+        f"{format_datetime(deal.at)} │ {deal.nick_display} │ "
+        f"{_DEAL_LABELS[deal.deal_type]} │ {format_amount(deal.amount)}"
+    )
 
 
 def _format_player_line(player: PlayerPeriodStats) -> str:

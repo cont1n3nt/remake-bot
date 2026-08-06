@@ -2,6 +2,7 @@
 
 import json
 import logging
+import logging.handlers
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -48,3 +49,19 @@ def test_configure_logging_creates_parent_directories(tmp_path: Path) -> None:
     log_file = tmp_path / "nested" / "deeper" / "stalbot.log"
     configure_logging(log_level="INFO", log_file=log_file)
     assert log_file.parent.is_dir()
+
+
+def test_reconfiguring_closes_the_previous_file_handler(tmp_path: Path) -> None:
+    """INFRA2-9: `RotatingFileHandler` holds an open file descriptor —
+    reassigning `root.handlers` without closing the old one first would leak
+    it on every reconfiguration."""
+    configure_logging(log_level="INFO", log_file=tmp_path / "stalbot.log")
+    first_file_handler = next(
+        handler
+        for handler in logging.getLogger().handlers
+        if isinstance(handler, logging.handlers.RotatingFileHandler)
+    )
+
+    configure_logging(log_level="INFO", log_file=tmp_path / "stalbot.log")
+
+    assert first_file_handler.stream is None  # `FileHandler.close()` clears it

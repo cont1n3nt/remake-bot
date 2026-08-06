@@ -1,5 +1,6 @@
 """Tests for `stalbot.presentation.bot` that do not require a live connection."""
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import pytest
 from stalbot.application.services.audit import AuditService
 from stalbot.config.settings import Settings
 from stalbot.infrastructure.cache.db import CacheDb
+from stalbot.infrastructure.logging.trace import current_trace_id
 from stalbot.infrastructure.sheets.client import SheetsClient
 from stalbot.presentation.bot import StalbotBot, _channel_display, _format_arguments
 from stalbot.presentation.embeds.factory import EmbedFactory
@@ -138,6 +140,60 @@ async def test_close_stops_audit_service(monkeypatch: pytest.MonkeyPatch) -> Non
     audit_service.stop.assert_awaited_once()
 
 
+async def test_close_awaits_a_cancelled_loops_task_before_closing_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRES-9: `close()` must not close `cache_db` while a loop iteration is still in flight."""
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    monkeypatch.setattr(discord.ext.commands.Bot, "close", AsyncMock())
+
+    order: list[str] = []
+
+    async def in_flight_iteration() -> None:
+        await asyncio.sleep(0)  # simulate the loop still unwinding after cancel()
+        order.append("loop_task_finished")
+
+    task = asyncio.create_task(in_flight_iteration())
+    fake_loop = MagicMock()
+    fake_loop.get_task = MagicMock(return_value=task)
+    bot._users_sync_loop = fake_loop
+
+    async def tracking_cache_close() -> None:
+        order.append("cache_closed")
+
+    monkeypatch.setattr(bot.cache_db, "close", tracking_cache_close)
+
+    await bot.close()
+
+    assert order == ["loop_task_finished", "cache_closed"]
+    fake_loop.cancel.assert_called_once()
+
+
+async def test_close_still_closes_the_cache_when_a_loop_task_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`return_exceptions=True` must swallow a loop task's own failure, not propagate it."""
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    monkeypatch.setattr(discord.ext.commands.Bot, "close", AsyncMock())
+
+    async def failing_iteration() -> None:
+        raise RuntimeError("boom")
+
+    task = asyncio.create_task(failing_iteration())
+    fake_loop = MagicMock()
+    fake_loop.get_task = MagicMock(return_value=task)
+    bot._users_sync_loop = fake_loop
+
+    cache_close = AsyncMock()
+    monkeypatch.setattr(bot.cache_db, "close", cache_close)
+
+    await bot.close()  # must not raise despite the loop task's RuntimeError
+
+    cache_close.assert_awaited_once()
+
+
 async def test_setup_cache_runs_startup_sync_before_starting_loops(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -224,6 +280,89 @@ async def test_run_progression_poll_is_a_no_op_before_progression_service_exists
     bot = _bot(settings)
 
     await bot._run_progression_poll()  # must not raise
+
+
+async def test_run_users_sync_gets_a_fresh_trace_id_each_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """INFRA2-3: a `tasks.loop` runs as one long-lived `asyncio.Task` for the
+    whole process — without stamping a fresh trace id every tick, every log
+    line from every future tick would share whatever the very first tick
+    generated."""
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    cache_sync = MagicMock()
+    cache_sync.sync_users_and_transactions = AsyncMock(return_value=SimpleNamespace(warnings=()))
+    bot.cache_sync = cache_sync
+    bot._send_warnings = AsyncMock()  # type: ignore[method-assign]
+
+    await bot._run_users_sync()
+    first = current_trace_id()
+    await bot._run_users_sync()
+    second = current_trace_id()
+
+    assert first != second
+
+
+async def test_run_items_sync_gets_a_fresh_trace_id_each_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    cache_sync = MagicMock()
+    cache_sync.sync_items = AsyncMock()
+    bot.cache_sync = cache_sync
+
+    await bot._run_items_sync()
+    first = current_trace_id()
+    await bot._run_items_sync()
+    second = current_trace_id()
+
+    assert first != second
+
+
+async def test_run_progression_poll_gets_a_fresh_trace_id_each_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    progression_service = MagicMock()
+    progression_service.sync = AsyncMock(return_value=[])
+    bot.progression_service = progression_service
+
+    await bot._run_progression_poll()
+    first = current_trace_id()
+    await bot._run_progression_poll()
+    second = current_trace_id()
+
+    assert first != second
+
+
+async def test_run_metrics_log_gets_a_fresh_trace_id_each_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    health_service = MagicMock()
+    health_service.snapshot = AsyncMock(
+        return_value=SimpleNamespace(
+            sheets_read_requests=0,
+            sheets_write_requests=0,
+            cache_hit_rate=None,
+            cache_age_seconds=None,
+            audit_queue_size=0,
+            ocr_sample_count=0,
+            ocr_confirmed_sample_count=0,
+        )
+    )
+    bot.health_service = health_service
+
+    await bot._run_metrics_log()
+    first = current_trace_id()
+    await bot._run_metrics_log()
+    second = current_trace_id()
+
+    assert first != second
 
 
 async def test_on_member_update_syncs_booster_flag_on_transition(

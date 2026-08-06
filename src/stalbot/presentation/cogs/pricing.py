@@ -28,6 +28,12 @@ from stalbot.presentation.views.confirm import ConfirmView
 _MAX_IMPORT_FILE_BYTES: Final = 1_000_000
 _NOT_FOUND_PREVIEW_LIMIT: Final = 10
 
+#: SEC-5: defense-in-depth per-admin cooldown on the two commands that scan
+#: every price sheet / parse-and-apply a bulk import — not a response to any
+#: observed abuse, just a cheap guard against an accidental double-click or
+#: a careless script hammering an already-privileged session.
+_HEAVY_COMMAND_COOLDOWN_SECONDS: Final = 15.0
+
 
 class PricingCog(commands.Cog):
     """`/setprice`, `/setboost`, `/sync_prices`, `/new_price`."""
@@ -89,28 +95,40 @@ class PricingCog(commands.Cog):
     @app_commands.command(
         name="sync_prices", description="🛡️ [Админ] 🔄 Синхронизировать цены с прайс-листов"
     )
+    @app_commands.checks.cooldown(1, _HEAVY_COMMAND_COOLDOWN_SECONDS)
     @admin_only()
     async def sync_prices(self, interaction: discord.Interaction) -> None:
-        """Handle `/sync_prices`: pull every price sheet into the item database."""
+        """Handle `/sync_prices`: push item-database prices onto every price sheet (UX #7)."""
         await interaction.response.defer(ephemeral=True)
         report = await self._pricing.sync_prices()
 
-        lines = [
-            f"✅ Обновлено: {len(report.updated)}",
-            f"➖ Без изменений: {report.unchanged_count}",
-        ]
+        lines = [f"➖ Без изменений: {report.unchanged_count}"]
         if report.not_found:
             names = ", ".join(report.not_found[:_NOT_FOUND_PREVIEW_LIMIT])
             extra = len(report.not_found) - _NOT_FOUND_PREVIEW_LIMIT
             if extra > 0:
                 names += f" и ещё {extra}"
             lines.append(f"⚠️ Не найдено в базе: {names}")
+        if report.unparseable:
+            names = ", ".join(report.unparseable[:_NOT_FOUND_PREVIEW_LIMIT])
+            extra = len(report.unparseable) - _NOT_FOUND_PREVIEW_LIMIT
+            if extra > 0:
+                names += f" и ещё {extra}"
+            lines.append(f"❌ Была нечитаемая цена в ячейке (перезаписано): {names}")
 
-        embed = self._embeds.success("🔄 Синхронизация цен", "\n".join(lines))
+        if report.updated:
+            catalog = await self._items.all()
+            diff_text = render_price_change_report(report.updated, catalog)
+            description = f"{diff_text}\n\n" + "\n".join(lines)
+        else:
+            description = "\n".join(lines)
+
+        embed = self._embeds.success("🔄 Синхронизация цен", description)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="new_price", description="🛡️ [Админ] 📥 Импортировать цены из TXT")
     @app_commands.describe(файл="TXT-файл прайс-листа (формат — как в /give_price)")
+    @app_commands.checks.cooldown(1, _HEAVY_COMMAND_COOLDOWN_SECONDS)
     @admin_only()
     async def new_price(self, interaction: discord.Interaction, файл: discord.Attachment) -> None:
         """Handle `/new_price`: parse, validate, show a diff, then apply on confirmation."""

@@ -149,6 +149,13 @@ EVALUATE_AMOUNT_ERROR_CASES: list[str] = [
     "-" * 40 + "1",  # 40 nested UnaryOp nodes -> exceeds the AST depth guard
     "x" * 300,
     "lambda: 1",
+    # SEC-1: Python's native grammar recognizes scientific notation as a
+    # float literal, unlike parse_amount's regex-based path — a big enough
+    # one overflows silently to `inf`/`-inf` instead of raising SyntaxError.
+    "1e400",
+    "1e309",
+    "1e400 - 1e400",
+    "-1e400",
 ]
 
 
@@ -156,6 +163,63 @@ EVALUATE_AMOUNT_ERROR_CASES: list[str] = [
 def test_evaluate_amount_rejects_invalid_input(expression: str) -> None:
     with pytest.raises(AmountParseError):
         evaluate_amount(expression)
+
+
+# --- SEC-1: non-finite/overflowing results must raise, never leak an -------
+# --- internal decimal.DecimalException past the domain boundary. ----------
+
+
+def test_evaluate_amount_rejects_scientific_notation_that_overflows_to_infinity() -> None:
+    with pytest.raises(AmountParseError):
+        evaluate_amount("1e400")
+
+
+def test_evaluate_amount_allows_scientific_notation_that_stays_finite() -> None:
+    """Only non-finite results are rejected — scientific notation itself is fine."""
+    assert evaluate_amount("1e10") == Decimal("1e10")
+
+
+def test_evaluate_amount_rejects_a_decimal_overflow_from_legitimate_arithmetic() -> None:
+    """A handful of nested `** 12` terms, each within `_MAX_POWER_EXPONENT`, can
+    still overflow the context's exponent range — must not leak `decimal.Overflow`."""
+    expression = "2"
+    for _ in range(7):
+        expression = f"({expression}**12)"
+    with pytest.raises(AmountParseError):
+        evaluate_amount(expression)
+
+
+# --- DOM-1: no float round-trip for high-precision fractional amounts -------
+
+
+def test_evaluate_amount_preserves_precision_above_float64_range() -> None:
+    """A fractional literal Python's float grammar cannot round-trip exactly."""
+    assert evaluate_amount("999999999999999.99") == Decimal("999999999999999.99")
+
+
+def test_evaluate_amount_preserves_precision_in_arithmetic() -> None:
+    assert evaluate_amount("999999999999999.99 + 0.01") == Decimal("1000000000000000.00")
+
+
+def test_evaluate_amount_fractional_multiplier_stays_exact() -> None:
+    assert evaluate_amount("1.5кк * 3 - 250к") == Decimal(4_250_000)
+
+
+# --- DOM-3: no silent rounding above the ambient 28-digit decimal context ---
+
+
+def test_parse_amount_preserves_precision_above_28_significant_digits() -> None:
+    """The default decimal context caps arithmetic at 28 sig figs; a multiplier
+    multiplication would otherwise silently round a longer amount."""
+    assert parse_amount("123456789012345678901234567.89ккк") == Decimal(
+        "123456789012345678901234567890000000.00"
+    )
+
+
+def test_evaluate_amount_preserves_precision_above_28_significant_digits() -> None:
+    assert evaluate_amount("123456789012345678901234567890 + 1") == Decimal(
+        "123456789012345678901234567891"
+    )
 
 
 # --- format_amount / format_compact -----------------------------------
@@ -196,6 +260,21 @@ def test_format_compact(value: Decimal, expected: str) -> None:
 
 def test_format_compact_negative() -> None:
     assert format_compact(Decimal(-1_500_000)) == "-1.5 кк"
+
+
+# --- DOM-4: escalate to the next unit when rounding reaches 1000 -----------
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (Decimal(999_950), "1 кк"),  # 999.95к rounds to 1000.0к -> escalate, not "1000 к"
+        (Decimal(999_949), "999.9 к"),  # just below the boundary: no escalation
+        (Decimal(999_950_000), "1 ккк"),  # same boundary one tier up: кк -> ккк
+    ],
+)
+def test_format_compact_escalates_unit_on_rounding_boundary(value: Decimal, expected: str) -> None:
+    assert format_compact(value) == expected
 
 
 # --- property: parse_amount(format_amount(x)) == x ----------------------

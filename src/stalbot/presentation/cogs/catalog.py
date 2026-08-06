@@ -20,7 +20,8 @@ from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.presentation.autocomplete import item_choices
 from stalbot.presentation.checks import admin_only
-from stalbot.presentation.embeds.factory import EmbedFactory
+from stalbot.presentation.embeds.factory import EmbedFactory, enforce_limits
+from stalbot.presentation.views.base import AuthorLockedView
 
 _CATEGORY_LABEL: Final[dict[ItemCategory, str]] = {
     ItemCategory.RESOURCE: "📦 Ресурс",
@@ -161,19 +162,28 @@ class CatalogCog(commands.Cog):
         chunks = _chunk(items, _PRICE_LIST_PAGE_SIZE) or [()]
         pages: list[discord.Embed] = []
         for index, chunk in enumerate(chunks, start=1):
-            lines = [self._format_price_line(item) for item in chunk] or ["Пока нет предметов."]
             title = "📋 Цены" if len(chunks) == 1 else f"📋 Цены (стр. {index}/{len(chunks)})"
-            pages.append(self._embeds.info(title, "\n".join(lines)))
+            if not chunk:
+                pages.append(self._embeds.info(title, "Пока нет предметов."))
+                continue
+            embed = self._embeds.info(title)
+            for item in chunk:
+                name, value = self._format_price_field(item)
+                embed.add_field(name=name, value=value, inline=True)
+            pages.append(enforce_limits(embed))
         return pages
 
-    def _format_price_line(self, item: Item) -> str:
+    def _format_price_field(self, item: Item) -> tuple[str, str]:
         emoji = self._emojis.resolve(item.emoji) or "•"
-        buy = format_amount(item.price_buy) if item.price_buy is not None else "—"
-        sell = format_amount(item.price_sell) if item.price_sell is not None else "—"
-        return f"{emoji} **{item.name}**\n└ Скуп: {buy} • Продажа: {sell}"
+        lines = []
+        if item.price_buy is not None:
+            lines.append(f"Скуп: {format_amount(item.price_buy)}")
+        if item.price_sell is not None:
+            lines.append(f"Продажа: {format_amount(item.price_sell)}")
+        return f"{emoji} {item.name}", "\n".join(lines) or "—"
 
 
-class _PriceListView(discord.ui.View):
+class _PriceListView(AuthorLockedView):
     """Category toggle + internal pagination for `/price_list` (PLAN.md §10.4)."""
 
     def __init__(
@@ -190,27 +200,16 @@ class _PriceListView(discord.ui.View):
             author_id: The only Discord user id allowed to interact.
             timeout: Seconds before the view disables itself.
         """
-        super().__init__(timeout=timeout)
+        super().__init__(author_id=author_id, timeout=timeout)
         self._pages = pages
-        self._author_id = author_id
         self._category = ItemCategory.RESOURCE
         self._index = 0
-        #: Set by the caller after sending, so `on_timeout` can disable the
-        #: view on the original message — discord.py does not track this.
-        self.message: discord.Message | None = None
         self._sync()
 
     @property
     def current(self) -> discord.Embed:
         """The embed for the current category/page."""
         return self._pages[self._category][self._index]
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Reject interactions from anyone but the original author."""
-        if interaction.user.id != self._author_id:
-            await interaction.response.send_message("Эта кнопка не для вас.", ephemeral=True)
-            return False
-        return True
 
     @discord.ui.button(label="📦 Цены на ресурсы", style=discord.ButtonStyle.primary, row=0)
     async def show_resources(
@@ -245,14 +244,6 @@ class _PriceListView(discord.ui.View):
         """Go forward one page within the current category."""
         self._index = min(len(self._pages[self._category]) - 1, self._index + 1)
         await self._render(interaction)
-
-    async def on_timeout(self) -> None:
-        """Disable every control on the original message once the view expires."""
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-        if self.message is not None:
-            await self.message.edit(view=self)
 
     async def _render(self, interaction: discord.Interaction) -> None:
         self._sync()

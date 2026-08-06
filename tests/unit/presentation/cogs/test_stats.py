@@ -38,6 +38,22 @@ def _player(**overrides: object) -> PlayerPeriodStats:
     return PlayerPeriodStats(**defaults)  # type: ignore[arg-type]
 
 
+def _transaction(**overrides: object) -> TransactionRecord:
+    defaults: dict[str, object] = {
+        "row": 3,
+        "at": datetime(2026, 7, 31, 21, 45, tzinfo=UTC),
+        "nick": NormalizedNick("scaryyyyy"),
+        "nick_display": "Scaryyyyy",
+        "deal_type": DealType.PURCHASE,
+        "amount": Decimal(299_900),
+        "coins": 0,
+        "xp": 0,
+        "referrer": None,
+    }
+    defaults.update(overrides)
+    return TransactionRecord(**defaults)  # type: ignore[arg-type]
+
+
 def _report(players: list[PlayerPeriodStats] | None = None, **overrides: object) -> PeriodReport:
     players = players if players is not None else [_player()]
     defaults: dict[str, object] = {
@@ -154,7 +170,9 @@ async def test_week_sends_report_for_valid_range() -> None:
 
     await _call_week(cog, interaction, начало="25.07.2026", конец="31.07.2026")
 
-    stats.report.assert_awaited_once_with(DateRange.week(date(2026, 7, 25), date(2026, 7, 31)))
+    stats.report.assert_awaited_once_with(
+        DateRange.week(date(2026, 7, 25), date(2026, 7, 31), today=date(2026, 7, 31))
+    )
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "25.07.2026" in (embed.title or "")
     assert "31.07.2026" in (embed.title or "")
@@ -216,6 +234,40 @@ async def test_report_paginates_when_more_than_20_players() -> None:
     kwargs = interaction.followup.send.call_args.kwargs
     assert isinstance(kwargs["view"], PaginatedEmbedView)
     assert "стр. 1/2" in (kwargs["embed"].title or "")
+
+
+async def test_day_report_lists_individual_deals_with_dates() -> None:
+    deals = (
+        _transaction(amount=Decimal(299_900), deal_type=DealType.PURCHASE),
+        _transaction(amount=Decimal(150_000), deal_type=DealType.SALE, nick_display="OtherNick"),
+    )
+    cog, _stats, _tx = _cog(report=_report(deal_count=2, deals=deals))
+    interaction = _interaction()
+
+    await _call_day(cog, interaction)
+
+    kwargs = interaction.followup.send.call_args.kwargs
+    assert isinstance(kwargs["view"], PaginatedEmbedView)
+    deal_pages = [
+        page for page in kwargs["view"]._pages if (page.title or "").startswith("🧾 Сделки")
+    ]
+    assert len(deal_pages) == 1
+    body = deal_pages[0].description or ""
+    assert "01.08.2026 00:45" in body  # 21:45 UTC == 00:45 GMT+3 the next day
+    assert "Scaryyyyy" in body
+    assert "OtherNick" in body
+    assert "299 900" in body.replace(" ", " ")
+
+
+async def test_day_report_has_no_deal_page_when_period_had_no_deals() -> None:
+    cog, _stats, _tx = _cog(report=_report(deal_count=1))
+    interaction = _interaction()
+
+    await _call_day(cog, interaction)
+
+    kwargs = interaction.followup.send.call_args.kwargs
+    assert "view" not in kwargs
+    assert "🧾 Сделки" not in (kwargs["embed"].title or "")
 
 
 async def test_logs_sends_pager_view() -> None:

@@ -17,11 +17,13 @@ from stalbot.domain.clock import format_datetime
 from stalbot.domain.entities.item import Item
 from stalbot.domain.enums import ItemCategory
 from stalbot.domain.errors import DuplicateItemError, ItemNotFoundError
+from stalbot.domain.money import round_for_storage
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
 from stalbot.infrastructure.cache.repositories.items import (
     ItemsCacheRepository,
     normalize_item_name,
 )
+from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
 from stalbot.infrastructure.cache.sync import parse_items_block
 from stalbot.infrastructure.sheets.a1 import a1_range
 from stalbot.infrastructure.sheets.client import SheetsClient
@@ -40,6 +42,7 @@ class CatalogService:
         sheets: SheetsClient,
         items: ItemsCacheRepository,
         boost_order_lines: BoostOrderLinesRepository,
+        ticket_sessions: TicketSessionsRepository,
         *,
         clock: Clock,
     ) -> None:
@@ -50,11 +53,16 @@ class CatalogService:
             items: Cache repository for the item database.
             boost_order_lines: Draft boost-order lines, reassigned/pruned
                 when `/del_item` changes an id or removes an item entirely.
+            ticket_sessions: Ticket sessions, whose order-editor selection
+                (`active_order_item_id`) needs the same reassign/clear
+                treatment as `boost_order_lines` when `/del_item` renumbers
+                or removes an item (APP-4).
             clock: Time source, tz-aware `GMT3`, stamps `updated_at`.
         """
         self._sheets = sheets
         self._items = items
         self._boost_order_lines = boost_order_lines
+        self._ticket_sessions = ticket_sessions
         self._clock = clock
 
     async def add_item(
@@ -79,21 +87,34 @@ class CatalogService:
             DuplicateItemError: An item with the same name and category
                 already exists.
         """
-        if await self._items.find(name, category) is not None:
-            raise DuplicateItemError(f"{name} ({category.value})")
+        # Reads the live block, like `delete_item` — not the cache (APP-5) —
+        # and the whole read -> compute -> write sequence runs under
+        # `SheetsClient.locked()` (INFRA1-6): re-reading live narrows the
+        # race window against a stale cache, but two concurrent `/item_add`
+        # calls could still both read the live block before either writes
+        # and compute the same "next" id/row. The lock is what actually
+        # closes that window; the live read is what makes the ids/rows it
+        # serializes on trustworthy in the first place.
+        async with self._sheets.locked(DATABASE_SHEET):
+            catalog = await self._read_block()
+            name_norm = normalize_item_name(name)
+            if any(
+                normalize_item_name(item.name) == name_norm and item.category is category
+                for item in catalog
+            ):
+                raise DuplicateItemError(f"{name} ({category.value})")
 
-        catalog = await self._items.all()
-        item = Item(
-            id=max((i.id for i in catalog), default=0) + 1,
-            name=name,
-            category=category,
-            price_buy=price_buy,
-            price_sell=price_sell,
-            emoji=emoji,
-            updated_at=self._clock.now(),
-            row=max((i.row for i in catalog), default=DATA_START_ROW - 1) + 1,
-        )
-        await self._write_rows([item])
+            item = Item(
+                id=max((i.id for i in catalog), default=0) + 1,
+                name=name,
+                category=category,
+                price_buy=round_for_storage(price_buy) if price_buy is not None else None,
+                price_sell=round_for_storage(price_sell) if price_sell is not None else None,
+                emoji=emoji,
+                updated_at=self._clock.now(),
+                row=max((i.row for i in catalog), default=DATA_START_ROW - 1) + 1,
+            )
+            await self._write_rows([item])
         await self._items.upsert_many([item])
         return item
 
@@ -112,38 +133,59 @@ class CatalogService:
         Raises:
             ItemNotFoundError: No item with this id exists.
         """
-        block = await self._read_block()
-        index = next((i for i, item in enumerate(block) if item.id == item_id), None)
-        if index is None:
-            raise ItemNotFoundError(str(item_id))
-        deleted = block[index]
+        # The whole read -> renumber -> write -> cache-reassignment sequence
+        # is serialized against any other writer of this sheet (INFRA1-6):
+        # the reassignment loop below acts on an id-remapping snapshot taken
+        # under the lock, so it must complete before a concurrent
+        # `/item_add`/`/del_item` is allowed to renumber again — otherwise a
+        # second call's reassignment could run against a mapping the first
+        # call's own (later) write has already superseded, misassigning
+        # boost-order-lines/ticket-sessions relative to what's actually on
+        # the sheet.
+        async with self._sheets.locked(DATABASE_SHEET):
+            block = await self._read_block()
+            index = next((i for i, item in enumerate(block) if item.id == item_id), None)
+            if index is None:
+                raise ItemNotFoundError(str(item_id))
+            deleted = block[index]
 
-        await self._items.save_delete_backup(
-            json.dumps([_item_to_dict(item) for item in block], ensure_ascii=False)
-        )
+            await self._items.save_delete_backup(
+                json.dumps([_item_to_dict(item) for item in block], ensure_ascii=False)
+            )
 
-        remaining = block[:index] + block[index + 1 :]
-        renumbered = [
-            replace(item, id=offset + 1, row=DATA_START_ROW + offset)
-            for offset, item in enumerate(remaining)
-        ]
+            remaining = block[:index] + block[index + 1 :]
+            renumbered = [
+                replace(item, id=offset + 1, row=DATA_START_ROW + offset)
+                for offset, item in enumerate(remaining)
+            ]
 
-        await self._write_rows(renumbered)
-        await self._clear_row(DATA_START_ROW + len(renumbered))
+            await self._write_rows(renumbered)
+            await self._clear_row(DATA_START_ROW + len(renumbered))
 
-        for before, after in zip(remaining, renumbered, strict=True):
-            if before.id != after.id:
-                await self._boost_order_lines.reassign_item_id(
-                    old_item_id=before.id,
-                    new_item_id=after.id,
-                    name_norm=normalize_item_name(after.name),
-                    category=after.category,
-                )
-        affected_channels = await self._boost_order_lines.delete_by_name(
-            name_norm=normalize_item_name(deleted.name), category=deleted.category
-        )
+            # Clear sessions pointing at the deleted item's id *before*
+            # renumbering repoints anything else onto that same now-vacant
+            # id — otherwise a session freshly reassigned onto `deleted.id`
+            # would be wiped out again by this clear step running after it
+            # (APP-4: renumbering can reuse the deleted item's old id as a
+            # survivor's new one).
+            await self._ticket_sessions.clear_active_order_item_for(deleted.id)
 
-        await self._items.replace_all(renumbered)
+            for before, after in zip(remaining, renumbered, strict=True):
+                if before.id != after.id:
+                    await self._boost_order_lines.reassign_item_id(
+                        old_item_id=before.id,
+                        new_item_id=after.id,
+                        name_norm=normalize_item_name(after.name),
+                        category=after.category,
+                    )
+                    await self._ticket_sessions.reassign_active_order_item(
+                        old_item_id=before.id, new_item_id=after.id
+                    )
+            affected_channels = await self._boost_order_lines.delete_by_name(
+                name_norm=normalize_item_name(deleted.name), category=deleted.category
+            )
+
+            await self._items.replace_all(renumbered)
         return DeleteItemResult(deleted=deleted, affected_order_channels=affected_channels)
 
     async def _read_block(self) -> list[Item]:

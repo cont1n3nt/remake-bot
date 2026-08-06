@@ -42,17 +42,17 @@ def render_ticket_card(session: TicketSession, embeds: EmbedFactory) -> discord.
         is responsible for that attachment actually being present on the
         message it sends/edits this embed onto.
     """
-    lines = [_SEPARATOR, f"👤 Игрок <@{session.author_id}>"]
+    lines = [_SEPARATOR, f"👤 Игрок: <@{session.author_id}>"]
     if session.game_nick:
-        lines.append(f"🎮 Игровой ник {session.game_nick}")
+        lines.append(f"🎮 Игровой ник: {session.game_nick}")
     if session.delivery_method is not None:
-        lines.append(f"📮 Способ {_DELIVERY_LABELS[session.delivery_method]}")
+        lines.append(f"📮 Способ: {_DELIVERY_LABELS[session.delivery_method]}")
     if session.referrer_nick:
         referrer = session.referrer_nick
         if session.referrer_discord_id is not None:
             referrer += f" (<@{session.referrer_discord_id}>)"
-        lines.append(f"🤝 Пригласил {referrer}")
-    lines.append(f"🕒 Создана {format_datetime(session.created_at)}")
+        lines.append(f"🤝 Пригласил: {referrer}")
+    lines.append(f"🕒 Создана: {format_datetime(session.created_at)}")
 
     embed = embeds.ticket(session.kind, "\n".join(lines))
     if session.screenshot_message_id is not None:

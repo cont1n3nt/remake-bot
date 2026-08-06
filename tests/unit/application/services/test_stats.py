@@ -51,7 +51,9 @@ def _service(
     transactions = MagicMock()
     transactions.list_by_period = AsyncMock(return_value=records)
     users = MagicMock()
-    users.get_by_nick = AsyncMock(side_effect=lambda nick: (profiles or {}).get(nick))
+    users.get_by_nicks = AsyncMock(
+        side_effect=lambda nicks: {n: (profiles or {})[n] for n in nicks if n in (profiles or {})}
+    )
     return StatsService(transactions, users), transactions
 
 

@@ -18,26 +18,21 @@ from stalbot.domain.entities.item import Item
 from stalbot.domain.money import format_amount
 from stalbot.presentation.embeds.factory import EmbedFactory
 
-_TITLE = "🧾 Редактор заказа"
+_EDITOR_TITLE = "🧾 Редактор заказа"
+_SUMMARY_TITLE = "🧾 Заказ бустов"
 _SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━"
 
 
-def render_order_editor(
-    session: TicketSession,
-    lines_with_items: Sequence[tuple[BoostOrderLine, Item | None]],
-    embeds: EmbedFactory,
-) -> discord.Embed:
-    """Build the boost-order editor embed from `session` and its draft lines.
+def _order_body(
+    session: TicketSession, lines_with_items: Sequence[tuple[BoostOrderLine, Item | None]]
+) -> list[str]:
+    """The order's line list + total + deadline — shared by the editor and summary embeds.
 
     Args:
         session: The ticket's persisted state (for the deadline).
         lines_with_items: Draft lines paired with their current catalog
             item (`None` if the item was deleted since being added — such
             a line is silently omitted from the total and the list).
-        embeds: Factory used to build the underlying `discord.Embed`.
-
-    Returns:
-        The editor card embed.
     """
     body = [_SEPARATOR]
     total = Decimal(0)
@@ -55,5 +50,37 @@ def render_order_editor(
     body.append(f"💰 Итого: {format_amount(total)}")
     if session.deadline is not None:
         body.append(f"⏳ Срок: {format_datetime(session.deadline)}")
+    return body
 
-    return embeds.ticket(session.kind, "\n".join(body), title=_TITLE)
+
+def render_order_editor(
+    session: TicketSession,
+    lines_with_items: Sequence[tuple[BoostOrderLine, Item | None]],
+    embeds: EmbedFactory,
+) -> discord.Embed:
+    """Build the boost-order editor embed from `session` and its draft lines (UX #1).
+
+    Returns:
+        The editor card embed, with the interactive line-picker/quantity
+        controls (`OrderEditorView`) — reached via the summary embed's
+        "✏️ Редактировать" button.
+    """
+    body = _order_body(session, lines_with_items)
+    return embeds.ticket(session.kind, "\n".join(body), title=_EDITOR_TITLE)
+
+
+def render_order_summary(
+    session: TicketSession,
+    lines_with_items: Sequence[tuple[BoostOrderLine, Item | None]],
+    embeds: EmbedFactory,
+) -> discord.Embed:
+    """Build the read-only boost-order summary embed (UX #1).
+
+    Same body as `render_order_editor` (same draft, same total) but paired
+    with `OrderSummaryView` instead — "✏️ Редактировать" (any participant)
+    to reopen the editor, "🏁 Завершить заказ" (admin-only) to register the
+    deal. Shown first after the order form is submitted, and again after
+    the editor's "✅ Подтвердить".
+    """
+    body = _order_body(session, lines_with_items)
+    return embeds.ticket(session.kind, "\n".join(body), title=_SUMMARY_TITLE)

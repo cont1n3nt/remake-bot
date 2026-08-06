@@ -8,7 +8,7 @@ from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.domain.entities.item import Item
 from stalbot.domain.enums import ItemCategory, TicketKind, TicketStatus
 from stalbot.domain.money import format_amount
-from stalbot.presentation.cogs.tickets.order_card import render_order_editor
+from stalbot.presentation.cogs.tickets.order_card import render_order_editor, render_order_summary
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 
@@ -111,3 +111,19 @@ def test_deadline_is_omitted_when_unset() -> None:
     embed = render_order_editor(_session(deadline=None), [], EmbedFactory())
 
     assert "Срок:" not in (embed.description or "")
+
+
+def test_summary_title_differs_from_the_editor_title() -> None:
+    """UX #1: the read-only summary and the interactive editor are visually distinct."""
+    embed = render_order_summary(_session(), [], EmbedFactory())
+    assert embed.title == "🧾 Заказ бустов"
+    assert embed.title != render_order_editor(_session(), [], EmbedFactory()).title
+
+
+def test_summary_shares_the_same_body_as_the_editor() -> None:
+    lines_with_items = [(_line(1, 3), _item(1, "Топот", Decimal(300000)))]
+
+    summary = render_order_summary(_session(), lines_with_items, EmbedFactory())
+    editor = render_order_editor(_session(), lines_with_items, EmbedFactory())
+
+    assert summary.description == editor.description

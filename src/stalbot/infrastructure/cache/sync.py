@@ -17,10 +17,12 @@ a human edits the sheet.
 """
 
 import logging
+import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from typing import Final
 
 from stalbot.application.ports.clock import Clock
 from stalbot.domain.clock import parse_sheet_datetime
@@ -143,14 +145,14 @@ class CacheSync:
         users_rows = result.get(_USERS_RANGE, [])
 
         records, nick_displays, skipped = _parse_tickets(tickets_rows)
-        profiles = _parse_users(users_rows)
+        profiles, user_warnings = _parse_users(users_rows)
 
         synced_at = self._clock.now().isoformat()
         await self._transactions.upsert_many(records)
         await self._users.replace_all(profiles, nick_displays=nick_displays, synced_at=synced_at)
 
         free_rows = await self._check_formula_extent(last_data_row=_last_row(tickets_rows))
-        warnings = _free_rows_warning(free_rows)
+        warnings = _free_rows_warning(free_rows) + user_warnings
 
         report = SyncReport(
             users_synced=len(profiles),
@@ -271,8 +273,8 @@ def _parse_tickets(
             sheet_row=sheet_row,
             date_raw=date_raw,
             nick_norm=nick_norm,
-            purchase=bool(purchase),
-            sale=bool(sale),
+            purchase=_to_bool(purchase),
+            sale=_to_bool(sale),
             amount_raw=amount_raw,
             coins_raw=coins_raw,
             xp_raw=xp_raw,
@@ -311,6 +313,20 @@ def _parse_ticket_row(
     if amount is None:
         return None
 
+    coins = _to_int_strict(coins_raw)
+    xp = _to_int_strict(xp_raw)
+    if coins is None or xp is None:
+        # INFRA1-4: a non-empty, unparseable coins/xp cell is sheet
+        # corruption, not "zero" — silently caching a false zero for a
+        # financially meaningful field is worse than dropping the row.
+        logger.warning(
+            "Тикеты, строка %d (%s): нечисловое значение %s, строка пропущена",
+            sheet_row,
+            nick_text,
+            "coins" if coins is None else "xp",
+        )
+        return None
+
     referrer_text = str(referrer_raw).strip() if referrer_raw else ""
     return TransactionRecord(
         row=sheet_row,
@@ -319,14 +335,15 @@ def _parse_ticket_row(
         nick_display=nick_text,
         deal_type=DealType.PURCHASE if purchase else DealType.SALE,
         amount=amount,
-        coins=_to_int(coins_raw),
-        xp=_to_int(xp_raw),
+        coins=coins,
+        xp=xp,
         referrer=normalize_nick(referrer_text) if referrer_text else None,
     )
 
 
-def _parse_users(rows: CellGrid) -> list[UserProfile]:
+def _parse_users(rows: CellGrid) -> tuple[list[UserProfile], tuple[str, ...]]:
     profiles: list[UserProfile] = []
+    warnings: list[str] = []
     for offset, raw_row in enumerate(rows):
         sheet_row = DATA_START_ROW + offset
         (
@@ -347,23 +364,42 @@ def _parse_users(rows: CellGrid) -> list[UserProfile]:
         if not nick_text:
             continue
 
+        # INFRA1-4: unlike a Тикеты row, dropping a whole profile over one
+        # garbled cell (via the `replace_all` full-wipe that follows) would
+        # erase turnover, rank, referral role and Discord binding too — a
+        # worse outcome than a temporary false zero on just that one field.
+        # So the profile is always kept; a corrupt coins/xp cell only ever
+        # falls back to `0` (same as a genuinely empty cell), and is loudly
+        # logged/reported rather than silently indistinguishable from one.
+        coins_strict = _to_int_strict(coins_raw)
+        xp_strict = _to_int_strict(xp_raw)
+        if coins_strict is None or xp_strict is None:
+            message = (
+                f"⚠️ Юзеры, строка {sheet_row} ({nick_text}): нечисловое значение "
+                f"{'coins' if coins_strict is None else 'xp'}, использовано временное значение 0"
+            )
+            logger.warning(message)
+            warnings.append(message)
+        coins = coins_strict if coins_strict is not None else 0
+        xp = xp_strict if xp_strict is not None else 0
+
         profiles.append(
             UserProfile(
                 row=sheet_row,
                 nick=NormalizedNick(nick_text),
                 discord_id=_to_int(discord_id_raw) if discord_id_raw else None,
-                coins=_to_int(coins_raw),
-                xp=_to_int(xp_raw),
+                coins=coins,
+                xp=xp,
                 buy_turnover=_to_decimal(buy_raw) or Decimal(0),
                 sell_turnover=_to_decimal(sell_raw) or Decimal(0),
                 total_turnover=_to_decimal(total_raw) or Decimal(0),
                 referrals_count=_to_int(referrals_raw),
-                is_booster=bool(booster_raw),
+                is_booster=_to_bool(booster_raw),
                 rank=str(rank_raw).strip() or None,
                 referral_role=str(referral_role_raw).strip() or None,
             )
         )
-    return profiles
+    return profiles, tuple(warnings)
 
 
 def parse_items_block(rows: CellGrid) -> list[Item]:
@@ -429,11 +465,62 @@ def _to_int(value: object) -> int:
         return 0
     if isinstance(value, bool):
         return int(value)
-    if isinstance(value, int | float):
-        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        # `int(nan)`/`int(inf)` raise (ValueError/OverflowError) rather than
+        # returning something — treat a non-finite cell like any other
+        # unparseable one instead of letting that escape uncaught.
+        return int(value) if math.isfinite(value) else 0
     if isinstance(value, str):
         try:
-            return int(float(value))
+            parsed = float(value)
         except ValueError:
             return 0
+        return int(parsed) if math.isfinite(parsed) else 0
     return 0
+
+
+def _to_int_strict(value: object) -> int | None:
+    """Like `_to_int`, but a non-empty value that fails to parse is `None`.
+
+    Used only for `coins`/`xp` (INFRA1-4): those are financially meaningful
+    formula outputs, and `_to_int`'s "anything unparseable is 0" fallback
+    would make genuine sheet corruption indistinguishable from a real zero
+    everywhere downstream. An empty cell is still `0` — that is the normal
+    state of a row whose formulas have not recalculated yet.
+    """
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if math.isfinite(value) else None
+    if isinstance(value, str):
+        try:
+            parsed = float(value)
+        except ValueError:
+            return None
+        return int(parsed) if math.isfinite(parsed) else None
+    return None
+
+
+_TRUTHY_STRINGS: Final = frozenset({"true", "1", "yes", "да", "истина"})
+
+
+def _to_bool(value: object) -> bool:
+    """Coerce a checkbox-column cell (`purchase`/`sale`/`is_booster`) to `bool`.
+
+    `UNFORMATTED_VALUE` normally returns a real `bool` for an actual
+    checkbox cell, but a manually typed cell — e.g. the literal text
+    `"FALSE"` — comes back as a non-empty string, and Python's own
+    `bool("FALSE")` is `True` (INFRA1-5). Only a real `bool` or a
+    recognized truthy string counts as `True`; every other string is `False`.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY_STRINGS
+    return bool(value)

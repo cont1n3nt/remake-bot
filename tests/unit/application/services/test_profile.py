@@ -100,14 +100,10 @@ async def test_list_referrals_resolves_display_and_discord_id() -> None:
     referred_profile = _profile(nick=NormalizedNick("alice"), discord_id=999)
 
     users = MagicMock()
-    users.get_by_nick = AsyncMock(
-        side_effect=lambda nick: (
-            _profile(discord_id=111) if nick == "scaryyyyy" else referred_profile
-        )
-    )
-    users.get_nick_display = AsyncMock(
-        side_effect=lambda nick: "Scaryyyyy" if nick == "scaryyyyy" else "Alice"
-    )
+    users.get_by_nick = AsyncMock(return_value=_profile(discord_id=111))  # requester's own
+    users.get_nick_display = AsyncMock(return_value="Scaryyyyy")
+    users.get_by_nicks = AsyncMock(return_value={NormalizedNick("alice"): referred_profile})
+    users.get_nick_displays = AsyncMock(return_value={NormalizedNick("alice"): "Alice"})
     transactions = MagicMock()
     transactions.list_referral_targets = AsyncMock(return_value=[NormalizedNick("alice")])
     service = ProfileService(users, transactions)
@@ -124,10 +120,10 @@ async def test_list_referrals_resolves_display_and_discord_id() -> None:
 
 async def test_list_referrals_leaves_discord_id_none_when_referred_profile_missing() -> None:
     users = MagicMock()
-    users.get_by_nick = AsyncMock(
-        side_effect=lambda nick: _profile(discord_id=111) if nick == "scaryyyyy" else None
-    )
-    users.get_nick_display = AsyncMock(return_value="Ghost")
+    users.get_by_nick = AsyncMock(return_value=_profile(discord_id=111))  # requester's own
+    users.get_nick_display = AsyncMock(return_value="Scaryyyyy")
+    users.get_by_nicks = AsyncMock(return_value={})  # referred nick not found
+    users.get_nick_displays = AsyncMock(return_value={NormalizedNick("ghost"): "Ghost"})
     transactions = MagicMock()
     transactions.list_referral_targets = AsyncMock(return_value=[NormalizedNick("ghost")])
     service = ProfileService(users, transactions)

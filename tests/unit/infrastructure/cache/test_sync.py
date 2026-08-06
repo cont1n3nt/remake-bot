@@ -25,6 +25,7 @@ from stalbot.infrastructure.cache.sync import (
     _parse_users,
     _to_decimal,
     _to_int,
+    _to_int_strict,
     parse_items_block,
 )
 
@@ -49,6 +50,18 @@ def test_to_decimal_returns_none_for_unparseable_text() -> None:
 )
 def test_to_int(value: object, expected: int) -> None:
     assert _to_int(value) == expected
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "nan", "inf"])
+def test_to_int_treats_non_finite_values_as_unparseable_not_a_crash(value: object) -> None:
+    """`int(nan)`/`int(inf)` raise (ValueError/OverflowError) instead of
+    returning something — a non-finite cell must not escape uncaught."""
+    assert _to_int(value) == 0
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "nan", "inf"])
+def test_to_int_strict_treats_non_finite_values_as_corrupt_not_a_crash(value: object) -> None:
+    assert _to_int_strict(value) is None
 
 
 def test_parse_tickets_skips_blank_rows() -> None:
@@ -108,29 +121,79 @@ def test_parse_tickets_row_numbers_follow_data_start_row() -> None:
 
 
 def test_parse_users_skips_blank_nick_rows() -> None:
-    assert _parse_users([["", "", 0, 0, 0, 0, 0, 0, False, "", ""]]) == []
+    profiles, warnings = _parse_users([["", "", 0, 0, 0, 0, 0, 0, False, "", ""]])
+    assert profiles == []
+    assert warnings == ()
 
 
 def test_parse_users_parses_a_valid_row() -> None:
-    (profile,) = _parse_users(
+    profiles, warnings = _parse_users(
         [[123456, "dizzikss", 1, 0, 0, 1225100, 1225100, 1, True, "💎 Elite", "🧭 Скаут"]]
     )
+    (profile,) = profiles
     assert profile.nick == "dizzikss"
     assert profile.discord_id == 123456
     assert profile.is_booster is True
     assert profile.rank == "💎 Elite"
     assert profile.referral_role == "🧭 Скаут"
+    assert warnings == ()
 
 
 def test_parse_users_blank_discord_id_becomes_none() -> None:
-    (profile,) = _parse_users([["", "dizzikss", 0, 0, 0, 0, 0, 0, False, "", ""]])
+    (profile,) = _parse_users([["", "dizzikss", 0, 0, 0, 0, 0, 0, False, "", ""]])[0]
     assert profile.discord_id is None
 
 
 def test_parse_users_blank_rank_becomes_none() -> None:
-    (profile,) = _parse_users([["", "dizzikss", 0, 0, 0, 0, 0, 0, False, "", ""]])
+    (profile,) = _parse_users([["", "dizzikss", 0, 0, 0, 0, 0, 0, False, "", ""]])[0]
     assert profile.rank is None
     assert profile.referral_role is None
+
+
+def test_parse_users_keeps_profile_with_unparseable_coins() -> None:
+    profiles, warnings = _parse_users(
+        [[123456, "dizzikss", "не число", 10, 0, 0, 0, 0, False, "", ""]]
+    )
+    (profile,) = profiles
+    assert profile.coins == 0  # falls back like a genuinely empty cell...
+    assert profile.nick == "dizzikss"  # ...but the profile itself is not dropped (INFRA1-4)
+    assert len(warnings) == 1
+    assert "coins" in warnings[0]
+
+
+def test_parse_users_keeps_profile_with_unparseable_xp() -> None:
+    profiles, warnings = _parse_users(
+        [[123456, "dizzikss", 10, "не число", 0, 0, 0, 0, False, "", ""]]
+    )
+    (profile,) = profiles
+    assert profile.xp == 0
+    assert profile.coins == 10  # the unaffected sibling field parses normally
+    assert len(warnings) == 1
+    assert "xp" in warnings[0]
+
+
+def test_parse_users_treats_text_false_as_false_not_truthy() -> None:
+    """INFRA1-5: `bool("FALSE")` is `True` in plain Python — must not leak through."""
+    (profile,) = _parse_users([[123456, "dizzikss", 0, 0, 0, 0, 0, 0, "FALSE", "", ""]])[0]
+    assert profile.is_booster is False
+
+
+def test_parse_tickets_skips_row_with_unparseable_coins() -> None:
+    records, _displays, skipped = _parse_tickets(
+        [["31.07.2026 21:45", "Scaryyyyy", True, False, 100000, "не число", 0, ""]]
+    )
+    assert records == []
+    assert skipped == 1
+
+
+def test_parse_tickets_treats_text_false_purchase_flag_as_false() -> None:
+    """INFRA1-5: a manually typed `"FALSE"` cell must not read as truthy."""
+    records, _displays, skipped = _parse_tickets(
+        [["31.07.2026 21:45", "Scaryyyyy", "FALSE", "TRUE", 100000, 1, 10, ""]]
+    )
+    (record,) = records
+    assert skipped == 0
+    assert record.deal_type is DealType.SALE
 
 
 def test_parse_items_block_skips_row_with_unknown_category(

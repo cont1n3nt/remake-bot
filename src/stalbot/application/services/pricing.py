@@ -2,14 +2,18 @@
 
 Two independent price surfaces meet here (PLAN.md §6.2, §10.5-§10.8):
 
-- the `item database` block (`AA:AG`), which the bot owns and every ticket
-  calculation reads from;
+- the `item database` block (`AA:AG`), which the bot owns, every ticket
+  calculation reads from, and which is the source of truth for prices;
 - the human-maintained price sheets (`Мейн скуп`, `Скуп бустов`, `БУСТЫ`),
-  which only ever flow *into* the item database via `/sync_prices` — the bot
-  never writes back to them.
+  which display those same prices for staff to read at a glance.
 
 `/setprice`/`/setboost` and `/new_price` write the item database directly;
-`/sync_prices` is the one place that reads the price sheets.
+`/sync_prices` (UX #7) pushes the item database's current prices out onto
+the price sheets, keyed by matching each sheet row's item name to a catalog
+entry — it is the one place that writes to the price sheets. This is the
+opposite of `/sync_prices`'s original direction (reading the price sheets
+into the item database); the price sheets are no longer an independently
+editable source of truth, only a display surface the bot keeps in sync.
 """
 
 import logging
@@ -27,7 +31,7 @@ from stalbot.domain.clock import format_datetime
 from stalbot.domain.entities.item import Item
 from stalbot.domain.enums import ItemCategory, PriceField
 from stalbot.domain.errors import AmountParseError, ItemNotFoundError
-from stalbot.domain.money import format_amount, parse_amount
+from stalbot.domain.money import format_amount, parse_amount, round_for_storage
 from stalbot.infrastructure.cache.repositories.items import (
     ItemsCacheRepository,
     normalize_item_name,
@@ -86,13 +90,14 @@ class PricingService:
 
         old_price = item.price_buy if field is PriceField.BUY else item.price_sell
         now = self._clock.now()
+        stored_price = round_for_storage(amount)
         await self._sheets.write_verified(
             {
-                a1_range(DATABASE_SHEET, _PRICE_COLUMN[field], item.row): [[int(amount)]],
+                a1_range(DATABASE_SHEET, _PRICE_COLUMN[field], item.row): [[int(stored_price)]],
                 a1_range(DATABASE_SHEET, _UPDATED_COLUMN, item.row): [[format_datetime(now)]],
             }
         )
-        updated = _apply_price(item, field, amount, updated_at=now)
+        updated = _apply_price(item, field, stored_price, updated_at=now)
         await self._items.upsert_many([updated])
         return PriceChange(
             item_id=item.id,
@@ -100,64 +105,83 @@ class PricingService:
             category=item.category,
             field=field,
             old_price=old_price,
-            new_price=amount,
+            new_price=stored_price,
         )
 
     async def sync_prices(self) -> SyncPricesReport:
-        """Pull every price sheet into the item database in one read, one write (PLAN.md §10.8)."""
-        ranges = [
-            _column_range(layout, col)
-            for layout in SYNC_LAYOUTS
-            for col in (*layout.name_columns, *layout.price_columns)
+        """Push the item database's current prices onto every price sheet (UX #7, PLAN.md §10.8).
+
+        The item database is the source of truth: for each row on a
+        `SYNC_LAYOUTS` sheet whose name cell matches a catalog item, that
+        item's current price (for the sheet's `price_field`) is written into
+        the row's price cell — replacing whatever was there, not the other
+        way around. A name with no catalog match is reported via
+        `not_found` and left untouched (nothing to source a price from).
+        """
+        name_ranges = [
+            _column_range(layout, col) for layout in SYNC_LAYOUTS for col in layout.name_columns
         ]
-        result = await self._sheets.batch_get(ranges)
+        price_ranges = [
+            _column_range(layout, col) for layout in SYNC_LAYOUTS for col in layout.price_columns
+        ]
+        result = await self._sheets.batch_get([*name_ranges, *price_ranges])
 
         catalog = await self._items.all()
         by_key = {(normalize_item_name(item.name), item.category): item for item in catalog}
         changes: list[PriceChange] = []
         not_found: list[str] = []
+        overwritten_garbage: list[str] = []
         unchanged = 0
-        touched: dict[int, Item] = {}
         data: dict[str, CellGrid] = {}
-        now = self._clock.now()
 
         for layout in SYNC_LAYOUTS:
             for name_col, price_col in zip(layout.name_columns, layout.price_columns, strict=True):
                 names = result.get(_column_range(layout, name_col), [])
                 prices = result.get(_column_range(layout, price_col), [])
-                for offset in range(max(len(names), len(prices))):
+                for offset, row in enumerate(layout.rows):
                     name_text = _cell_text(names, offset)
                     if not name_text:
                         continue
-                    base_item = by_key.get((normalize_item_name(name_text), layout.category))
-                    if base_item is None:
+                    item = by_key.get((normalize_item_name(name_text), layout.category))
+                    if item is None:
                         not_found.append(name_text)
                         continue
-                    item = touched.get(base_item.id, base_item)
 
-                    new_price = _cell_decimal(prices, offset)
-                    current = _current_price(item, layout.price_field)
-                    if new_price == current:
+                    new_price = _current_price(item, layout.price_field)
+                    had_garbage = False
+                    try:
+                        old_price = _cell_decimal(prices, offset)
+                    except InvalidOperation:
+                        # The sheet is the destination now, not the source —
+                        # unlike APP-3's original concern (misreading garbage
+                        # as "price cleared"), garbage here is simply
+                        # overwritten with the catalog's real price, same as
+                        # any other stale cell. Reported separately so an
+                        # admin can see which cells had bad content. Always
+                        # treated as a change (even if `new_price` also
+                        # happens to be `None`) — the cell isn't actually
+                        # empty, so leaving it alone here would silently
+                        # contradict the "overwritten" report below.
+                        old_price = None
+                        had_garbage = True
+                        overwritten_garbage.append(name_text)
+                    if not had_garbage and new_price == old_price:
                         unchanged += 1
                         continue
 
-                    changes.append(_price_change(item, layout.price_field, current, new_price))
-                    touched[item.id] = _apply_price(
-                        item, layout.price_field, new_price, updated_at=now
-                    )
-                    data[a1_range(DATABASE_SHEET, _PRICE_COLUMN[layout.price_field], item.row)] = [
+                    changes.append(_price_change(item, layout.price_field, old_price, new_price))
+                    data[a1_range(layout.sheet, price_col, row)] = [
                         [int(new_price) if new_price is not None else ""]
-                    ]
-                    data[a1_range(DATABASE_SHEET, _UPDATED_COLUMN, item.row)] = [
-                        [format_datetime(now)]
                     ]
 
         if data:
             await self._sheets.batch_update(data)
-            await self._items.upsert_many(list(touched.values()))
 
         return SyncPricesReport(
-            updated=tuple(changes), not_found=tuple(not_found), unchanged_count=unchanged
+            updated=tuple(changes),
+            not_found=tuple(not_found),
+            unchanged_count=unchanged,
+            unparseable=tuple(overwritten_garbage),
         )
 
     async def preview_import(self, text: str) -> PriceImportPlan:
@@ -218,8 +242,8 @@ class PricingService:
                     continue
 
             try:
-                new_buy = parse_amount(buy_text) if buy_text else None
-                new_sell = parse_amount(sell_text) if sell_text else None
+                new_buy = round_for_storage(parse_amount(buy_text)) if buy_text else None
+                new_sell = round_for_storage(parse_amount(sell_text)) if sell_text else None
             except AmountParseError as exc:
                 issues.append(PriceImportIssue(line_number, f"некорректная цена: {exc}"))
                 continue
@@ -274,14 +298,19 @@ class PricingService:
         now = self._clock.now()
         data: dict[str, CellGrid] = {}
         updated_items: list[Item] = []
+        # One batched lookup instead of one `get_by_id` per changed item (APP-6).
+        items = await self._items.get_by_ids(list(by_item.keys()))
         for item_id, item_changes in by_item.items():
-            item = await self._items.get_by_id(item_id)
+            item = items.get(item_id)
             if item is None:
                 continue  # renumbered/deleted since preview; nothing left to write
             for change in item_changes:
-                item = _apply_price(item, change.field, change.new_price, updated_at=now)
+                stored_price = (
+                    round_for_storage(change.new_price) if change.new_price is not None else None
+                )
+                item = _apply_price(item, change.field, stored_price, updated_at=now)
                 data[a1_range(DATABASE_SHEET, _PRICE_COLUMN[change.field], item.row)] = [
-                    [int(change.new_price) if change.new_price is not None else ""]
+                    [int(stored_price) if stored_price is not None else ""]
                 ]
             data[a1_range(DATABASE_SHEET, _UPDATED_COLUMN, item.row)] = [[format_datetime(now)]]
             updated_items.append(item)
@@ -432,12 +461,17 @@ def _cell_text(rows: CellGrid, offset: int) -> str:
 
 
 def _cell_decimal(rows: CellGrid, offset: int) -> Decimal | None:
+    """Parse a price cell, or `None` if the cell itself is genuinely empty.
+
+    Raises:
+        InvalidOperation: If the cell has non-empty content that isn't a
+            valid number — the caller must not treat this the same as an
+            empty cell (APP-3), or it reads as "price cleared" and silently
+            wipes an existing price.
+    """
     if offset >= len(rows) or not rows[offset]:
         return None
     value = rows[offset][0]
     if value is None or value == "":
         return None
-    try:
-        return Decimal(str(value))
-    except InvalidOperation:
-        return None
+    return Decimal(str(value))

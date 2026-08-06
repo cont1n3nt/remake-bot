@@ -66,3 +66,14 @@ def test_resource_sheets_feed_price_buy() -> None:
     ]
     assert resource_layouts
     assert all(layout.price_field is PriceField.BUY for layout in resource_layouts)
+
+
+def test_sync_layout_start_rows_match_the_confirmed_live_data_start() -> None:
+    """UX #7: each sheet's title/header rows sit above where real data begins —
+    "Мейн скуп" row 5, "БУСТЫ" row 4, "Скуп бустов" row 3."""
+    start_row_by_sheet = {layout.sheet: layout.rows.start for layout in SYNC_LAYOUTS}
+    assert start_row_by_sheet == {
+        "Мейн скуп": 5,
+        "Скуп бустов": 3,
+        "БУСТЫ": 4,
+    }

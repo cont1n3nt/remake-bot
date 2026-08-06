@@ -64,6 +64,44 @@ async def test_nick_display_uses_provided_original_casing(
     assert await repo.get_nick_display(NormalizedNick("dizzikss")) == "DizzikSS"
 
 
+async def test_get_by_nicks_returns_only_the_nicks_found(
+    connection: aiosqlite.Connection, synced_at: str
+) -> None:
+    repo = UsersCacheRepository(connection)
+    await repo.replace_all(
+        [_profile("alice"), _profile("bob")], nick_displays={}, synced_at=synced_at
+    )
+
+    found = await repo.get_by_nicks([NormalizedNick("alice"), NormalizedNick("ghost")])
+
+    assert set(found) == {NormalizedNick("alice")}
+    assert found[NormalizedNick("alice")].nick == "alice"
+
+
+async def test_get_by_nicks_empty_input_returns_empty_dict(
+    connection: aiosqlite.Connection, synced_at: str
+) -> None:
+    repo = UsersCacheRepository(connection)
+    await repo.replace_all([_profile()], nick_displays={}, synced_at=synced_at)
+
+    assert await repo.get_by_nicks([]) == {}
+
+
+async def test_get_nick_displays_returns_only_the_nicks_found(
+    connection: aiosqlite.Connection, synced_at: str
+) -> None:
+    repo = UsersCacheRepository(connection)
+    await repo.replace_all(
+        [_profile("alice"), _profile("bob")],
+        nick_displays={NormalizedNick("alice"): "Alice", NormalizedNick("bob"): "Bob"},
+        synced_at=synced_at,
+    )
+
+    found = await repo.get_nick_displays([NormalizedNick("alice"), NormalizedNick("ghost")])
+
+    assert found == {NormalizedNick("alice"): "Alice"}
+
+
 async def test_get_by_discord_id(connection: aiosqlite.Connection, synced_at: str) -> None:
     repo = UsersCacheRepository(connection)
     await repo.replace_all([_profile(discord_id=123456)], nick_displays={}, synced_at=synced_at)

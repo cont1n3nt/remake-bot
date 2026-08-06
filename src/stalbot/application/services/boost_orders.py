@@ -10,6 +10,7 @@ is never stale (PLAN.md §11.6: "цена берётся... на момент п
 from collections.abc import Sequence
 from dataclasses import replace
 from decimal import Decimal
+from typing import Final
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.domain.entities.item import Item
@@ -23,6 +24,15 @@ from stalbot.infrastructure.cache.repositories.items import (
 #: PLAN.md §11.6: quantity modal validates `1 ≤ qty ≤ 9999`.
 MIN_QUANTITY = 1
 MAX_QUANTITY = 9999
+
+#: Discord's `Select` component hard-caps at 25 options, and the order
+#: editor renders one per draft line in a single `Select` — so the draft
+#: itself must never exceed this many lines (TICK-5). Nothing upstream
+#: enforces it: the "add boosts" picker paginates the *catalog* 25/page,
+#: not the cumulative draft, so a player can otherwise check boosts across
+#: enough pages to push the draft past the limit and crash the editor's
+#: every future render.
+MAX_ORDER_LINES: Final = 25
 
 _DEFAULT_QUANTITY = 1
 
@@ -69,15 +79,13 @@ class BoostOrderService:
             channel_id: Discord channel id of the order-boosts ticket.
         """
         lines = await self._lines.list_for_channel(channel_id)
-        result: list[tuple[BoostOrderLine, Item | None]] = []
-        for line in lines:
-            item = await self._items.get_by_id(line.item_id)
-            result.append((line, item))
-        return result
+        # One batched lookup instead of one `get_by_id` per line (APP-6).
+        items = await self._items.get_by_ids([line.item_id for line in lines])
+        return [(line, items.get(line.item_id)) for line in lines]
 
     async def apply_page_selection(
         self, channel_id: int, page_items: Sequence[Item], selected_ids: frozenset[int]
-    ) -> None:
+    ) -> frozenset[int]:
         """Reconcile one multiselect page against the draft (PLAN.md §11.6).
 
         Only items shown on *this* page are touched — a line for an item on
@@ -89,21 +97,43 @@ class BoostOrderService:
             page_items: The catalog items that were shown as options on the
                 page the player just interacted with.
             selected_ids: The item ids checked in that interaction.
+
+        Returns:
+            Ids from *selected_ids* that were newly checked but NOT added,
+            because the draft was already at `MAX_ORDER_LINES` (TICK-5).
         """
         existing_ids = {line.item_id for line in await self._lines.list_for_channel(channel_id)}
-        for item in page_items:
-            if item.id in selected_ids and item.id not in existing_ids:
-                await self._lines.upsert(
-                    BoostOrderLine(
-                        channel_id=channel_id,
-                        item_id=item.id,
-                        item_name_norm=normalize_item_name(item.name),
-                        category=item.category,
-                        quantity=_DEFAULT_QUANTITY,
-                    )
+        to_add = [
+            item for item in page_items if item.id in selected_ids and item.id not in existing_ids
+        ]
+        to_remove = [
+            item for item in page_items if item.id not in selected_ids and item.id in existing_ids
+        ]
+        # Removals first: a page can uncheck one item and check another in
+        # the same submission, and the freed slot must count toward the cap
+        # check below — doing this in `page_items`' own (catalog-id) order
+        # instead would reject the addition whenever it happens to come
+        # first, even though the net effect stays within `MAX_ORDER_LINES`.
+        for item in to_remove:
+            await self._lines.delete_line(channel_id, item.id)
+            existing_ids.discard(item.id)
+
+        rejected: set[int] = set()
+        for item in to_add:
+            if len(existing_ids) >= MAX_ORDER_LINES:
+                rejected.add(item.id)
+                continue
+            await self._lines.upsert(
+                BoostOrderLine(
+                    channel_id=channel_id,
+                    item_id=item.id,
+                    item_name_norm=normalize_item_name(item.name),
+                    category=item.category,
+                    quantity=_DEFAULT_QUANTITY,
                 )
-            elif item.id not in selected_ids and item.id in existing_ids:
-                await self._lines.delete_line(channel_id, item.id)
+            )
+            existing_ids.add(item.id)
+        return frozenset(rejected)
 
     async def set_quantity(self, channel_id: int, item_id: int, quantity: int) -> None:
         """Set a line's quantity outright (the `🔢 Ввести количество` modal).
@@ -111,13 +141,16 @@ class BoostOrderService:
         Args:
             channel_id: The order-boosts ticket channel.
             item_id: The line's catalog item id.
-            quantity: New quantity, already validated by the caller
-                (`MIN_QUANTITY..MAX_QUANTITY`).
+            quantity: New quantity. Clamped to `MIN_QUANTITY..MAX_QUANTITY`
+                here too (APP-7), not just trusted from the caller (like
+                `adjust_quantity` already does) — this method has no other
+                guard of its own if a future caller skips validation.
         """
         line = await self._find_line(channel_id, item_id)
         if line is None:
             return
-        await self._lines.upsert(replace(line, quantity=quantity))
+        clamped = max(MIN_QUANTITY, min(MAX_QUANTITY, quantity))
+        await self._lines.upsert(replace(line, quantity=clamped))
 
     async def adjust_quantity(self, channel_id: int, item_id: int, delta: int) -> int | None:
         """Adjust a line's quantity by `delta`, clamped to the valid range.

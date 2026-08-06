@@ -7,10 +7,11 @@ money text (see PLAN.md §5.1).
 """
 
 import ast
+import math
 import re
 import unicodedata
-from collections.abc import Iterator
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from collections.abc import Iterator, Mapping
+from decimal import ROUND_HALF_UP, Decimal, DecimalException, InvalidOperation, localcontext
 from typing import Final
 
 from stalbot.domain.errors import AmountParseError
@@ -67,6 +68,23 @@ _NUMBER_SPAN_RE: Final = re.compile(
 )
 
 _MAX_INPUT_LENGTH: Final = 256
+
+#: Decimal context precision used for every parse/evaluate call (DOM-3):
+#: the ambient default context caps arithmetic at 28 significant digits,
+#: which silently rounds a multiplier multiplication or `evaluate_amount`
+#: binop above that width instead of raising — well within reach of the
+#: 256-character input limit. 60 leaves comfortable headroom above any
+#: realistic amount while still catching genuinely absurd input elsewhere
+#: (AST depth/length guards, `SEC-1`'s finite-result check).
+#:
+#: `localcontext()` at every call site below only overrides `prec` — `Emax`/
+#: `Emin`/the trap set (`InvalidOperation`/`DivisionByZero`/`Overflow`, all
+#: trapped) stay at the stdlib default. SEC-1's `except DecimalException`
+#: depends on that: it is what turns an exponent explosion (nested `** 12`
+#: terms, each individually within `_MAX_POWER_EXPONENT`) into a raised
+#: `decimal.Overflow` instead of a silently wrong result. Do not widen
+#: `Emax` or disable a trap here without re-auditing that guarantee.
+_ARITHMETIC_PRECISION: Final = 60
 
 _NARROW_NBSP: Final = " "
 
@@ -152,7 +170,9 @@ def parse_amount(raw: str) -> Decimal:
     text = _normalize_spaces(raw).strip()
     if not text:
         raise AmountParseError("empty amount string")
-    return _parse_number_token(text)
+    with localcontext() as ctx:
+        ctx.prec = _ARITHMETIC_PRECISION
+        return _parse_number_token(text)
 
 
 _ALLOWED_AST_NODES: Final = (
@@ -160,6 +180,8 @@ _ALLOWED_AST_NODES: Final = (
     ast.BinOp,
     ast.UnaryOp,
     ast.Constant,
+    ast.Name,
+    ast.Load,
     ast.Add,
     ast.Sub,
     ast.Mult,
@@ -170,6 +192,11 @@ _ALLOWED_AST_NODES: Final = (
     ast.USub,
     ast.UAdd,
 )
+
+#: Placeholder identifier prefix substituted for money tokens whose formatted
+#: text would otherwise be parsed as a native Python float literal (anything
+#: with a decimal point) — see `evaluate_amount`.
+_TOKEN_PLACEHOLDER: Final = "__m{}__"
 
 _MAX_AST_DEPTH: Final = 32
 _MAX_POWER_EXPONENT: Final = 12
@@ -185,6 +212,17 @@ def evaluate_amount(expression: str) -> Decimal:
     Allowed operators: `+ - * / // % ** ()` and unary minus. `eval`/`exec`
     are never used: the expression is parsed into an AST and walked with a
     node-type whitelist.
+
+    Money tokens with a fractional part are never handed to `ast.parse` as
+    literal text: Python has no fixed-point literal grammar, so any token
+    with a decimal point would be parsed as a native `float`, silently
+    losing precision above ~15-17 significant digits before it is ever
+    converted back to `Decimal`. Instead each such token is replaced with a
+    placeholder identifier bound to its exact, already-parsed `Decimal` in
+    `tokens`, and `_eval_node` resolves it by lookup rather than by reading
+    `ast.Constant.value`. Whole-number tokens are left as plain integer
+    literals — Python `int` is arbitrary-precision, so they round-trip
+    exactly regardless of magnitude.
 
     Args:
         expression: User-supplied arithmetic expression; money tokens may use
@@ -204,22 +242,49 @@ def evaluate_amount(expression: str) -> Decimal:
     if not normalized:
         raise AmountParseError("empty expression")
 
+    tokens: dict[str, Decimal] = {}
+
     def _replace(match: re.Match[str]) -> str:
-        return format(_parse_number_token(match.group(0)), "f")
+        value = _parse_number_token(match.group(0))
+        text = format(value, "f")
+        if "." not in text:
+            return text
+        name = _TOKEN_PLACEHOLDER.format(len(tokens))
+        tokens[name] = value
+        return name
 
-    clean = _NUMBER_SPAN_RE.sub(_replace, normalized)
+    with localcontext() as ctx:
+        ctx.prec = _ARITHMETIC_PRECISION
+        clean = _NUMBER_SPAN_RE.sub(_replace, normalized)
 
-    try:
-        tree = ast.parse(clean, mode="eval")
-    except SyntaxError as exc:
-        raise AmountParseError(f"invalid expression: {expression!r}") from exc
+        try:
+            tree = ast.parse(clean, mode="eval")
+        except SyntaxError as exc:
+            raise AmountParseError(f"invalid expression: {expression!r}") from exc
 
-    _check_ast(tree)
+        _check_ast(tree)
 
-    try:
-        return _eval_node(tree.body)
-    except ZeroDivisionError as exc:
-        raise AmountParseError("division by zero") from exc
+        try:
+            result = _eval_node(tree.body, tokens)
+        except ZeroDivisionError as exc:
+            raise AmountParseError("division by zero") from exc
+        except DecimalException as exc:
+            # SEC-1: legitimate-looking arithmetic can still overflow the
+            # context's exponent range (e.g. a handful of nested `** 12`
+            # terms, each individually within `_MAX_POWER_EXPONENT`) and
+            # raise `decimal.Overflow`/`InvalidOperation` — an internal
+            # exception type that must never reach the caller unwrapped.
+            raise AmountParseError(f"invalid arithmetic result: {expression!r}") from exc
+        if not result.is_finite():
+            # Not currently reachable: the `Overflow`/`InvalidOperation` traps
+            # this context inherits (see `_ARITHMETIC_PRECISION`) mean layer 1
+            # (`_check_ast`'s `ast.Constant` check) or layer 2 (the
+            # `DecimalException` catch above) already catches every path we
+            # could construct. Kept as insurance against a future change to
+            # that context (e.g. `_ARITHMETIC_PRECISION` widening `Emax` or a
+            # trap getting disabled) silently reopening this gap.
+            raise AmountParseError(f"amount is not finite: {expression!r}")
+        return result
 
 
 def _walk_with_depth(node: ast.AST, depth: int = 0) -> Iterator[tuple[int, ast.AST]]:
@@ -239,6 +304,14 @@ def _check_ast(tree: ast.AST) -> None:
         if isinstance(node, ast.Constant):
             if isinstance(node.value, bool) or not isinstance(node.value, int | float):
                 raise AmountParseError("only numeric literals are allowed")
+            if isinstance(node.value, float) and not math.isfinite(node.value):
+                # SEC-1: Python's own grammar recognizes scientific notation
+                # ("1e400") as a float literal that `_NUMBER_SPAN_RE` never
+                # sees (it has no `e`-exponent handling), so it reaches
+                # `ast.parse` unmodified — one big enough overflows to `inf`
+                # silently, no `SyntaxError`, and the type check above lets
+                # it through (`inf` is a legitimate `float`).
+                raise AmountParseError("amount is not finite")
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
             exponent = node.right
             if not (isinstance(exponent, ast.Constant) and isinstance(exponent.value, int)):
@@ -247,15 +320,20 @@ def _check_ast(tree: ast.AST) -> None:
                 raise AmountParseError("exponent out of allowed range")
 
 
-def _eval_node(node: ast.expr) -> Decimal:
+def _eval_node(node: ast.expr, tokens: Mapping[str, Decimal]) -> Decimal:
     """Evaluate an already-validated AST expression node into a `Decimal`."""
     if isinstance(node, ast.Constant):
         return Decimal(str(node.value))
+    if isinstance(node, ast.Name):
+        try:
+            return tokens[node.id]
+        except KeyError as exc:
+            raise AmountParseError(f"unknown identifier: {node.id!r}") from exc
     if isinstance(node, ast.UnaryOp):
-        operand = _eval_node(node.operand)
+        operand = _eval_node(node.operand, tokens)
         return -operand if isinstance(node.op, ast.USub) else operand
     if isinstance(node, ast.BinOp):
-        return _apply_binop(node.op, _eval_node(node.left), _eval_node(node.right))
+        return _apply_binop(node.op, _eval_node(node.left, tokens), _eval_node(node.right, tokens))
     raise AmountParseError(f"disallowed expression element: {type(node).__name__}")
 
 
@@ -276,6 +354,27 @@ def _apply_binop(op: ast.operator, left: Decimal, right: Decimal) -> Decimal:
     if isinstance(op, ast.Pow):
         return left ** int(right)
     raise AmountParseError(f"disallowed operator: {type(op).__name__}")
+
+
+def round_for_storage(value: Decimal) -> Decimal:
+    """Round a money value to a whole unit before it is written to Sheets.
+
+    Every write site that stores an `int(...)` amount/price column must
+    round through this first — game currency has no fractional part on the
+    sheet, and truncating with a bare `int(...)` (round-toward-zero) instead
+    of rounding would make the persisted value quietly diverge from the
+    `Decimal` that stays cached/returned to the caller for the very same
+    field. Uses the same `ROUND_HALF_UP` convention as `format_amount`.
+
+    Args:
+        value: Amount to round.
+
+    Returns:
+        `value` rounded to the nearest whole unit, still a `Decimal` — the
+        object a caller caches/returns should be built from this, not from
+        the original unrounded `value`, so the two never disagree.
+    """
+    return value.to_integral_value(rounding=ROUND_HALF_UP)
 
 
 def format_amount(value: Decimal | int, *, currency: bool = True) -> str:
@@ -308,17 +407,31 @@ def format_compact(value: Decimal | int) -> str:
     negative = amount < 0
     magnitude = abs(amount)
 
-    for unit, suffix in _COMPACT_UNITS:
-        if magnitude >= unit:
-            text = f"{_quantize_one_decimal(magnitude / unit)} {suffix}"
-            break
+    for index, (unit, suffix) in enumerate(_COMPACT_UNITS):
+        if magnitude < unit:
+            continue
+        # Rounding the quotient to one decimal can itself reach 1000 (e.g.
+        # 999 950 -> "1000.0к"), which is really the next unit up, not
+        # "1000 к" (DOM-4). Escalate as long as a larger unit exists.
+        # _COMPACT_UNITS is ordered largest-first, so decrementing `index`
+        # is what moves to a larger unit; this only matters if a unit is
+        # ever inserted out of that order.
+        while index > 0 and _quantized_quotient(magnitude, unit) >= 1000:
+            index -= 1
+            unit, suffix = _COMPACT_UNITS[index]
+        text = f"{_format_quotient(_quantized_quotient(magnitude, unit))} {suffix}"
+        break
     else:
         text = str(int(magnitude.to_integral_value(rounding=ROUND_HALF_UP)))
 
     return f"-{text}" if negative else text
 
 
-def _quantize_one_decimal(value: Decimal) -> str:
-    """Round to one decimal place and drop a trailing ".0"."""
-    text = f"{value.quantize(Decimal('0.1'), rounding=ROUND_HALF_UP):f}"
-    return text.removesuffix(".0")
+def _quantized_quotient(magnitude: Decimal, unit: Decimal) -> Decimal:
+    """Round `magnitude / unit` to one decimal place."""
+    return (magnitude / unit).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+
+
+def _format_quotient(quantized: Decimal) -> str:
+    """Render an already-quantized one-decimal value, dropping a trailing ".0"."""
+    return f"{quantized:f}".removesuffix(".0")

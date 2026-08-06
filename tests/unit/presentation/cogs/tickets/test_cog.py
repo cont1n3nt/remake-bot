@@ -13,14 +13,19 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
+import pytest
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.application.dto.transaction_request import TransactionRegistrationResult
 from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
+from stalbot.domain.entities.screenshot import OcrResult
 from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType, DeliveryMethod, ItemCategory, TicketKind, TicketStatus
+from stalbot.domain.errors import AmountParseError
 from stalbot.presentation.cogs.tickets.cog import TicketsCog, _infer_author_id, _resolve_member
+from stalbot.presentation.cogs.tickets.modals import AmountModal
+from stalbot.presentation.cogs.tickets.order_views import OrderEditorView, OrderSummaryView
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 _SELL_ITEMS_CATEGORY = next(
@@ -29,6 +34,14 @@ _SELL_ITEMS_CATEGORY = next(
 _ORDER_BOOSTS_CATEGORY = next(
     cid for cid, kind in TICKET_CATEGORIES.items() if kind is TicketKind.ORDER_BOOSTS
 )
+
+
+class _FixedClock:
+    def __init__(self, now: datetime) -> None:
+        self._now = now
+
+    def now(self) -> datetime:
+        return self._now
 
 
 def _session(**overrides: object) -> TicketSession:
@@ -78,7 +91,7 @@ def _fake_boost_orders() -> MagicMock:
     boost_orders.list_available_boosts = AsyncMock(return_value=[])
     boost_orders.list_lines = AsyncMock(return_value=[])
     boost_orders.list_lines_with_items = AsyncMock(return_value=[])
-    boost_orders.apply_page_selection = AsyncMock()
+    boost_orders.apply_page_selection = AsyncMock(return_value=frozenset())
     boost_orders.set_quantity = AsyncMock()
     boost_orders.adjust_quantity = AsyncMock(return_value=1)
     boost_orders.remove_line = AsyncMock()
@@ -129,6 +142,7 @@ def _cog(
     boost_orders: MagicMock | None = None,
     transactions: MagicMock | None = None,
     progression: MagicMock | None = None,
+    embeds: EmbedFactory | None = None,
     tool_wait_timeout: float = 0.05,
     log_channel_id: int = 555,
 ) -> tuple[TicketsCog, MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
@@ -144,7 +158,7 @@ def _cog(
         boost_orders,
         transactions,
         progression,
-        EmbedFactory(),
+        embeds or EmbedFactory(),
         settings,
         tool_wait_timeout_seconds=tool_wait_timeout,
     )
@@ -246,6 +260,17 @@ async def test_on_guild_channel_create_posts_the_panel_as_soon_as_tool_speaks() 
     tickets.open_ticket.assert_awaited_once()
 
 
+async def test_on_guild_channel_create_survives_the_channel_disappearing() -> None:
+    """TICK-6: the channel can be deleted before the panel is posted — must not raise."""
+    cog, tickets, *_ = _cog(tool_wait_timeout=0.02)
+    channel = _text_channel()
+    channel.send = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404, reason=""), "gone"))
+
+    await cog.on_guild_channel_create(channel)  # must not raise
+
+    tickets.record_panel.assert_not_called()
+
+
 async def test_on_message_ignores_bot_authors_that_are_not_ticket_tool() -> None:
     cog, tickets, *_ = _cog()
 
@@ -262,28 +287,49 @@ async def test_on_message_ignores_messages_without_attachments_in_a_tracked_chan
     tickets.get.assert_not_called()
 
 
+async def test_on_message_ignores_an_image_when_the_button_was_not_pressed() -> None:
+    """UX #15: an unrequested image in the ticket channel must not be recorded."""
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session()))
+    attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+
+    await cog.on_message(_message(author_id=42, attachments=[attachment]))
+
+    tickets.get.assert_not_called()
+
+
+async def test_on_message_handles_an_image_once_the_button_was_pressed() -> None:
+    """UX #15: the gate opens after `_on_screenshot_button`, for that channel only."""
+    session = _session()
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    channel = _text_channel()
+    interaction = _interaction(channel=channel)
+    await cog._on_screenshot_button(interaction)
+
+    message = _message(author_id=42, channel=channel)
+    message.guild = None
+    attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+    attachment.read = AsyncMock(return_value=b"fake-bytes")
+    message.attachments = [attachment]
+
+    await cog.on_message(message)
+
+    tickets.get.assert_awaited_once_with(channel.id)
+
+
 # -- Form flow ------------------------------------------------------------
 
 
-async def test_on_start_sets_the_author_when_still_unknown() -> None:
+async def test_on_start_does_not_touch_the_author() -> None:
+    """TICK-2: the first click of the shared panel button no longer decides authorship."""
     cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session(author_id=0)))
     interaction = _interaction(user_id=777)
 
     await cog._on_start(interaction, TicketKind.SELL_ITEMS)
 
-    tickets.set_author.assert_awaited_once_with(interaction.channel_id, 777)
+    tickets.set_author.assert_not_called()
     interaction.response.send_message.assert_awaited_once()
     kwargs = interaction.response.send_message.call_args.kwargs
     assert kwargs["ephemeral"] is True
-
-
-async def test_on_start_does_not_overwrite_a_known_author() -> None:
-    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=_session(author_id=555)))
-    interaction = _interaction(user_id=777)
-
-    await cog._on_start(interaction, TicketKind.SELL_ITEMS)
-
-    tickets.set_author.assert_not_called()
 
 
 async def test_on_delivery_selected_records_and_opens_the_form() -> None:
@@ -324,6 +370,28 @@ async def test_on_form_submitted_resolves_a_mentioned_referrer() -> None:
 
     _args, kwargs = tickets.record_form.call_args
     assert kwargs["referrer_discord_id"] == 888
+
+
+async def test_on_form_submitted_sets_the_author_to_whoever_submitted_it() -> None:
+    """TICK-2: authorship is decided at form submission, not at the button click."""
+    cog, tickets, *_ = _cog()
+    interaction = _interaction(user_id=777)
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", None, None)
+
+    tickets.set_author.assert_awaited_once_with(interaction.channel_id, 777)
+
+
+async def test_on_form_submitted_drops_a_case_insensitive_self_referral() -> None:
+    """TICK-8: a referral matching the submitter's own (normalized) nick is discarded."""
+    cog, tickets, *_ = _cog()
+    interaction = _interaction()
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", "  scaryyyyy ", "<@888>")
+
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["referrer_nick"] is None
+    assert kwargs["referrer_discord_id"] is None
 
 
 # -- Confirmation -----------------------------------------------------------
@@ -375,6 +443,100 @@ async def test_confirm_button_opens_the_amount_modal_for_a_filled_ticket() -> No
     interaction.response.send_modal.assert_awaited_once()
 
 
+async def test_amount_modal_error_reaches_the_admin_end_to_end() -> None:
+    """SEC-4 integration: `_on_amount_submitted` calls `evaluate_amount(...)` with no
+    try/except of its own — before this fix, a bad amount would raise past `on_submit`
+    into discord.py's default `Modal.on_error`, which just logs and returns, leaving
+    the admin staring at a hung "thinking..." indicator. Exercises the real
+    `AmountModal` the cog actually constructs (via `_on_confirm_button`), not a stub,
+    through `on_submit` raising and `on_error` handling it — the same two steps
+    discord.py's own dispatcher performs in production.
+    """
+    session = _session(game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    open_interaction = _interaction()
+    open_interaction.user.guild_permissions.administrator = True
+
+    await cog._on_confirm_button(open_interaction)
+    modal = open_interaction.response.send_modal.call_args.args[0]
+    assert isinstance(modal, AmountModal)
+
+    modal.amount._value = "not an amount"
+    submit_interaction = _interaction()
+    submit_interaction.response.is_done = MagicMock(return_value=True)  # already deferred
+
+    with pytest.raises(AmountParseError) as excinfo:
+        await modal.on_submit(submit_interaction)
+
+    await modal.on_error(submit_interaction, excinfo.value)
+
+    submit_interaction.followup.send.assert_awaited_once()
+    embed = submit_interaction.followup.send.call_args.kwargs["embed"]
+    assert "распознать сумму" in (embed.description or "")
+
+
+async def test_amount_submitted_rejects_a_ticket_confirmed_since_the_modal_was_opened() -> None:
+    """TICK-1: a double confirm (double-click, two admins) must not double-register.
+
+    `_confirm_precheck` only ran when the modal was opened; by the time the
+    modal is submitted, a concurrent submission may have already confirmed
+    the ticket. Re-checking here avoids re-running every post-confirm side
+    effect for a deal that is already recorded.
+    """
+    session = _session(game_nick="Scaryyyyy", status=TicketStatus.CONFIRMED)
+    cog, tickets, screenshots, _boost_orders, transactions, progression = _cog(
+        tickets=_fake_tickets(get_return=session)
+    )
+    interaction = _interaction()
+
+    await cog._on_amount_submitted(interaction, "100 000")
+
+    transactions.register.assert_not_called()
+    tickets.record_confirmed.assert_not_called()
+    screenshots.record_confirmed_amount.assert_not_called()
+    progression.sync.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "уже была подтверждена" in (embed.description or "")
+
+
+async def test_amount_submitted_skips_duplicate_side_effects_on_a_replayed_registration() -> None:
+    """TICK-1/TICK-11: a truly simultaneous double-submit both pass the pre-register status
+    check (neither has confirmed yet), but only one of them actually writes — the other gets
+    `TransactionService.register()`'s idempotent replay back and must not re-run announcements.
+    """
+    session = _session(game_nick="Scaryyyyy")
+    replayed_record = TransactionRecord(
+        row=3,
+        at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        nick="scaryyyyy",  # type: ignore[arg-type]
+        nick_display="Scaryyyyy",
+        deal_type=DealType.SALE,
+        amount=Decimal(100000),
+        coins=1,
+        xp=10,
+        referrer=None,
+    )
+    replayed_result = TransactionRegistrationResult(
+        record=replayed_record, discord_bound=False, formula_pending=False, replayed=True
+    )
+    cog, tickets, screenshots, boost_orders, _transactions, progression = _cog(
+        tickets=_fake_tickets(get_return=session),
+        transactions=_fake_transactions(register_result=replayed_result),
+    )
+    channel = _text_channel()
+    interaction = _interaction(channel=channel)
+
+    await cog._on_amount_submitted(interaction, "100 000")
+
+    tickets.record_confirmed.assert_awaited_once_with(session.channel_id)
+    screenshots.record_confirmed_amount.assert_not_called()
+    boost_orders.clear.assert_not_called()
+    progression.sync.assert_not_called()
+    channel.send.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "уже зафиксирована" in (embed.title or "")
+
+
 async def test_amount_submitted_registers_the_deal_and_confirms() -> None:
     session = _session(game_nick="Scaryyyyy", referrer_nick="OtherNick")
     cog, tickets, screenshots, _boost_orders, transactions, progression = _cog(
@@ -411,24 +573,26 @@ async def test_screenshot_button_shows_the_requirements() -> None:
     interaction.response.send_message.assert_awaited_once()
     embed = interaction.response.send_message.call_args.kwargs["embed"]
     assert "8 МБ" in (embed.description or "")
+    assert interaction.channel_id in cog._awaiting_screenshot
 
 
-async def test_handle_screenshot_rejects_oversized_files() -> None:
+async def test_handle_screenshots_rejects_oversized_files() -> None:
     cog, tickets, screenshots, *_ = _cog()
     channel = _text_channel()
     message = _message(author_id=1, channel=channel)
     attachment = MagicMock(spec=discord.Attachment, size=9 * 1024 * 1024, content_type="image/png")
 
-    await cog._handle_screenshot(message, _session(), attachment)
+    await cog._handle_screenshots(message, _session(), [attachment])
 
     channel.send.assert_awaited_once()
     embed = channel.send.call_args.kwargs["embed"]
     assert "слишком большой" in (embed.title or "")
     tickets.record_screenshot.assert_not_called()
     screenshots.on_attached.assert_not_called()
+    message.delete.assert_not_awaited()
 
 
-async def test_handle_screenshot_archives_and_updates_the_card() -> None:
+async def test_handle_screenshots_archives_and_updates_the_card() -> None:
     session = _session(summary_message_id=321)
     cog, tickets, screenshots, *_ = _cog(tickets=_fake_tickets(get_return=session))
     log_channel = _text_channel(channel_id=555)
@@ -444,13 +608,172 @@ async def test_handle_screenshot_archives_and_updates_the_card() -> None:
     message.attachments = []
     attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
     attachment.read = AsyncMock(return_value=b"fake-bytes")
+    cog._awaiting_screenshot.add(session.channel_id)
 
-    await cog._handle_screenshot(message, session, attachment)
+    await cog._handle_screenshots(message, session, [attachment])
 
     log_channel.send.assert_awaited_once()
     tickets.record_screenshot.assert_awaited_once()
     screenshots.on_attached.assert_awaited_once()
     ticket_channel.fetch_message.assert_awaited_once_with(321)
+
+    # UX #2: the raw upload is removed from the channel once it's archived.
+    message.delete.assert_awaited_once()
+
+    # UX #12: a transient "closest to ephemeral outside an interaction"
+    # confirmation, addressed to the uploader, self-deletes.
+    ticket_channel.send.assert_awaited_once()
+    confirm_kwargs = ticket_channel.send.call_args.kwargs
+    assert confirm_kwargs["content"] == "<@1>"
+    assert confirm_kwargs["delete_after"] == 8.0
+    assert "закреплён" in (confirm_kwargs["embed"].description or "")
+
+    # The gate closes again once a screenshot has actually been recorded.
+    assert session.channel_id not in cog._awaiting_screenshot
+
+
+async def test_handle_screenshots_still_confirms_when_deleting_the_upload_fails() -> None:
+    """A missing-permissions/already-gone message must not stop the confirmation."""
+    session = _session(summary_message_id=None)
+    cog, tickets, _screenshots, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    log_channel = _text_channel(channel_id=555)
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_channel = MagicMock(return_value=log_channel)
+    ticket_channel = _text_channel()
+    ticket_channel.guild = guild
+    message = _message(author_id=1, channel=ticket_channel)
+    message.guild = guild
+    message.attachments = []
+    message.delete = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(status=403), "Missing Permissions")
+    )
+    attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+    attachment.read = AsyncMock(return_value=b"fake-bytes")
+
+    await cog._handle_screenshots(message, session, [attachment])
+
+    message.delete.assert_awaited_once()
+    ticket_channel.send.assert_awaited_once()
+    tickets.record_screenshot.assert_awaited_once()
+
+
+async def test_handle_screenshots_archives_every_attachment_but_cards_only_the_first() -> None:
+    """UX #13: all images in the message are archived/analyzed, not just the first."""
+    session = _session(summary_message_id=None)
+    cog, tickets, screenshots, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    log_channel = _text_channel(channel_id=555)
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_channel = MagicMock(return_value=log_channel)
+    ticket_channel = _text_channel()
+    ticket_channel.guild = guild
+    message = _message(author_id=1, channel=ticket_channel)
+    message.guild = guild
+    message.attachments = []
+
+    def _attachment() -> MagicMock:
+        attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+        attachment.read = AsyncMock(return_value=b"fake-bytes")
+        return attachment
+
+    attachments = [_attachment(), _attachment(), _attachment()]
+
+    await cog._handle_screenshots(message, session, attachments)
+
+    assert log_channel.send.await_count == 3
+    assert screenshots.on_attached.await_count == 3
+    # Only the cover image is recorded on the session.
+    tickets.record_screenshot.assert_awaited_once()
+    confirm_kwargs = ticket_channel.send.call_args.kwargs
+    assert "3 шт." in (confirm_kwargs["embed"].description or "")
+
+
+async def test_handle_screenshot_is_byte_identical_regardless_of_the_ocr_outcome() -> None:
+    """TEST-6: decision A7 says OCR must never affect the ticket flow — v1.0
+    hardcodes `NullOcrGateway`, but that alone doesn't prove `_handle_screenshot`
+    stays indifferent to whatever `ScreenshotService.on_attached()` returns;
+    it just means today's only OCR outcome happens to be `"disabled"`. This
+    drives the same screenshot through three very different outcomes (the
+    real v1.0 `"disabled"` result, a hypothetical M13 `"done"` result with
+    recognized items, and a raised exception — `on_attached` itself already
+    swallows OCR errors per APP-8, but a *caller*-side bug could still let
+    one through) and asserts every effect `_handle_screenshot` produces
+    before/independent of that call — the card edit and the archive upload —
+    comes out byte-for-byte the same every time, and that the discarded
+    return value never reaches a branch.
+
+    Uses a fixed-clock `EmbedFactory` rather than the real one `_cog()`
+    defaults to: `render_ticket_card`'s footer is timestamped at minute
+    precision, so a wall-clock minute rollover between loop iterations
+    would otherwise make the embed snapshots differ for a reason that has
+    nothing to do with OCR — a false red unrelated to the contract this
+    test actually guards.
+    """
+    embeds = EmbedFactory(clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)))
+    outcomes: list[AsyncMock] = [
+        AsyncMock(return_value=OcrResult(status="disabled")),
+        AsyncMock(
+            return_value=OcrResult(
+                status="done",
+                items=(),
+                total_estimate="123.45",
+                confidence=0.97,
+            )
+        ),
+        AsyncMock(side_effect=RuntimeError("a caller-side bug let this through")),
+    ]
+
+    def _call_snapshot(call: Any) -> dict[str, Any]:
+        # `discord.Embed`/`discord.File` are distinct objects on every call
+        # (no value equality) even when built from identical data — compare
+        # their actual content instead of object identity.
+        kwargs = call.kwargs
+        return {
+            "embed": kwargs["embed"].to_dict(),
+            "attachment_filenames": [f.filename for f in kwargs.get("attachments", [])]
+            or ([kwargs["file"].filename] if "file" in kwargs else []),
+        }
+
+    edit_calls: list[dict[str, Any]] = []
+    archive_calls: list[dict[str, Any]] = []
+    record_screenshot_calls: list[Any] = []
+
+    for on_attached in outcomes:
+        session = _session(summary_message_id=321)
+        cog, tickets, screenshots, *_ = _cog(
+            tickets=_fake_tickets(get_return=session), embeds=embeds
+        )
+        screenshots.on_attached = on_attached
+
+        log_channel = _text_channel(channel_id=555)
+        guild = MagicMock(spec=discord.Guild)
+        guild.get_channel = MagicMock(return_value=log_channel)
+        ticket_channel = _text_channel()
+        ticket_channel.guild = guild
+        summary_message = MagicMock(spec=discord.Message, edit=AsyncMock())
+        ticket_channel.fetch_message = AsyncMock(return_value=summary_message)
+        message = _message(author_id=1, channel=ticket_channel)
+        message.id = 777
+        message.guild = guild
+        message.attachments = []
+        attachment = MagicMock(spec=discord.Attachment, size=1024, content_type="image/png")
+        attachment.read = AsyncMock(return_value=b"fake-bytes")
+
+        # `_handle_screenshots` now isolates `on_attached` behind its own
+        # try/except — a raising outcome (the third one) must never escape,
+        # and everything that runs after the archive/card update in the
+        # happy path (gate close, delete, confirmation) must still happen.
+        await cog._handle_screenshots(message, session, [attachment])
+        message.delete.assert_awaited_once()
+        ticket_channel.send.assert_awaited_once()  # the confirmation message
+        assert session.channel_id not in cog._awaiting_screenshot
+
+        edit_calls.append(_call_snapshot(summary_message.edit.call_args))
+        archive_calls.append(_call_snapshot(log_channel.send.call_args))
+        record_screenshot_calls.append(tickets.record_screenshot.call_args)
+
+    assert edit_calls[0] == edit_calls[1] == edit_calls[2]
+    assert archive_calls[0] == archive_calls[1] == archive_calls[2]
+    assert record_screenshot_calls[0] == record_screenshot_calls[1] == record_screenshot_calls[2]
 
 
 # -- Order-boosts form & editor --------------------------------------------
@@ -470,7 +793,8 @@ async def test_on_start_opens_the_order_form_modal_directly() -> None:
     interaction.response.send_message.assert_not_called()
 
 
-async def test_order_form_submitted_records_the_deadline_and_posts_the_editor() -> None:
+async def test_order_form_submitted_records_the_deadline_and_posts_the_summary() -> None:
+    """UX #1: the order starts on the read-only summary, not the interactive editor."""
     session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
     cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
     channel = _text_channel()
@@ -482,6 +806,7 @@ async def test_order_form_submitted_records_the_deadline_and_posts_the_editor() 
     _args, kwargs = tickets.record_form.call_args
     assert kwargs["deadline"] is not None
     channel.send.assert_awaited_once()
+    assert isinstance(channel.send.call_args.kwargs["view"], OrderSummaryView)
     tickets.record_summary_message.assert_awaited_once()
 
 
@@ -492,7 +817,34 @@ async def test_order_form_submitted_reopens_the_modal_on_a_bad_deadline() -> Non
     await cog._on_order_form_submitted(interaction, "Scaryyyyy", "not a date", "Ref", None)
 
     tickets.record_form.assert_not_called()
+    tickets.set_author.assert_not_called()
     interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_order_form_submitted_sets_the_author_to_whoever_submitted_it() -> None:
+    """TICK-2, same as `_on_form_submitted`."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=777)
+
+    await cog._on_order_form_submitted(interaction, "Scaryyyyy", "через 3 часа", None, None)
+
+    tickets.set_author.assert_awaited_once_with(interaction.channel_id, 777)
+
+
+async def test_order_form_submitted_drops_a_case_insensitive_self_referral() -> None:
+    """TICK-8, same as `_on_form_submitted`."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_form_submitted(
+        interaction, "Scaryyyyy", "через 3 часа", "  scaryyyyy ", "<@888>"
+    )
+
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["referrer_nick"] is None
+    assert kwargs["referrer_discord_id"] is None
 
 
 async def test_order_line_selected_stores_the_active_item_and_edits_in_place() -> None:
@@ -516,6 +868,19 @@ async def test_order_line_selected_rejects_a_non_participant() -> None:
     tickets.set_active_order_item.assert_not_called()
     embed = interaction.response.send_message.call_args.kwargs["embed"]
     assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_order_line_selected_rejects_an_already_confirmed_ticket() -> None:
+    """TICK-3: every editor mutator must reject once the ticket is confirmed, not just confirm."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, status=TicketStatus.CONFIRMED)
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_line_selected(interaction, 42)
+
+    tickets.set_active_order_item.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "уже была подтверждена" in (embed.description or "")
 
 
 async def test_adjust_quantity_warns_when_nothing_is_selected() -> None:
@@ -571,6 +936,37 @@ async def test_qty_submitted_rejects_an_out_of_range_amount() -> None:
     await cog._on_order_qty_submitted(interaction, "10000")
 
     boost_orders.set_quantity.assert_not_called()
+
+
+async def test_qty_submitted_rejects_an_already_confirmed_ticket() -> None:
+    """TICK-3: the modal-submit path re-fetches its own session, so it needs its own check."""
+    session = _session(
+        kind=TicketKind.ORDER_BOOSTS,
+        author_id=42,
+        active_order_item_id=7,
+        status=TicketStatus.CONFIRMED,
+    )
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_qty_submitted(interaction, "5")
+
+    boost_orders.set_quantity.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "уже была подтверждена" in (embed.description or "")
+
+
+async def test_qty_submitted_rejects_a_fractional_amount() -> None:
+    """TICK-10: "9999.9" must be rejected, not silently truncated to 9999."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, author_id=42, active_order_item_id=7)
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_order_qty_submitted(interaction, "9999.9")
+
+    boost_orders.set_quantity.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "целым числом" in (embed.description or "")
 
 
 async def test_qty_submitted_rejects_a_non_participant() -> None:
@@ -692,7 +1088,87 @@ async def test_order_confirm_rejects_an_empty_order() -> None:
     assert "нет ни одной позиции" in (embed.description or "")
 
 
-async def test_order_confirm_opens_the_amount_modal_prefilled_with_the_total() -> None:
+async def test_order_confirm_returns_to_the_read_only_summary() -> None:
+    """UX #1: the editor's "✅ Подтвердить" no longer opens the amount modal directly —
+    it switches the message back to the read-only summary embed/view, open to any
+    participant (author or admin), not just admins.
+    """
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    boost_orders = _fake_boost_orders()
+    boost_orders.list_lines = AsyncMock(return_value=[MagicMock()])
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), boost_orders=boost_orders)
+    interaction = _interaction(user_id=session.author_id)  # a non-admin author
+
+    await cog._on_order_confirm(interaction)
+
+    interaction.response.send_modal.assert_not_awaited()
+    kwargs = interaction.response.edit_message.call_args.kwargs
+    assert isinstance(kwargs["view"], OrderSummaryView)
+    assert "Заказ бустов" in (kwargs["embed"].title or "")
+
+
+async def test_order_confirm_rejects_a_non_participant() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=999999)  # neither the author nor an admin
+
+    await cog._on_order_confirm(interaction)
+
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_order_edit_button_opens_the_interactive_editor() -> None:
+    """UX #1: "✏️ Редактировать" on the summary switches the message to `OrderEditorView`."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=session.author_id)
+
+    await cog._on_order_edit_button(interaction)
+
+    kwargs = interaction.response.edit_message.call_args.kwargs
+    assert isinstance(kwargs["view"], OrderEditorView)
+    assert "Редактор заказа" in (kwargs["embed"].title or "")
+
+
+async def test_order_edit_button_rejects_a_non_participant() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=999999)
+
+    await cog._on_order_edit_button(interaction)
+
+    interaction.response.edit_message.assert_not_awaited()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_order_complete_button_rejects_non_admins() -> None:
+    """UX #1: "🏁 Завершить заказ" keeps the old admin-only gate `_on_order_confirm` had."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=session.author_id)  # author, but not an admin
+
+    await cog._on_order_complete_button(interaction)
+
+    interaction.response.send_modal.assert_not_awaited()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_order_complete_button_rejects_an_empty_order() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+    interaction.user.guild_permissions.administrator = True
+
+    await cog._on_order_complete_button(interaction)
+
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "нет ни одной позиции" in (embed.description or "")
+
+
+async def test_order_complete_button_opens_the_amount_modal_prefilled_with_the_total() -> None:
     session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
     boost_orders = _fake_boost_orders()
     boost_orders.list_lines = AsyncMock(return_value=[MagicMock()])
@@ -701,7 +1177,7 @@ async def test_order_confirm_opens_the_amount_modal_prefilled_with_the_total() -
     interaction = _interaction()
     interaction.user.guild_permissions.administrator = True
 
-    await cog._on_order_confirm(interaction)
+    await cog._on_order_complete_button(interaction)
 
     interaction.response.send_modal.assert_awaited_once()
 

@@ -11,11 +11,10 @@ from datetime import datetime
 
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.application.ports.clock import Clock
+from stalbot.domain.entities.screenshot import OCR_STATUS_DISABLED
 from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
 from stalbot.domain.errors import TicketSessionNotFoundError
 from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
-
-_OCR_STATUS_DISABLED = "disabled"
 
 
 class TicketService:
@@ -72,7 +71,7 @@ class TicketService:
             screenshot_message_id=None,
             summary_message_id=None,
             panel_message_id=None,
-            ocr_status=_OCR_STATUS_DISABLED,
+            ocr_status=OCR_STATUS_DISABLED,
             ocr_analysis_id=None,
             idempotency_key=None,
             created_at=now,

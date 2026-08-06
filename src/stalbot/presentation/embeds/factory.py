@@ -32,10 +32,12 @@ class _Clock(Protocol):
 
 _TITLE_MAX = 256
 _DESCRIPTION_MAX = 4096
+_FIELD_NAME_MAX = 256
 _FIELD_VALUE_MAX = 1024
 _FIELDS_MAX = 25
 _TOTAL_MAX = 6000
 _TRIM_STEP = 200
+_PLACEHOLDER = "—"
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -99,16 +101,23 @@ class EmbedFactory:
                 panel's `"🎫 Заявка на заказ бустов"`, but still wants the
                 same ticket color.
         """
-        return self._build(Color.TICKET, title or TICKET_TITLES[kind], description)
+        return self._build(Color.TICKET, title or TICKET_TITLES[kind], description, kind="Заявки")
 
     def audit(self, event: AuditEvent) -> discord.Embed:
         """Build the one audit-log embed format (`#9B59B6`, PLAN.md §5.4)."""
         embed = self._build(
-            Color.AUDIT, f"{Emoji.AUDIT} Использование команды", None, now=event.occurred_at
+            Color.AUDIT,
+            f"{Emoji.AUDIT} Использование команды",
+            None,
+            now=event.occurred_at,
+            kind="Логи",
         )
         embed.add_field(
             name=f"{Emoji.USER} Пользователь",
-            value=_truncate(f"{event.user_display} (ID: {event.user_id})", _FIELD_VALUE_MAX),
+            value=_truncate(
+                f"<@{event.user_id}> ({event.user_display}, ID: {event.user_id})",
+                _FIELD_VALUE_MAX,
+            ),
             inline=True,
         )
         embed.add_field(
@@ -146,19 +155,20 @@ class EmbedFactory:
         description: str | None,
         *,
         now: datetime | None = None,
+        kind: str | None = None,
     ) -> discord.Embed:
         embed = discord.Embed(
             title=_truncate(title, _TITLE_MAX),
             description=_truncate(description, _DESCRIPTION_MAX) if description else None,
             color=color,
         )
-        embed.set_author(name=self._platform_name, icon_url=self.guild_icon_url)
-        embed.set_footer(text=build_footer(now or self._clock.now()))
+        embed.set_author(name=kind or self._platform_name, icon_url=self.guild_icon_url)
+        embed.set_footer(text=build_footer(now or self._clock.now(), kind))
         return enforce_limits(embed)
 
 
 def enforce_limits(embed: discord.Embed) -> discord.Embed:
-    """Clamp *embed* to Discord's field-count and total-length limits.
+    """Clamp *embed* to Discord's field-count and per-field/total-length limits.
 
     `success`/`info`/`warning`/`error`/`ticket` return an embed with no
     fields yet; callers that add fields with `embed.add_field(...)`
@@ -168,11 +178,22 @@ def enforce_limits(embed: discord.Embed) -> discord.Embed:
     while len(embed.fields) > _FIELDS_MAX:
         embed.remove_field(_FIELDS_MAX)
 
+    for index, field in enumerate(embed.fields):
+        name = _truncate(field.name or "​", _FIELD_NAME_MAX)
+        value = _truncate(field.value or "​", _FIELD_VALUE_MAX)
+        if name != field.name or value != field.value:
+            embed.set_field_at(index, name=name, value=value, inline=field.inline)
+
     while len(embed) > _TOTAL_MAX and embed.fields:
         index = max(range(len(embed.fields)), key=lambda i: len(embed.fields[i].value or ""))
         field = embed.fields[index]
         value = field.value or ""
-        trimmed = _truncate(value, max(0, len(value) - _TRIM_STEP)) or "—"
+        if value == _PLACEHOLDER:
+            # Every field's value has already been collapsed to the
+            # placeholder — shrinking further is impossible (field names
+            # are not trimmed here), so stop instead of looping forever.
+            break
+        trimmed = _truncate(value, max(0, len(value) - _TRIM_STEP)) or _PLACEHOLDER
         embed.set_field_at(index, name=field.name or "​", value=trimmed, inline=field.inline)
 
     return embed

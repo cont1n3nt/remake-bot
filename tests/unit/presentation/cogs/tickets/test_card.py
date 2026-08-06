@@ -74,7 +74,7 @@ def test_referrer_without_resolved_discord_id_shows_only_the_nick() -> None:
     referrer_line = next(
         line for line in (embed.description or "").splitlines() if "Пригласил" in line
     )
-    assert referrer_line == "🤝 Пригласил OtherNick"
+    assert referrer_line == "🤝 Пригласил: OtherNick"
 
 
 def test_no_image_when_no_screenshot_yet() -> None:

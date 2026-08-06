@@ -12,6 +12,7 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 type OcrEngine = Literal["null", "tesseract", "paddle", "vision"]
+type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 
 class Settings(BaseSettings):
@@ -36,9 +37,9 @@ class Settings(BaseSettings):
 
     # --- Cache and background tasks ---
     cache_db_path: Path = Path("./data/cache.sqlite3")
-    sync_users_interval_seconds: int = 180
-    sync_items_interval_seconds: int = 600
-    progression_poll_seconds: int = 300
+    sync_users_interval_seconds: int = Field(default=180, gt=0)
+    sync_items_interval_seconds: int = Field(default=600, gt=0)
+    progression_poll_seconds: int = Field(default=300, gt=0)
 
     # --- Behavior toggles (PLAN.md §17.2) ---
     price_import_confirm: bool = True
@@ -52,4 +53,4 @@ class Settings(BaseSettings):
     ocr_match_threshold: int = Field(default=85, ge=0, le=100)
     ocr_timeout_seconds: int = Field(default=20, gt=0)
 
-    log_level: str = "INFO"
+    log_level: LogLevel = "INFO"

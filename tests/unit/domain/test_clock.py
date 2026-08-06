@@ -12,6 +12,7 @@ from stalbot.domain.clock import (
     format_duration,
     parse_date,
     parse_deadline,
+    parse_sheet_datetime,
 )
 from stalbot.domain.errors import DeadlineParseError, InvalidPeriodError
 
@@ -51,7 +52,7 @@ class TestDateRange:
         assert rng.start == rng.end == date(2026, 7, 31)
 
     def test_week(self) -> None:
-        rng = DateRange.week(date(2026, 7, 1), date(2026, 7, 7))
+        rng = DateRange.week(date(2026, 7, 1), date(2026, 7, 7), today=date(2026, 7, 7))
         assert rng.start == date(2026, 7, 1)
         assert rng.end == date(2026, 7, 7)
 
@@ -71,7 +72,23 @@ class TestDateRange:
 
     def test_end_before_start_raises(self) -> None:
         with pytest.raises(InvalidPeriodError):
-            DateRange.week(date(2026, 7, 10), date(2026, 7, 1))
+            DateRange.week(date(2026, 7, 10), date(2026, 7, 1), today=date(2026, 7, 10))
+
+    def test_week_rejects_a_future_end_date(self) -> None:
+        with pytest.raises(InvalidPeriodError):
+            DateRange.week(date(2026, 7, 1), date(2026, 7, 7), today=date(2026, 7, 6))
+
+    def test_week_rejects_a_range_over_31_days(self) -> None:
+        with pytest.raises(InvalidPeriodError):
+            DateRange.week(date(2026, 6, 1), date(2026, 7, 31), today=date(2026, 7, 31))
+
+    def test_week_allows_end_equal_to_today(self) -> None:
+        rng = DateRange.week(date(2026, 7, 1), date(2026, 7, 7), today=date(2026, 7, 7))
+        assert rng.end == date(2026, 7, 7)
+
+    def test_week_allows_exactly_31_days(self) -> None:
+        rng = DateRange.week(date(2026, 7, 1), date(2026, 7, 31), today=date(2026, 7, 31))
+        assert (rng.end - rng.start).days + 1 == 31
 
     def test_contains(self) -> None:
         rng = DateRange.month(2026, 7)
@@ -112,6 +129,10 @@ class TestParseDeadline:
             "30.07.2026 12:00",  # in the past
             "32.13.2026 21:00",  # invalid calendar date
             "01.01.2027 00:00",  # more than 90 days ahead
+            # DOM-2/SEC-2: an unbounded digit run overflows timedelta's C-int
+            # internals (OverflowError) both at construction and at `now + ...`.
+            "через 999999999999999999999999999999 часов",
+            "через 999999999999999999999999999999 минут",
         ],
     )
     def test_invalid(self, raw: str) -> None:
@@ -149,3 +170,33 @@ class TestParseDate:
     def test_invalid(self, raw: str) -> None:
         with pytest.raises(InvalidPeriodError):
             parse_date(raw)
+
+
+class TestParseSheetDatetime:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("31.07.2026 21:45", datetime(2026, 7, 31, 21, 45, tzinfo=GMT3)),
+            ("31.07.26 02:56", datetime(2026, 7, 31, 2, 56, tzinfo=GMT3)),
+            ("1.8.2026", datetime(2026, 8, 1, 0, 0, tzinfo=GMT3)),
+        ],
+    )
+    def test_valid(self, raw: str, expected: datetime) -> None:
+        assert parse_sheet_datetime(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "",
+            "   ",
+            "not a date",
+            "31.07",  # no year at all — parse_deadline may default it, this must not
+            "32.13.2026 21:00",  # invalid calendar date
+            # DOM-5: a 3-digit year is ambiguous, not a typo`d 2- or 4-digit one —
+            # must be rejected (None), not silently parsed as literal year 202.
+            "31.7.202 02:56",
+            "1.1.100",
+        ],
+    )
+    def test_invalid_returns_none(self, raw: str) -> None:
+        assert parse_sheet_datetime(raw) is None

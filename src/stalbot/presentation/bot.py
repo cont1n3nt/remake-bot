@@ -1,5 +1,6 @@
 """Subclass of `commands.Bot` — the anchor point for cogs and persistent views."""
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Any, Final
@@ -38,7 +39,7 @@ from stalbot.infrastructure.cache.sync import CacheSync
 from stalbot.infrastructure.discord.audit_channel import AuditChannelGateway
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.infrastructure.discord.role_gateway import DiscordRoleGateway
-from stalbot.infrastructure.logging.trace import current_trace_id
+from stalbot.infrastructure.logging.trace import current_trace_id, new_trace_id, set_trace_id
 from stalbot.infrastructure.ocr.null import NullOcrGateway
 from stalbot.infrastructure.sheets.client import SheetsClient
 from stalbot.presentation.cogs.catalog import CatalogCog
@@ -57,6 +58,13 @@ logger = logging.getLogger(__name__)
 
 #: PLAN.md §12: metrics logged once a minute.
 _METRICS_LOG_INTERVAL_SECONDS: Final = 60
+
+#: Ceiling on how long `close()` waits for a cancelled background loop to
+#: actually unwind (PRES-9). Generous enough to cover a legitimate
+#: `retry_with_backoff` cycle (worst case: `MAX_RETRY_ATTEMPTS` attempts each
+#: capped by `REQUEST_TIMEOUT_SECONDS`, plus backoff) — this is a backstop
+#: against a genuinely wedged task, not a tight budget for the common case.
+_SHUTDOWN_TIMEOUT_SECONDS: Final = 60.0
 
 
 class _StalbotCommandTree(app_commands.CommandTree["StalbotBot"]):
@@ -189,6 +197,7 @@ class StalbotBot(commands.Bot):
             self.sheets_client,
             items_repo,
             BoostOrderLinesRepository(connection),
+            TicketSessionsRepository(connection),
             clock=SystemClock(),
         )
         pricing_service = PricingService(self.sheets_client, items_repo, clock=SystemClock())
@@ -278,30 +287,42 @@ class StalbotBot(commands.Bot):
         self._progression_loop.start()
 
     async def _run_users_sync(self) -> None:
+        # A `tasks.loop` runs as one long-lived `asyncio.Task` for the whole
+        # process, so `current_trace_id()`'s "generate once, cache forever"
+        # fallback would otherwise stick to whatever the very first tick
+        # generated — every log line from every future tick sharing one id
+        # defeats "one id = one operation" (INFRA2-3). Stamping a fresh one
+        # at the top of every tick is what actually delivers that invariant
+        # for a loop, the same way a new interaction's own Task delivers it
+        # for granted for command handlers.
+        set_trace_id(new_trace_id())
         if self.cache_sync is None:
             return
         report = await self.cache_sync.sync_users_and_transactions()
         await self._send_warnings(report.warnings)
 
     async def _run_items_sync(self) -> None:
+        set_trace_id(new_trace_id())  # INFRA2-3, see `_run_users_sync`
         if self.cache_sync is None:
             return
         await self.cache_sync.sync_items()
 
     async def _run_progression_poll(self) -> None:
         """Background poll over the whole player base (PLAN.md §9.2), no event channel."""
+        set_trace_id(new_trace_id())  # INFRA2-3, see `_run_users_sync`
         if self.progression_service is None:
             return
         await self.progression_service.sync()
 
     async def _run_metrics_log(self) -> None:
         """Log Sheets/cache/audit counters once a minute (PLAN.md §12, M11)."""
+        set_trace_id(new_trace_id())  # INFRA2-3, see `_run_users_sync`
         if self.health_service is None:
             return
         status = await self.health_service.snapshot()
         logger.info(
-            "metrics: sheets reads=%d writes=%d, cache hit-rate=%s age=%ss, "
-            "audit queue=%d, ocr samples=%d confirmed=%d",
+            "metrics: sheets reads %d, writes %d, cache hit-rate %s, cache age %ss, "
+            "audit queue %d, ocr samples %d, confirmed %d",
             status.sheets_read_requests,
             status.sheets_write_requests,
             f"{status.cache_hit_rate:.0%}" if status.cache_hit_rate is not None else "n/a",
@@ -329,7 +350,7 @@ class StalbotBot(commands.Bot):
     async def on_ready(self) -> None:
         """Log a successful connection, start the audit worker, flush startup warnings."""
         user = self.user
-        logger.info("logged in as %s (id=%s)", user, user.id if user else None)
+        logger.info("logged in as %s (id %s)", user, user.id if user else None)
         if self.audit_service is not None:
             self.audit_service.start()
         if self._startup_warnings:
@@ -380,14 +401,38 @@ class StalbotBot(commands.Bot):
         """Flush the audit queue, stop sync loops, close the cache, then disconnect."""
         if self.audit_service is not None:
             await self.audit_service.stop()
-        if self._users_sync_loop is not None:
-            self._users_sync_loop.cancel()
-        if self._items_sync_loop is not None:
-            self._items_sync_loop.cancel()
-        if self._progression_loop is not None:
-            self._progression_loop.cancel()
-        if self._metrics_loop is not None:
-            self._metrics_loop.cancel()
+        loops = (
+            self._users_sync_loop,
+            self._items_sync_loop,
+            self._progression_loop,
+            self._metrics_loop,
+        )
+        running_tasks = []
+        for loop in loops:
+            if loop is None:
+                continue
+            loop.cancel()
+            task = loop.get_task()
+            if task is not None:
+                running_tasks.append(task)
+        if running_tasks:
+            # `Loop.cancel()` only requests cancellation — it does not wait
+            # for the in-flight iteration to actually unwind. Without this,
+            # `cache_db.close()` below can race a loop iteration still
+            # mid-query against it (PRES-9). Bounded by `wait_for` so a
+            # genuinely wedged task delays shutdown instead of hanging it
+            # forever — see `_SHUTDOWN_TIMEOUT_SECONDS`.
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*running_tasks, return_exceptions=True),
+                    timeout=_SHUTDOWN_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "background loop(s) did not stop within %.0fs of close(); "
+                    "closing the cache anyway",
+                    _SHUTDOWN_TIMEOUT_SECONDS,
+                )
         await self.cache_db.close()
         await super().close()
 

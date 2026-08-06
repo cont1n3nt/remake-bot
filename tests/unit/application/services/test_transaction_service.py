@@ -6,6 +6,7 @@
 are real, SQLite-backed, for genuine round-trip confidence.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -120,6 +121,27 @@ async def test_register_writes_the_row_and_returns_formula_values(
     cache_sync.sync_users_and_transactions.assert_awaited_once()
 
 
+async def test_register_rounds_fractional_amount_consistently_for_sheet_and_cache(
+    connection: aiosqlite.Connection,
+) -> None:
+    """APP-2: the sheet write and the cached/returned record must agree on the same value.
+
+    A bare `int(...)` truncates toward zero (150.5 -> 150), while the cached
+    `Decimal` kept the untruncated value — the two used to disagree.
+    """
+    sheets = _fake_sheets()
+    cache_sync = _fake_cache_sync()
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service = _service(connection, sheets=sheets, cache_sync=cache_sync, clock=clock)
+
+    result = await service.register(_request(amount=Decimal("150.5")))
+
+    (data,), _ = sheets.write_verified.call_args
+    written_amount = data["DataBase!A3:E3"][0][4]
+    assert written_amount == 151  # ROUND_HALF_UP, not truncation
+    assert result.record.amount == Decimal(151)
+
+
 async def test_register_is_idempotent_for_the_same_key(connection: aiosqlite.Connection) -> None:
     sheets = _fake_sheets()
     cache_sync = _fake_cache_sync()
@@ -141,6 +163,34 @@ async def test_register_is_idempotent_for_the_same_key(connection: aiosqlite.Con
     assert second.record.xp == first.record.xp
     assert second.discord_bound is False
     assert second.formula_pending is False
+
+
+async def test_register_serializes_concurrent_calls_with_the_same_idempotency_key(
+    connection: aiosqlite.Connection,
+) -> None:
+    """CLUSTER-1: two concurrent registrations for the same deal must not both write.
+
+    Without a lock spanning the whole find-row -> write -> verify -> record
+    path, both calls can pass the idempotency replay check before either has
+    recorded it, compute the same "free" row, and both write — the second
+    write clobbering the first (or worse, both landing on different rows).
+    """
+    sheets = _fake_sheets()
+
+    async def _slow_write(data: object) -> None:
+        await asyncio.sleep(0)  # yield control so the two register() calls can interleave
+
+    sheets.write_verified.side_effect = _slow_write
+    cache_sync = _fake_cache_sync()
+    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service = _service(connection, sheets=sheets, cache_sync=cache_sync, clock=clock)
+    request = _request()
+
+    first, second = await asyncio.gather(service.register(request), service.register(request))
+
+    assert sheets.write_verified.await_count == 1  # only the winner actually wrote
+    assert first.record.row == second.record.row
+    assert first.record.amount == second.record.amount
 
 
 async def test_register_writes_referrer_only_on_the_first_transaction(

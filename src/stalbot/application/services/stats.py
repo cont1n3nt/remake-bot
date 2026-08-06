@@ -57,9 +57,11 @@ class StatsService:
             else:
                 sales[record.nick] += record.amount
 
+        # One batched lookup instead of one `get_by_nick` per distinct player (APP-6).
+        profiles = await self._users.get_by_nicks(order)
         players: list[PlayerPeriodStats] = []
         for nick in order:
-            profile = await self._users.get_by_nick(nick)
+            profile = profiles.get(nick)
             players.append(
                 PlayerPeriodStats(
                     nick_display=displays[nick],
@@ -70,4 +72,6 @@ class StatsService:
             )
         players.sort(key=lambda p: p.turnover, reverse=True)
 
-        return PeriodReport(period=period, players=tuple(players), deal_count=len(records))
+        return PeriodReport(
+            period=period, players=tuple(players), deal_count=len(records), deals=tuple(records)
+        )

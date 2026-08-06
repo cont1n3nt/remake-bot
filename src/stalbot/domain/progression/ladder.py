@@ -7,6 +7,7 @@ unlocked at a numeric threshold — so the `current`/`next`/`progress`/
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Protocol
 
 
@@ -58,9 +59,20 @@ class Ladder[TierT: Tier]:
             tiers: The tiers, in any order (sorted internally by threshold).
             threshold_of: Extracts a tier's unlock threshold (e.g. XP,
                 referral count).
+
+        Raises:
+            ValueError: If two tiers share a threshold, or a computed
+                `threshold_of` produces a non-strictly-increasing sequence
+                once sorted. `progress()` divides by the gap between
+                consecutive thresholds (DOM-6/DOM-7 rely on that gap being
+                positive) — better to fail loudly here, at construction,
+                than silently mis-divide later.
         """
         self._threshold_of = threshold_of
         self._tiers = tuple(sorted(tiers, key=threshold_of))
+        thresholds = [threshold_of(tier) for tier in self._tiers]
+        if any(a >= b for a, b in pairwise(thresholds)):
+            raise ValueError(f"ladder thresholds must be strictly increasing, got {thresholds}")
 
     @property
     def tiers(self) -> tuple[TierT, ...]:
@@ -100,7 +112,19 @@ class Ladder[TierT: Tier]:
         base = self._threshold_of(reached) if reached is not None else 0
         need = self._threshold_of(upcoming) - base
         done = value - base
-        pct = min(100, round(done / need * 100)) if need > 0 else 100
+        # Capped to [0, 99], not [0, 100]: a tier is still ahead here (the
+        # `upcoming is None` case above already returned 100 for "maxed
+        # out"), so rounding shouldn't be able to show 100% early (e.g.
+        # 3499/3500 XP rounds to 100 via plain `round()`) (DOM-7). The lower
+        # bound guards a negative `value` from producing a negative pct,
+        # since nothing upstream guarantees XP/referral counts stay
+        # non-negative (DOM-6). The `else 99` branch (need <= 0) is
+        # currently unreachable for both real ladders — DOM-9's
+        # strictly-increasing-threshold check plus a positive smallest
+        # threshold guarantee `need > 0` for every `value`, including
+        # negative ones — it's defensive for a hypothetical ladder whose
+        # smallest threshold is 0.
+        pct = max(0, min(99, round(done / need * 100))) if need > 0 else 99
         return Progress(done=done, need=need, pct=pct)
 
     def threshold_of(self, tier: TierT) -> int:

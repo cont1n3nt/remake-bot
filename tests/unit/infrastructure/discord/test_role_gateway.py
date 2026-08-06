@@ -133,6 +133,63 @@ async def test_is_a_no_op_when_bot_lacks_permission() -> None:
     assert diff.revoked == ()
 
 
+async def test_does_not_crash_the_poller_on_a_non_forbidden_http_exception() -> None:
+    """INFRA2-1: a transient 5xx or a deleted role id raises `discord.HTTPException`,
+    not `discord.Forbidden` — letting it escape would kill the whole background
+    poll over every remaining player, not just this one member's sync."""
+    member = _member(current_role_ids=frozenset())
+    member.add_roles = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(), "internal server error")
+    )
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_member.return_value = member
+    client = _client_with_guild(guild)
+
+    gateway = DiscordRoleGateway(client, guild_id=999)
+    diff = await gateway.sync_roles(42, RoleSet(desired=frozenset({1}), universe=_UNIVERSE))
+
+    assert diff.granted == ()
+    assert diff.revoked == ()
+
+
+async def test_a_failed_revoke_does_not_hide_a_successful_grant() -> None:
+    """INFRA2-2: grant and revoke are independent — if grant succeeds and
+    revoke then fails, the member really does hold both roles now, and the
+    returned diff must say so instead of reporting "nothing changed"."""
+    member = _member(current_role_ids=frozenset({1}))
+    member.remove_roles = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(), "internal server error")
+    )
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_member.return_value = member
+    client = _client_with_guild(guild)
+
+    gateway = DiscordRoleGateway(client, guild_id=999)
+    diff = await gateway.sync_roles(42, RoleSet(desired=frozenset({2}), universe=_UNIVERSE))
+
+    assert diff.granted == (2,)  # the grant that actually happened is reported
+    assert diff.revoked == ()  # the failed revoke correctly reports nothing changed
+    member.add_roles.assert_awaited_once()
+    member.remove_roles.assert_awaited_once()
+
+
+async def test_a_failed_grant_does_not_prevent_the_revoke_from_being_attempted() -> None:
+    member = _member(current_role_ids=frozenset({1}))
+    member.add_roles = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(), "internal server error")
+    )
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_member.return_value = member
+    client = _client_with_guild(guild)
+
+    gateway = DiscordRoleGateway(client, guild_id=999)
+    diff = await gateway.sync_roles(42, RoleSet(desired=frozenset({2}), universe=_UNIVERSE))
+
+    assert diff.granted == ()
+    assert diff.revoked == (1,)  # the revoke still runs and still succeeds
+    member.remove_roles.assert_awaited_once()
+
+
 def test_role_set_is_frozen() -> None:
     role_set = RoleSet(desired=frozenset({1}), universe=_UNIVERSE)
     with pytest.raises(AttributeError):
