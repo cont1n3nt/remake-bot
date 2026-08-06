@@ -30,6 +30,8 @@ from stalbot.domain.entities.item import Item
 from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.entities.user_profile import UserProfile
 from stalbot.domain.enums import DealType, ItemCategory
+from stalbot.domain.errors import AmountParseError
+from stalbot.domain.money import parse_amount
 from stalbot.domain.nick import NormalizedNick, normalize_nick
 from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
 from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
@@ -457,6 +459,14 @@ def _to_decimal(value: object) -> Decimal | None:
     try:
         return Decimal(str(value))
     except InvalidOperation:
+        pass
+    # A cell typed/pasted by hand (rather than written by the bot) can carry
+    # the same messy formatting `parse_amount` already tolerates for Discord
+    # input (thousands-separator spaces, a trailing "₽") — fall back to it
+    # before giving up, instead of silently dropping the whole row.
+    try:
+        return parse_amount(str(value))
+    except AmountParseError:
         return None
 
 
