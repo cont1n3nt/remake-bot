@@ -7,7 +7,14 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from stalbot.domain.errors import AmountParseError
-from stalbot.domain.money import evaluate_amount, format_amount, format_compact, parse_amount
+from stalbot.domain.money import (
+    evaluate_amount,
+    format_amount,
+    format_compact,
+    from_storage,
+    parse_amount,
+    to_storage,
+)
 
 # --- parse_amount: plain integers, spacing, underscores ---------------------
 
@@ -283,3 +290,27 @@ def test_format_compact_escalates_unit_on_rounding_boundary(value: Decimal, expe
 @given(st.integers(min_value=0, max_value=10**12))
 def test_parse_format_round_trip(value: int) -> None:
     assert parse_amount(format_amount(Decimal(value))) == Decimal(value)
+
+
+# --- to_storage / from_storage: the Rub storage boundary (sqlite_migration.md §III.3) ---
+
+
+def test_to_storage_rounds_half_up_like_round_for_storage() -> None:
+    assert to_storage(Decimal("100.5")) == 101
+    assert to_storage(Decimal("100.4")) == 100
+    assert to_storage(Decimal(100)) == 100
+
+
+def test_to_storage_returns_a_plain_int_subtype() -> None:
+    stored = to_storage(Decimal("1500000"))
+    assert isinstance(stored, int)
+    assert stored == 1_500_000
+
+
+def test_from_storage_returns_a_decimal() -> None:
+    assert from_storage(1_500_000) == Decimal(1_500_000)
+
+
+@given(st.integers(min_value=-(10**12), max_value=10**12))
+def test_to_storage_from_storage_round_trip_on_whole_values(value: int) -> None:
+    assert to_storage(from_storage(value)) == value
