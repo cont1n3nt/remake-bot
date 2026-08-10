@@ -2,6 +2,8 @@
 
 import aiosqlite
 
+from stalbot.infrastructure.cache.db import transaction
+
 
 class IdempotencyRepository:
     """Remembers which Sheets row a given write key already produced."""
@@ -34,9 +36,9 @@ class IdempotencyRepository:
             sheet_row: The row it wrote.
             created_at: ISO timestamp.
         """
-        await self._conn.execute(
-            "INSERT OR IGNORE INTO write_idempotency (idempotency_key, sheet_row, created_at) "
-            "VALUES (?, ?, ?)",
-            (key, sheet_row, created_at),
-        )
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute(
+                "INSERT OR IGNORE INTO write_idempotency (idempotency_key, sheet_row, created_at) "
+                "VALUES (?, ?, ?)",
+                (key, sheet_row, created_at),
+            )

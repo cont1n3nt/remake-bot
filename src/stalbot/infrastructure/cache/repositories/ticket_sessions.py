@@ -6,6 +6,7 @@ import aiosqlite
 
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
+from stalbot.infrastructure.cache.db import transaction
 
 
 class TicketSessionsRepository:
@@ -37,43 +38,43 @@ class TicketSessionsRepository:
         Args:
             session: The session state to persist.
         """
-        await self._conn.execute(
-            """
-            INSERT INTO ticket_sessions (
-                channel_id, kind, author_id, status, delivery_method, game_nick,
-                referrer_nick, referrer_discord_id, deadline, screenshot_url,
-                screenshot_message_id, summary_message_id, panel_message_id,
-                ocr_status, ocr_analysis_id, idempotency_key, created_at, updated_at,
-                active_order_item_id
-            ) VALUES (
-                :channel_id, :kind, :author_id, :status, :delivery_method, :game_nick,
-                :referrer_nick, :referrer_discord_id, :deadline, :screenshot_url,
-                :screenshot_message_id, :summary_message_id, :panel_message_id,
-                :ocr_status, :ocr_analysis_id, :idempotency_key, :created_at, :updated_at,
-                :active_order_item_id
+        async with transaction(self._conn):
+            await self._conn.execute(
+                """
+                INSERT INTO ticket_sessions (
+                    channel_id, kind, author_id, status, delivery_method, game_nick,
+                    referrer_nick, referrer_discord_id, deadline, screenshot_url,
+                    screenshot_message_id, summary_message_id, panel_message_id,
+                    ocr_status, ocr_analysis_id, idempotency_key, created_at, updated_at,
+                    active_order_item_id
+                ) VALUES (
+                    :channel_id, :kind, :author_id, :status, :delivery_method, :game_nick,
+                    :referrer_nick, :referrer_discord_id, :deadline, :screenshot_url,
+                    :screenshot_message_id, :summary_message_id, :panel_message_id,
+                    :ocr_status, :ocr_analysis_id, :idempotency_key, :created_at, :updated_at,
+                    :active_order_item_id
+                )
+                ON CONFLICT (channel_id) DO UPDATE SET
+                    kind = excluded.kind,
+                    author_id = excluded.author_id,
+                    status = excluded.status,
+                    delivery_method = excluded.delivery_method,
+                    game_nick = excluded.game_nick,
+                    referrer_nick = excluded.referrer_nick,
+                    referrer_discord_id = excluded.referrer_discord_id,
+                    deadline = excluded.deadline,
+                    screenshot_url = excluded.screenshot_url,
+                    screenshot_message_id = excluded.screenshot_message_id,
+                    summary_message_id = excluded.summary_message_id,
+                    panel_message_id = excluded.panel_message_id,
+                    ocr_status = excluded.ocr_status,
+                    ocr_analysis_id = excluded.ocr_analysis_id,
+                    idempotency_key = excluded.idempotency_key,
+                    updated_at = excluded.updated_at,
+                    active_order_item_id = excluded.active_order_item_id
+                """,
+                _session_to_params(session),
             )
-            ON CONFLICT (channel_id) DO UPDATE SET
-                kind = excluded.kind,
-                author_id = excluded.author_id,
-                status = excluded.status,
-                delivery_method = excluded.delivery_method,
-                game_nick = excluded.game_nick,
-                referrer_nick = excluded.referrer_nick,
-                referrer_discord_id = excluded.referrer_discord_id,
-                deadline = excluded.deadline,
-                screenshot_url = excluded.screenshot_url,
-                screenshot_message_id = excluded.screenshot_message_id,
-                summary_message_id = excluded.summary_message_id,
-                panel_message_id = excluded.panel_message_id,
-                ocr_status = excluded.ocr_status,
-                ocr_analysis_id = excluded.ocr_analysis_id,
-                idempotency_key = excluded.idempotency_key,
-                updated_at = excluded.updated_at,
-                active_order_item_id = excluded.active_order_item_id
-            """,
-            _session_to_params(session),
-        )
-        await self._conn.commit()
 
     async def delete(self, channel_id: int) -> None:
         """Remove a ticket session (channel closed/deleted).
@@ -81,8 +82,10 @@ class TicketSessionsRepository:
         Args:
             channel_id: Discord channel id.
         """
-        await self._conn.execute("DELETE FROM ticket_sessions WHERE channel_id = ?", (channel_id,))
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute(
+                "DELETE FROM ticket_sessions WHERE channel_id = ?", (channel_id,)
+            )
 
     async def all_open(self) -> list[TicketSession]:
         """Return every session, for restoring persistent Views at startup."""
@@ -106,11 +109,12 @@ class TicketSessionsRepository:
         """
         if old_item_id == new_item_id:
             return
-        await self._conn.execute(
-            "UPDATE ticket_sessions SET active_order_item_id = ? WHERE active_order_item_id = ?",
-            (new_item_id, old_item_id),
-        )
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute(
+                "UPDATE ticket_sessions SET active_order_item_id = ? "
+                "WHERE active_order_item_id = ?",
+                (new_item_id, old_item_id),
+            )
 
     async def clear_active_order_item_for(self, item_id: int) -> None:
         """Clear the selected line for sessions pointing at a permanently deleted item (APP-4).
@@ -118,11 +122,12 @@ class TicketSessionsRepository:
         Args:
             item_id: The deleted item's id, before renumbering.
         """
-        await self._conn.execute(
-            "UPDATE ticket_sessions SET active_order_item_id = NULL WHERE active_order_item_id = ?",
-            (item_id,),
-        )
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute(
+                "UPDATE ticket_sessions SET active_order_item_id = NULL "
+                "WHERE active_order_item_id = ?",
+                (item_id,),
+            )
 
 
 def _session_to_params(session: TicketSession) -> dict[str, object]:

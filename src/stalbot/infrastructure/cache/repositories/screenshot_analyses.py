@@ -8,6 +8,8 @@ one row instead of accumulating duplicates.
 
 import aiosqlite
 
+from stalbot.infrastructure.cache.db import transaction
+
 
 class ScreenshotAnalysesRepository:
     """Records one bookkeeping row per distinct screenshot seen in a ticket."""
@@ -46,35 +48,35 @@ class ScreenshotAnalysesRepository:
             status: `OcrResult.status` (always `"disabled"` in v1.0).
             created_at: ISO timestamp.
         """
-        await self._conn.execute(
-            """
-            INSERT INTO screenshot_analyses
-                (channel_id, image_sha256, image_url, sample_path,
-                 size_bytes, mime, status, created_at)
-            VALUES
-                (:channel_id, :sha256, :image_url, :sample_path,
-                 :size_bytes, :mime, :status, :created_at)
-            ON CONFLICT (image_sha256) DO UPDATE SET
-                channel_id = excluded.channel_id,
-                image_url = excluded.image_url,
-                sample_path = excluded.sample_path,
-                size_bytes = excluded.size_bytes,
-                mime = excluded.mime,
-                status = excluded.status,
-                created_at = excluded.created_at
-            """,
-            {
-                "channel_id": channel_id,
-                "sha256": sha256,
-                "image_url": image_url,
-                "sample_path": sample_path,
-                "size_bytes": size_bytes,
-                "mime": mime,
-                "status": status,
-                "created_at": created_at,
-            },
-        )
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute(
+                """
+                INSERT INTO screenshot_analyses
+                    (channel_id, image_sha256, image_url, sample_path,
+                     size_bytes, mime, status, created_at)
+                VALUES
+                    (:channel_id, :sha256, :image_url, :sample_path,
+                     :size_bytes, :mime, :status, :created_at)
+                ON CONFLICT (image_sha256) DO UPDATE SET
+                    channel_id = excluded.channel_id,
+                    image_url = excluded.image_url,
+                    sample_path = excluded.sample_path,
+                    size_bytes = excluded.size_bytes,
+                    mime = excluded.mime,
+                    status = excluded.status,
+                    created_at = excluded.created_at
+                """,
+                {
+                    "channel_id": channel_id,
+                    "sha256": sha256,
+                    "image_url": image_url,
+                    "sample_path": sample_path,
+                    "size_bytes": size_bytes,
+                    "mime": mime,
+                    "status": status,
+                    "created_at": created_at,
+                },
+            )
 
     async def record_confirmed_amount(self, channel_id: int, amount: str) -> None:
         """Label every screenshot of this ticket with the admin-confirmed deal amount.
@@ -89,11 +91,11 @@ class ScreenshotAnalysesRepository:
             channel_id: The confirmed ticket's channel.
             amount: The confirmed deal amount, as a `Decimal`-parseable string.
         """
-        await self._conn.execute(
-            "UPDATE screenshot_analyses SET total_estimate = ? WHERE channel_id = ?",
-            (amount, channel_id),
-        )
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute(
+                "UPDATE screenshot_analyses SET total_estimate = ? WHERE channel_id = ?",
+                (amount, channel_id),
+            )
 
     async def count_all(self) -> int:
         """Return the number of distinct screenshots collected so far.

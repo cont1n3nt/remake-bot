@@ -1,13 +1,15 @@
--- SQLite cache schema (see PLAN.md §8.1).
--- Every statement is idempotent (IF NOT EXISTS) so re-running this file on
--- an already-migrated database is always safe.
+-- Baseline migration (sqlite_migration.md §X, Э2).
 --
--- ★ Not authoritative (sqlite_migration.md §X, Э2): the real, versioned
--- source of truth is now `migrations/*.sql`, applied in order and tracked
--- via `PRAGMA user_version`. This file is a human-readable dump of the
--- cumulative result — `test_migrations_reproduce_schema_sql` in
--- `tests/unit/infrastructure/cache/migrations/` pins the two together, so
--- letting them drift fails CI rather than silently going stale.
+-- Numbered 0004, not 0001: this is the schema as of today, the same state
+-- previously tracked as `SCHEMA_VERSION = 4` via a `sync_meta` row (see
+-- `db.py`'s migration-adoption logic). There is no pre-v1.0 deployed data
+-- to replay through incremental v1->v2->v3->v4 steps, so the four
+-- historical versions are collapsed into one idempotent baseline; only
+-- v5 (Э3, trading schema) onward are real incremental migrations.
+--
+-- Content is byte-identical to `../schema.sql`, which stays as a
+-- generated, non-authoritative dump for humans skimming the current shape
+-- (`test_migrations_reproduce_schema_sql` pins the two together).
 
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY,

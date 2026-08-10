@@ -16,6 +16,7 @@ import aiosqlite
 
 from stalbot.domain.entities.user_profile import UserProfile
 from stalbot.domain.nick import NormalizedNick
+from stalbot.infrastructure.cache.db import transaction
 
 
 class UsersCacheRepository:
@@ -149,9 +150,9 @@ class UsersCacheRepository:
                 back to its own (lower-case) nick.
             synced_at: ISO timestamp to stamp every row with.
         """
-        await self._conn.execute("DELETE FROM users")
-        await self._upsert_many(profiles, nick_displays=nick_displays, synced_at=synced_at)
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute("DELETE FROM users")
+            await self._upsert_many(profiles, nick_displays=nick_displays, synced_at=synced_at)
 
     async def upsert_many(
         self,
@@ -167,8 +168,8 @@ class UsersCacheRepository:
             nick_displays: See `replace_all`.
             synced_at: ISO timestamp to stamp every row with.
         """
-        await self._upsert_many(profiles, nick_displays=nick_displays, synced_at=synced_at)
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._upsert_many(profiles, nick_displays=nick_displays, synced_at=synced_at)
 
     async def _upsert_many(
         self,

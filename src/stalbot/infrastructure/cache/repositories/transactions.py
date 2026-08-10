@@ -32,6 +32,7 @@ from stalbot.application.dto.log_entry import LogEntry
 from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType
 from stalbot.domain.nick import NormalizedNick
+from stalbot.infrastructure.cache.db import transaction
 
 _SELECT_WITH_DISPLAY = """
     SELECT t.*, COALESCE(u.nick_display, t.nick_norm) AS nick_display
@@ -155,24 +156,24 @@ class TransactionsCacheRepository:
         Args:
             records: Rows read from the `Тикеты` block.
         """
-        await self._conn.executemany(
-            """
-            INSERT INTO transactions (sheet_row, occurred_at, nick_norm, deal_type,
-                                       amount, coins, xp, referrer_norm)
-            VALUES (:sheet_row, :occurred_at, :nick_norm, :deal_type,
-                    :amount, :coins, :xp, :referrer_norm)
-            ON CONFLICT (sheet_row) DO UPDATE SET
-                occurred_at = excluded.occurred_at,
-                nick_norm = excluded.nick_norm,
-                deal_type = excluded.deal_type,
-                amount = excluded.amount,
-                coins = excluded.coins,
-                xp = excluded.xp,
-                referrer_norm = excluded.referrer_norm
-            """,
-            [_record_to_params(record) for record in records],
-        )
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.executemany(
+                """
+                INSERT INTO transactions (sheet_row, occurred_at, nick_norm, deal_type,
+                                           amount, coins, xp, referrer_norm)
+                VALUES (:sheet_row, :occurred_at, :nick_norm, :deal_type,
+                        :amount, :coins, :xp, :referrer_norm)
+                ON CONFLICT (sheet_row) DO UPDATE SET
+                    occurred_at = excluded.occurred_at,
+                    nick_norm = excluded.nick_norm,
+                    deal_type = excluded.deal_type,
+                    amount = excluded.amount,
+                    coins = excluded.coins,
+                    xp = excluded.xp,
+                    referrer_norm = excluded.referrer_norm
+                """,
+                [_record_to_params(record) for record in records],
+            )
 
 
 def _record_to_params(record: TransactionRecord) -> dict[str, object]:

@@ -8,6 +8,7 @@ import aiosqlite
 
 from stalbot.domain.entities.item import Item
 from stalbot.domain.enums import ItemCategory
+from stalbot.infrastructure.cache.db import transaction
 
 
 def normalize_item_name(name: str) -> str:
@@ -121,14 +122,14 @@ class ItemsCacheRepository:
         Args:
             payload: A JSON-serialized snapshot of the block before the write.
         """
-        await self._conn.execute(
-            """
-            INSERT INTO sync_meta (key, value) VALUES ('item_delete_backup', ?)
-            ON CONFLICT (key) DO UPDATE SET value = excluded.value
-            """,
-            (payload,),
-        )
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute(
+                """
+                INSERT INTO sync_meta (key, value) VALUES ('item_delete_backup', ?)
+                ON CONFLICT (key) DO UPDATE SET value = excluded.value
+                """,
+                (payload,),
+            )
 
     async def replace_all(self, items: Sequence[Item]) -> None:
         """Atomically replace the entire cached catalog (full sync).
@@ -136,9 +137,9 @@ class ItemsCacheRepository:
         Args:
             items: The complete, current catalog read from Sheets.
         """
-        await self._conn.execute("DELETE FROM items")
-        await self._upsert_many(items)
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute("DELETE FROM items")
+            await self._upsert_many(items)
 
     async def upsert_many(self, items: Sequence[Item]) -> None:
         """Insert or update a subset of items (point refresh).
@@ -147,8 +148,8 @@ class ItemsCacheRepository:
             items: Items to upsert; existing rows with the same id are
                 overwritten.
         """
-        await self._upsert_many(items)
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._upsert_many(items)
 
     async def _upsert_many(self, items: Sequence[Item]) -> None:
         await self._conn.executemany(
