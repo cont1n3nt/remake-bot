@@ -1,0 +1,55 @@
+# systemd unit: runs scripts/backup.sh once (see deploy/stalbot-backup.timer
+# for the schedule). Companion to deploy/stalbot.service — see its header
+# for the install pattern (same three paths/user to edit).
+#
+# Install:
+#   sudo cp deploy/stalbot-backup.service deploy/stalbot-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now stalbot-backup.timer
+#
+# Before installing:
+#   - edit User/Group/WorkingDirectory below, same as stalbot.service
+#   - set RCLONE_REMOTE in /opt/stalbot/.env.backup (see EnvironmentFile
+#     below) to an `rclone remotes`-configured off-box destination —
+#     scripts/backup.sh refuses to run without it (sqlite_migration.md §X:
+#     the off-box copy is mandatory, not optional)
+#   - confirm `rclone` and `sqlite3` are on PATH for the stalbot user
+#
+# Logs: `journalctl -u stalbot-backup -f`
+# Manual run: `sudo systemctl start stalbot-backup` (runs once immediately)
+
+[Unit]
+Description=stalbot SQLite cache backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=stalbot
+Group=stalbot
+WorkingDirectory=/opt/stalbot
+ExecStart=/opt/stalbot/scripts/backup.sh /opt/stalbot/data/cache.sqlite3 /opt/stalbot/backups
+
+# Separate from the bot's own .env — keeps RCLONE_REMOTE (an operational
+# secret: it names/authenticates to off-box storage) out of the bot
+# process's environment entirely.
+EnvironmentFile=-/opt/stalbot/.env.backup
+
+# Same hardening posture as stalbot.service, adjusted for what backup.sh
+# actually touches: the data dir (read the live db) and the backups dir
+# (write snapshots), plus outbound network for the rclone upload.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/stalbot/data /opt/stalbot/backups
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
