@@ -850,8 +850,19 @@ PRAGMA-набор, `CacheDb.transaction()`, `infrastructure/cache/migrations/` +
 - `RCLONE_REMOTE` нужно один раз настроить (`rclone config`) — я не знаю, какое у вас объектное хранилище/второй провайдер.
 - `deploy/stalbot-backup.{service,timer}` не установлены на хосте — это тоже ручной шаг (`systemctl enable --now stalbot-backup.timer`).
 
-**Э3 — Схема торговли и репозитории** *(аддитивно)*
+**Э3 — Схема торговли и репозитории** *(аддитивно)* — ✅ **готово**
 Миграция `0005` (включая пустую `shelter_items` — см. IV.4). `PlayersRepository`, `DealsRepository`, `ProgressionRepository`, `CoinLedgerRepository`. Деньги `INTEGER`, границу держат `to_storage`/`from_storage` в `money.py`; вводятся `NewType` `Rub` и `Kopeks`.
+
+**Сделано:**
+- Миграция [0005_trading_schema.sql](src/stalbot/infrastructure/cache/migrations/0005_trading_schema.sql): `players`, `deals`, `coin_ledger`, `player_progression`, `shelter_items` (пустая заглушка под Э5), `catalog_items`, `item_price_history`. Аддитивно — legacy `items`/`users`/`transactions`/`progression_state` не тронуты.
+- **★ Отступление от буквального текста плана (нужно ваше внимание):** §IV.2 называет новую таблицу каталога `items`, но так уже называется legacy-таблица — раз Э3 аддитивен, обе не могут называться одинаково. Назвал новую `catalog_items`; переименовать в `items` можно будет отдельной миграцией после Э7, когда legacy-таблицу снесут.
+- [money.py](src/stalbot/domain/money.py): `Rub`/`Kopeks` (`NewType`) + `to_storage()`/`from_storage()` — единственная граница, где `Decimal` превращается в целый `Rub` для денежных колонок.
+- [enums.py](src/stalbot/domain/enums.py): `OccurredAtKind`, `DealSource` под колонки `deals.occurred_at_kind`/`deals.source`.
+- Domain-сущности `Player`/`Deal`/`CoinLedgerEntry`/`PlayerProgressionRecord`.
+- `PlayersRepository` (`get_or_create` идемпотентен по нику — найдена и обойдена ловушка с `cursor.lastrowid` при `ON CONFLICT DO NOTHING`, см. коммит), `DealsRepository`, `CoinLedgerRepository`, `ProgressionRepository` (SQL-агрегация из §V.1 одним запросом + `recompute()`, не трогающий строку без изменений).
+- 28 новых тестов на реальном SQLite-соединении, включая CHECK-ограничения. **1117 тестов зелёные**, `ruff`/`mypy --strict` чисто.
+
+**Что нужно от вас:** согласиться (или предложить другое имя) с решением про `catalog_items` — единственное реальное отступление от текста плана в этом этапе.
 
 **Э4 — Импортёр СКУПКИ + сквозной парити**
 `scripts/import_from_sheets.py` — читает CSV из Э0, переиспользует **только** `_to_bool`/`_to_decimal`/`_to_int_strict` из `sync.py` (drop-семантику `_parse_ticket_row` — нет). Проставляет `occurred_at`/`occurred_at_kind`, вычисляет `referrer_player_id` (вариант B), заполняет `items.section`, затем полный `recompute`.
