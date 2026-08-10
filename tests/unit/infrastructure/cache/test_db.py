@@ -202,13 +202,24 @@ async def test_migrating_a_brand_new_database_does_not_back_it_up(tmp_path: Path
 async def test_adopts_a_legacy_sync_meta_schema_version_without_backup_noise(
     tmp_path: Path,
 ) -> None:
-    """A pre-Э2 database (schema applied, `sync_meta.schema_version` row,
-    `PRAGMA user_version` never touched) is adopted in place, not re-migrated."""
+    """A pre-Э2 database (only the v4 baseline schema applied, a
+    `sync_meta.schema_version` row, `PRAGMA user_version` never touched) is
+    adopted in place — v4 is recorded without re-running 0004_baseline.sql —
+    and then migrated forward through any newer migration (e.g. 0005) same
+    as a fresh database would be."""
     db_path = tmp_path / "cache.sqlite3"
     conn = await aiosqlite.connect(db_path)
     repo_root = Path(__file__).resolve().parents[4]
-    schema_sql = repo_root / "src" / "stalbot" / "infrastructure" / "cache" / "schema.sql"
-    await conn.executescript(schema_sql.read_text(encoding="utf-8"))
+    baseline_sql = (
+        repo_root
+        / "src"
+        / "stalbot"
+        / "infrastructure"
+        / "cache"
+        / "migrations"
+        / "0004_baseline.sql"
+    )
+    await conn.executescript(baseline_sql.read_text(encoding="utf-8"))
     await conn.execute("INSERT INTO sync_meta (key, value) VALUES ('schema_version', '4')")
     await conn.commit()
     await conn.close()
@@ -216,5 +227,5 @@ async def test_adopts_a_legacy_sync_meta_schema_version_without_backup_noise(
     db = CacheDb(db_path)
     conn = await db.connect()
 
-    assert await current_version(conn) == 4
+    assert await current_version(conn) == discover_migrations()[-1].version
     await db.close()

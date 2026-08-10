@@ -142,3 +142,116 @@ CREATE TABLE IF NOT EXISTS write_idempotency (
     sheet_row INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
+
+-- --- Trading schema (sqlite_migration.md §IV.1/§IV.2, Э3, migration 0005) ---
+-- Additive: coexists with the legacy tables above until a future migration
+-- drops them (§X). See migrations/0005_trading_schema.sql for the full
+-- rationale, including why the new catalog table is `catalog_items`, not
+-- `items` (name collision with the legacy table above).
+
+CREATE TABLE IF NOT EXISTS players (
+    id                 INTEGER PRIMARY KEY,
+    nick_norm          TEXT    NOT NULL,
+    nick_display       TEXT    NOT NULL,
+    discord_id         INTEGER,
+    referrer_player_id INTEGER REFERENCES players(id) ON DELETE SET NULL,
+    is_booster         INTEGER NOT NULL DEFAULT 0 CHECK (is_booster IN (0,1)),
+    created_at         TEXT    NOT NULL,
+    updated_at         TEXT    NOT NULL,
+    CHECK (referrer_player_id IS NULL OR referrer_player_id <> id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_players_nick    ON players(nick_norm);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_players_discord ON players(discord_id) WHERE discord_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_players_referrer       ON players(referrer_player_id);
+
+CREATE TABLE IF NOT EXISTS deals (
+    id               INTEGER PRIMARY KEY,
+    player_id        INTEGER NOT NULL REFERENCES players(id) ON DELETE RESTRICT,
+    occurred_at      TEXT    NOT NULL,
+    occurred_at_kind TEXT    NOT NULL DEFAULT 'unknown'
+                     CHECK (occurred_at_kind IN
+                            ('unknown','sheet_text','sheet_date','sheet_interpolated','bot')),
+    deal_type        TEXT    NOT NULL CHECK (deal_type IN ('purchase','sale')),
+    amount           INTEGER NOT NULL CHECK (amount >= 0),
+    coins            INTEGER NOT NULL,
+    xp               INTEGER NOT NULL,
+    rank_at_deal     TEXT,
+    booster_at_deal  INTEGER NOT NULL DEFAULT 0 CHECK (booster_at_deal IN (0,1)),
+    recorded_by      INTEGER,
+    source           TEXT    NOT NULL CHECK (source IN ('add','ticket','import')),
+    legacy_sheet_row INTEGER,
+    created_at       TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_deals_player   ON deals(player_id);
+CREATE INDEX IF NOT EXISTS ix_deals_occurred ON deals(occurred_at);
+CREATE INDEX IF NOT EXISTS ix_deals_agg      ON deals(player_id, deal_type, amount);
+
+CREATE TABLE IF NOT EXISTS coin_ledger (
+    id INTEGER PRIMARY KEY,
+    player_id  INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    delta      INTEGER NOT NULL CHECK (delta <> 0),
+    reason     TEXT    NOT NULL,
+    created_by INTEGER,
+    created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_coin_ledger_player ON coin_ledger(player_id);
+
+CREATE TABLE IF NOT EXISTS player_progression (
+    player_id          INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+    purchase_turnover  INTEGER NOT NULL,
+    sale_turnover      INTEGER NOT NULL,
+    total_turnover     INTEGER NOT NULL,
+    referral_count     INTEGER NOT NULL,
+    coins              INTEGER NOT NULL,
+    xp                 INTEGER NOT NULL,
+    rank_key           TEXT,
+    referral_role_key  TEXT,
+    breakdown_json     TEXT    NOT NULL,
+    calculator_version INTEGER NOT NULL,
+    computed_at        TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS shelter_items (
+    id              INTEGER PRIMARY KEY,
+    name            TEXT    NOT NULL,
+    name_norm       TEXT    NOT NULL,
+    kind            TEXT    NOT NULL CHECK (kind IN ('component','craftable','virtual')),
+    market_kopeks   INTEGER,
+    my_kopeks       INTEGER,
+    vendor_kopeks   INTEGER,
+    updated_at      TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_shelter_name ON shelter_items(name_norm);
+
+CREATE TABLE IF NOT EXISTS catalog_items (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    name_norm  TEXT    NOT NULL,
+    category   TEXT    NOT NULL CHECK (category IN ('resource','boost')),
+    section    TEXT,
+    price_buy  INTEGER,
+    price_sell INTEGER,
+    emoji      TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    shelter_item_id INTEGER REFERENCES shelter_items(id) ON DELETE SET NULL,
+    created_at TEXT    NOT NULL,
+    updated_at TEXT,
+    deleted_at TEXT,
+    CHECK (category <> 'resource' OR price_sell IS NULL),
+    CHECK (category <> 'boost'    OR price_buy  IS NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_catalog_items_name_cat
+    ON catalog_items(name_norm, category) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_catalog_items_shelter ON catalog_items(shelter_item_id);
+
+CREATE TABLE IF NOT EXISTS item_price_history (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES catalog_items(id) ON DELETE CASCADE,
+    field TEXT NOT NULL CHECK (field IN ('buy','sell')),
+    old_price INTEGER,
+    new_price INTEGER,
+    changed_by INTEGER,
+    source TEXT NOT NULL CHECK (source IN ('setprice','import','catalog','migration')),
+    changed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_price_history_item ON item_price_history(item_id, changed_at);
