@@ -813,9 +813,22 @@ profit(item, qty) = (item.price_sell − cost(item)) × qty
 - Опционально: прогнать `--shelter-id`/`--skupka-id` против живого API вместо `.xlsx`, если хотите, чтобы Э0 полностью прошёл через один путь.
 - Остальное для Э0 закрыто.
 
-**Э1 — Калькулятор прогрессии + парити ★**
+**Э1 — Калькулятор прогрессии + парити ★** — ✅ **готово, кроме ревью владельцем**
 `calculator.py`, публикация констант в `perks.py`, `test_sheet_parity.py` (A–D), `referral_fix_diff.csv`. Калькулятор пока не подключён.
 *Готовность:* A по 244 с нулевым допуском; B по 657; D == 657; C отревьюен владельцем; покрытие ≈ 100%.
+
+**Сделано** (на снимке 2026-08-10 — книга выросла до 250 игроков/688 тикетов, это не 244/657 из ревизии 3, но сама пропорция и корректность не зависят от даты снимка):
+- [src/stalbot/domain/progression/calculator.py](src/stalbot/domain/progression/calculator.py) — чистый `compute_progression()`/`deal_reward()`, термин-в-термин по формулам `K3`/`L3`/`F3`/`G3`, включая баг реферального оборота (легаси, не канон — канон Части XIII будет отдельным `CALCULATOR_VERSION`, когда придёт его этап).
+- [perks.py](src/stalbot/domain/progression/perks.py) — константы опубликованы (`RANK_ONE_TIME_COINS`, `REFERRAL_ONE_TIME`, `BIG_DEAL_BONUS` расшёрсткованы) + новые `REFEREE_TURNOVER_TIERS`/`REFERRED_TIERS`/`BOOSTER_FLAT`/`BOOSTER_BIG_DEAL_THRESHOLDS`.
+- **Уровень A**: [test_sheet_parity.py](tests/unit/domain/progression/test_sheet_parity.py) — `compute_progression(legacy)` == (K,L,M,N,O,P,R,S) по **всем 250 игрокам снимка, нулевой допуск, 0 расхождений**.
+- **Уровень B**: `deal_reward` == (F,G) по **682 реальным сделкам** (688 строк минус 6 строк-заготовок), 0 расхождений.
+- **Уровень D**: сумма агрегированных M+N по всем игрокам == сумме всех реальных сделок — гарантия, что ни одна сделка не потеряна и не задвоена (инвариант сильнее точного числа "657", которое зависит от даты снимка).
+- **Уровень C**: [referral_fix_diff.csv](tests/unit/domain/progression/referral_fix_diff.csv) заморожен — **12 игроков** затронуты (было 14 в ревизии 3 плана, на свежих данных 12; качественно то же самое: коины теряют ровно двое — `jlamaeq` 17→14 и `oster_boster` 6→4 — у обоих легаси-формула завышала за счёт оборота постороннего игрока, как и предсказывал §III.2). **Требует вашего ревью** — файл лежит рядом с тестом, тест зафиксирует любое отклонение при следующем прогоне.
+- Расширен и переименован `test_ladder_matches_sheet_formula.py` → [test_calculator_matches_frozen_sheet_formulas.py](tests/unit/domain/progression/test_calculator_matches_frozen_sheet_formulas.py): заморожен текст `F3`/`K3`/`L3` (снят 2026-08-10 через `--skupka-xlsx`), 15 тестов сверяют каждую числовую константу `calculator.py`/`perks.py` с точным текстом формулы — уже не только с прозой плана.
+- [test_calculator.py](tests/unit/domain/progression/test_calculator.py) — прямые юнит-тесты веток, которых в живых данных пока нет (бустеры — их 0 сегодня; ранги Prestige/Elite/Legend — их тоже 0). Покрытие `calculator.py` — **100%**.
+- `ruff`/`mypy --strict`/`pytest` — все зелёные, **1063 теста**, покрытие проекта 95.6%.
+
+**Что нужно от вас:** отревьюить [referral_fix_diff.csv](tests/unit/domain/progression/referral_fix_diff.csv) (12 строк) — те же критерии, что в §III.2: никто не теряет уже выданную роль, коины теряют только те двое, у кого легаси-формула была завышена багом. Как только подтвердите — Э1 полностью закрыт.
 
 **Э2 — Долговечность и настоящие миграции** *(до переключения!)*
 PRAGMA-набор, `CacheDb.transaction()`, `infrastructure/cache/migrations/` + раннер на `PRAGMA user_version`, guard от даунгрейда, переписанный `scripts/backup.sh` + `scripts/restore.sh` + `deploy/stalbot-backup.{service,timer}`.
