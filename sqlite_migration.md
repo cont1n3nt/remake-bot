@@ -830,9 +830,25 @@ profit(item, qty) = (item.price_sell − cost(item)) × qty
 
 **Что нужно от вас:** отревьюить [referral_fix_diff.csv](tests/unit/domain/progression/referral_fix_diff.csv) (12 строк) — те же критерии, что в §III.2: никто не теряет уже выданную роль, коины теряют только те двое, у кого легаси-формула была завышена багом. Как только подтвердите — Э1 полностью закрыт.
 
-**Э2 — Долговечность и настоящие миграции** *(до переключения!)*
+**Э2 — Долговечность и настоящие миграции** *(до переключения!)* — 🟡 **код готов, нужна репетиция владельцем**
 PRAGMA-набор, `CacheDb.transaction()`, `infrastructure/cache/migrations/` + раннер на `PRAGMA user_version`, guard от даунгрейда, переписанный `scripts/backup.sh` + `scripts/restore.sh` + `deploy/stalbot-backup.{service,timer}`.
 *Почему здесь:* потеря БД становится фатальной при первой записи без Sheets-двойника (Э6). К этому моменту восстановление должно существовать и быть **отрепетировано**.
+
+**Сделано:**
+- [db.py](src/stalbot/infrastructure/cache/db.py) — `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=5000`, `PRAGMA quick_check` на старте (падает с понятной ошибкой на повреждённом файле вместо тихой отдачи мусора), `wal_checkpoint(TRUNCATE)` в `close()`.
+- [infrastructure/cache/migrations/](src/stalbot/infrastructure/cache/migrations/) — раннер на `PRAGMA user_version` (атомарен с DDL: `BEGIN IMMEDIATE` + миграция + `PRAGMA user_version` + `COMMIT` одним `executescript`), guard от даунгрейда (`DowngradeError`, не `logger.warning`), автобэкап файла перед миграцией уже населённой базы, приём версии из старой `sync_meta.schema_version` для баз, созданных до этой системы. `0004_baseline.sql` — сегодняшняя схема, пронумерована с 4 (не с 1: реплеить 1→2→3→4 не на чем, задеплоенных данных той эпохи нет).
+- `db.transaction()`/`CacheDb.transaction()` — явный `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`, заменил голый `execute()+commit()` в 8 репозиториях (18 мест). По пути найден и исправлен реальный баг конкурентности: два одновременных вызова на одном shared-соединении падали с `cannot start a transaction within a transaction` — исправлено `asyncio.Lock` на соединение (тест на конкурентный `/item_add` поймал это сразу).
+- `schema.sql` стал генерируемым дампом; `test_schema_matches_migrations.py` доказывает, что миграции с нуля дают идентичный `sqlite_master`.
+- [scripts/backup.sh](scripts/backup.sh) переписан: два формата (бинарный `.backup` + `sqlite3 .dump | gzip`), `integrity_check` на самой копии, ретенция дед-отец-сын, обязательный вынос за пределы VPS через `rclone` (падает без `RCLONE_REMOTE`, обход только `BACKUP_SKIP_REMOTE=1` для локальной разработки).
+- [scripts/restore.sh](scripts/restore.sh) — по умолчанию учебная тревога (восстановление во временный каталог + `integrity_check` + счётчики строк, ничего не трогает в проде), `--apply <db>` — реальная замена с сохранением текущего файла и остановкой `stalbot.service`.
+- [deploy/stalbot-backup.{service,timer}](deploy/stalbot-backup.service) — ежедневный таймер, `RCLONE_REMOTE` в отдельном `.env.backup`.
+- README.md §8 переписан под новую процедуру.
+- Полный набор Python-тестов на новую инфраструктуру (миграции, PRAGMA, транзакции, бэкап-триггер) — **1085 тестов зелёные**, `ruff`/`mypy --strict` чисто.
+
+**НЕ проверено — нужен владелец:**
+- `backup.sh`/`restore.sh` синтаксически проверены (`bash -n`), но **не прогнаны сквозным образом** — на этой машине нет ни `sqlite3` CLI, ни `rclone` (деплой — Linux VPS, здесь Windows). Нужно один раз прогнать на реальном VPS: `RCLONE_REMOTE=<ваш remote> ./scripts/backup.sh`, проверить, что снимок появился и на удалённом хранилище, затем `./scripts/restore.sh backups/<timestamp>` — это и есть требуемая планом «отрепетированная» проверка восстановления.
+- `RCLONE_REMOTE` нужно один раз настроить (`rclone config`) — я не знаю, какое у вас объектное хранилище/второй провайдер.
+- `deploy/stalbot-backup.{service,timer}` не установлены на хосте — это тоже ручной шаг (`systemctl enable --now stalbot-backup.timer`).
 
 **Э3 — Схема торговли и репозитории** *(аддитивно)*
 Миграция `0005` (включая пустую `shelter_items` — см. IV.4). `PlayersRepository`, `DealsRepository`, `ProgressionRepository`, `CoinLedgerRepository`. Деньги `INTEGER`, границу держат `to_storage`/`from_storage` в `money.py`; вводятся `NewType` `Rub` и `Kopeks`.
