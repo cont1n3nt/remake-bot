@@ -178,7 +178,7 @@ async def run_migrations(
     for migration in migrations:
         if migration.version <= current:
             continue
-        logger.info("applying migration %04d_%s", migration.version, migration.name)
+        logger.info("applying migration %s", migration.name)
         script = (
             f"BEGIN IMMEDIATE;\n{migration.sql}\n"
             f"PRAGMA user_version = {migration.version};\nCOMMIT;\n"

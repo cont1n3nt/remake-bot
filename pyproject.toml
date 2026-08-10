@@ -121,6 +121,7 @@ ignore = [
 # sqlite_migration.md Э0: docstrings/log messages quote sheet names and
 # migration-plan prose verbatim in Russian.
 "scripts/export_sheet_snapshot.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/import_from_sheets.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/scripts/**" = ["RUF001", "RUF002", "RUF003"]
 # CSV header text is literal spreadsheet content in Russian (§VI.1).
 "tests/support/sheet_snapshot.py" = ["RUF001", "RUF002", "RUF003"]
