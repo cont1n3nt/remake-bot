@@ -255,3 +255,54 @@ CREATE TABLE IF NOT EXISTS item_price_history (
     changed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_price_history_item ON item_price_history(item_id, changed_at);
+
+-- --- Shelter (crafting cost) schema (sqlite_migration.md §IV.3/§IV.4, Э5, migration 0006) ---
+-- All prices here are kopecks (§III.3). `shelter_items` is declared in the
+-- trading-schema block above (migration 0005), not here — see that
+-- migration's own comment for why.
+
+CREATE TABLE IF NOT EXISTS shelter_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS professions (
+    key   TEXT    PRIMARY KEY,
+    name  TEXT    NOT NULL,
+    level INTEGER NOT NULL DEFAULT 1 CHECK (level BETWEEN 1 AND 5)
+);
+
+CREATE TABLE IF NOT EXISTS recipes (
+    id             INTEGER PRIMARY KEY,
+    output_item_id INTEGER NOT NULL REFERENCES shelter_items(id) ON DELETE CASCADE,
+    profession_key TEXT    NOT NULL REFERENCES professions(key),
+    source_sheet   TEXT,
+    source_cell    TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_recipes_output ON recipes(output_item_id);
+
+CREATE TABLE IF NOT EXISTS recipe_ingredients (
+    recipe_id          INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    ingredient_item_id INTEGER NOT NULL REFERENCES shelter_items(id),
+    quantity            REAL    NOT NULL CHECK (quantity > 0),
+    position            INTEGER NOT NULL,
+    PRIMARY KEY (recipe_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS recipe_yields (
+    recipe_id       INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    level           INTEGER NOT NULL CHECK (level BETWEEN 1 AND 5),
+    units_per_craft REAL    NOT NULL CHECK (units_per_craft >= 0),
+    PRIMARY KEY (recipe_id, level)
+);
+
+CREATE TABLE IF NOT EXISTS shelter_cost (
+    shelter_item_id    INTEGER PRIMARY KEY REFERENCES shelter_items(id) ON DELETE CASCADE,
+    cost_kopeks        INTEGER,
+    best_recipe_id     INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+    source             TEXT NOT NULL CHECK (source IN ('my_price','market','crafted','unresolved')),
+    depth              INTEGER NOT NULL DEFAULT 0,
+    note               TEXT,
+    calculator_version INTEGER NOT NULL,
+    computed_at        TEXT NOT NULL
+);

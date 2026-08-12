@@ -104,6 +104,11 @@ ignore = [
 # the docstring quotes PLAN.md verbatim.
 "src/stalbot/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
+# Docstrings quote the shelter workbook's own Russian sheet/column names.
+"src/stalbot/domain/shelter/**" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/domain/shelter/**" = ["RUF001", "RUF002", "RUF003"]
+"src/stalbot/domain/entities/shelter_item.py" = ["RUF001", "RUF002", "RUF003"]
+"src/stalbot/infrastructure/cache/repositories/shelter.py" = ["RUF001", "RUF002", "RUF003"]
 # Slash-command option names/descriptions and every user-facing string here
 # are literal Russian UI content (PLAN.md §10).
 "src/stalbot/presentation/cogs/**" = ["RUF001", "RUF002", "RUF003"]
@@ -122,9 +127,12 @@ ignore = [
 # migration-plan prose verbatim in Russian.
 "scripts/export_sheet_snapshot.py" = ["RUF001", "RUF002", "RUF003"]
 "scripts/import_from_sheets.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/import_shelter.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/scripts/**" = ["RUF001", "RUF002", "RUF003"]
 # CSV header text is literal spreadsheet content in Russian (§VI.1).
 "tests/support/sheet_snapshot.py" = ["RUF001", "RUF002", "RUF003"]
+# Item names in docstrings/fixtures are literal Russian catalog content.
+"tests/unit/application/services/test_catalog.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
