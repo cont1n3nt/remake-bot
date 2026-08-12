@@ -5,43 +5,62 @@ in `tests/unit/application/services/test_profile.py`. This file is about
 whether the cog builds the right embeds and pages the referral list.
 """
 
-from decimal import Decimal
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
 from stalbot.application.dto.profile_view import ProfileView, ReferredPlayer
-from stalbot.domain.entities.user_profile import UserProfile
+from stalbot.domain.entities.player import Player
+from stalbot.domain.entities.player_progression import PlayerProgressionRecord
 from stalbot.domain.nick import NormalizedNick
 from stalbot.presentation.cogs.profile import ProfileCog
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.views.paginated_embed import PaginatedEmbedView
 
+_NOW = datetime(2026, 8, 10, tzinfo=UTC)
 
-def _profile(**overrides: object) -> UserProfile:
+
+def _player(**overrides: object) -> Player:
     defaults: dict[str, object] = {
-        "row": 3,
-        "nick": NormalizedNick("scaryyyyy"),
+        "id": 1,
+        "nick_norm": NormalizedNick("scaryyyyy"),
+        "nick_display": "Scaryyyyy",
         "discord_id": 111,
-        "coins": 1240,
-        "xp": 3780,
-        "buy_turnover": Decimal(0),
-        "sell_turnover": Decimal(0),
-        "total_turnover": Decimal(0),
-        "referrals_count": 2,
+        "referrer_player_id": None,
         "is_booster": False,
-        "rank": "💎 Elite",
-        "referral_role": "🧲 Вербовщик",
+        "created_at": _NOW,
+        "updated_at": _NOW,
     }
     defaults.update(overrides)
-    return UserProfile(**defaults)  # type: ignore[arg-type]
+    return Player(**defaults)  # type: ignore[arg-type]
+
+
+def _progression(**overrides: object) -> PlayerProgressionRecord:
+    defaults: dict[str, object] = {
+        "player_id": 1,
+        "purchase_turnover": 0,
+        "sale_turnover": 0,
+        "total_turnover": 0,
+        "referral_count": 2,
+        "coins": 1240,
+        "xp": 3780,
+        "rank_key": "elite",
+        "referral_role_key": "recruiter",
+        "breakdown_json": "{}",
+        "calculator_version": 1,
+        "computed_at": _NOW,
+    }
+    defaults.update(overrides)
+    return PlayerProgressionRecord(**defaults)  # type: ignore[arg-type]
 
 
 def _view(**overrides: object) -> ProfileView:
-    profile = overrides.pop("profile", None) or _profile()
+    player = overrides.pop("player", None) or _player()
+    progression = overrides.pop("progression", _progression())
     nick_display = str(overrides.pop("nick_display", "Scaryyyyy"))
-    return ProfileView(profile=profile, nick_display=nick_display)  # type: ignore[arg-type]
+    return ProfileView(player=player, progression=progression, nick_display=nick_display)  # type: ignore[arg-type]
 
 
 def _cog(
@@ -117,8 +136,8 @@ async def test_profile_sends_embed_and_forwards_admin_flags() -> None:
 
 
 async def test_profile_shows_max_rank_notice_when_maxed() -> None:
-    maxed_profile = _profile(xp=999_999, rank="👑 Legend")
-    cog, _service = _cog(profile_view=_view(profile=maxed_profile))
+    maxed = _progression(xp=999_999, rank_key="legend")
+    cog, _service = _cog(profile_view=_view(progression=maxed))
     interaction = _interaction()
 
     await _call_profile(cog, interaction)
@@ -128,8 +147,8 @@ async def test_profile_shows_max_rank_notice_when_maxed() -> None:
 
 
 async def test_profile_omits_rank_bonuses_when_no_rank_yet() -> None:
-    unranked = _profile(xp=10, rank=None, referral_role=None)
-    cog, _service = _cog(profile_view=_view(profile=unranked))
+    unranked = _progression(xp=10, rank_key=None, referral_role_key=None)
+    cog, _service = _cog(profile_view=_view(progression=unranked))
     interaction = _interaction()
 
     await _call_profile(cog, interaction)

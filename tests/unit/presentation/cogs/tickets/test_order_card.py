@@ -5,9 +5,9 @@ from decimal import Decimal
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.ticket_session import TicketSession
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory, TicketKind, TicketStatus
-from stalbot.domain.money import format_amount
+from stalbot.domain.money import Rub, format_amount
 from stalbot.presentation.cogs.tickets.order_card import render_order_editor, render_order_summary
 from stalbot.presentation.embeds.factory import EmbedFactory
 
@@ -39,16 +39,22 @@ def _session(**overrides: object) -> TicketSession:
     return TicketSession(**defaults)  # type: ignore[arg-type]
 
 
-def _item(item_id: int, name: str, price_sell: Decimal | None) -> Item:
-    return Item(
+def _item(item_id: int, name: str, price_sell: Decimal | None) -> CatalogItem:
+    now = datetime(2026, 7, 31, 21, 45, tzinfo=UTC)
+    return CatalogItem(
         id=item_id,
         name=name,
+        name_norm=name.lower(),
         category=ItemCategory.BOOST,
+        section=None,
         price_buy=None,
-        price_sell=price_sell,
+        price_sell=Rub(int(price_sell)) if price_sell is not None else None,
         emoji=None,
+        sort_order=0,
+        shelter_item_id=None,
+        created_at=now,
         updated_at=None,
-        row=item_id + 2,
+        deleted_at=None,
     )
 
 

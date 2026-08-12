@@ -1,24 +1,21 @@
-"""Tests for `stalbot.application.services.binding.bind_discord` (PLAN.md §6.1).
+"""Tests for `stalbot.application.services.binding.bind_discord`.
 
-Shared by `TransactionService` (M4) and `ManualGrantService` (M8) — covered
-once here rather than duplicated in both services' test files.
+PLAN.md §6.1; sqlite_migration.md Э7. Shared by `TransactionService` and
+`ManualGrantService` — covered once here rather than duplicated in both
+services' test files.
 """
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import aiosqlite
 import pytest_asyncio
 
 from stalbot.application.services.binding import bind_discord
-from stalbot.domain.entities.user_profile import UserProfile
 from stalbot.domain.nick import NormalizedNick
 from stalbot.infrastructure.cache.db import CacheDb
-from stalbot.infrastructure.cache.repositories.users import UsersCacheRepository
-from stalbot.infrastructure.sheets.client import SheetsClient
+from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 
 
 @pytest_asyncio.fixture
@@ -37,96 +34,64 @@ class _FixedClock:
         return self._now
 
 
-def _fake_sheets() -> MagicMock:
-    client = MagicMock(spec=SheetsClient)
-    client.batch_update = AsyncMock()
-    return client
-
-
-def _profile(**overrides: object) -> UserProfile:
-    defaults: dict[str, object] = {
-        "row": 3,
-        "nick": NormalizedNick("scaryyyyy"),
-        "discord_id": None,
-        "coins": 0,
-        "xp": 0,
-        "buy_turnover": Decimal(0),
-        "sell_turnover": Decimal(0),
-        "total_turnover": Decimal(0),
-        "referrals_count": 0,
-        "is_booster": False,
-        "rank": None,
-        "referral_role": None,
-    }
-    defaults.update(overrides)
-    return UserProfile(**defaults)  # type: ignore[arg-type]
+_NOW = datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
+_CLOCK = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
 
 
 async def test_binds_an_unbound_nick(connection: aiosqlite.Connection) -> None:
-    users = UsersCacheRepository(connection)
-    await users.replace_all(
-        [_profile(discord_id=None)], nick_displays={}, synced_at="2026-08-02T11:00:00+03:00"
-    )
-    sheets = _fake_sheets()
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    players = PlayersRepository(connection)
+    await players.get_or_create(NormalizedNick("scaryyyyy"), "Scaryyyyy", now=_NOW)
 
-    bound = await bind_discord(users, sheets, clock, NormalizedNick("scaryyyyy"), 999, force=False)
+    bound = await bind_discord(players, _CLOCK, NormalizedNick("scaryyyyy"), 999, force=False)
 
     assert bound is True
-    sheets.batch_update.assert_awaited_once_with({"DataBase!I3": [[999]]})
-    profile = await users.get_by_nick(NormalizedNick("scaryyyyy"))
-    assert profile is not None
-    assert profile.discord_id == 999
+    player = await players.get_by_nick(NormalizedNick("scaryyyyy"))
+    assert player is not None
+    assert player.discord_id == 999
 
 
 async def test_no_op_for_unknown_nick(connection: aiosqlite.Connection) -> None:
-    users = UsersCacheRepository(connection)
-    sheets = _fake_sheets()
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    players = PlayersRepository(connection)
 
-    bound = await bind_discord(users, sheets, clock, NormalizedNick("nobody"), 999, force=False)
+    bound = await bind_discord(players, _CLOCK, NormalizedNick("nobody"), 999, force=False)
 
     assert bound is False
-    sheets.batch_update.assert_not_called()
 
 
 async def test_no_op_when_already_bound_to_same_id(connection: aiosqlite.Connection) -> None:
-    users = UsersCacheRepository(connection)
-    await users.replace_all(
-        [_profile(discord_id=999)], nick_displays={}, synced_at="2026-08-02T11:00:00+03:00"
-    )
-    sheets = _fake_sheets()
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    players = PlayersRepository(connection)
+    player = await players.get_or_create(NormalizedNick("scaryyyyy"), "Scaryyyyy", now=_NOW)
+    assert player.id is not None
+    await players.set_discord_id(player.id, 999, now=_NOW)
 
-    bound = await bind_discord(users, sheets, clock, NormalizedNick("scaryyyyy"), 999, force=False)
+    bound = await bind_discord(players, _CLOCK, NormalizedNick("scaryyyyy"), 999, force=False)
 
     assert bound is False
-    sheets.batch_update.assert_not_called()
 
 
 async def test_does_not_rebind_without_force(connection: aiosqlite.Connection) -> None:
-    users = UsersCacheRepository(connection)
-    await users.replace_all(
-        [_profile(discord_id=111)], nick_displays={}, synced_at="2026-08-02T11:00:00+03:00"
-    )
-    sheets = _fake_sheets()
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    players = PlayersRepository(connection)
+    player = await players.get_or_create(NormalizedNick("scaryyyyy"), "Scaryyyyy", now=_NOW)
+    assert player.id is not None
+    await players.set_discord_id(player.id, 111, now=_NOW)
 
-    bound = await bind_discord(users, sheets, clock, NormalizedNick("scaryyyyy"), 999, force=False)
+    bound = await bind_discord(players, _CLOCK, NormalizedNick("scaryyyyy"), 999, force=False)
 
     assert bound is False
-    sheets.batch_update.assert_not_called()
+    unchanged = await players.get_by_nick(NormalizedNick("scaryyyyy"))
+    assert unchanged is not None
+    assert unchanged.discord_id == 111
 
 
 async def test_rebinds_when_forced(connection: aiosqlite.Connection) -> None:
-    users = UsersCacheRepository(connection)
-    await users.replace_all(
-        [_profile(discord_id=111)], nick_displays={}, synced_at="2026-08-02T11:00:00+03:00"
-    )
-    sheets = _fake_sheets()
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    players = PlayersRepository(connection)
+    player = await players.get_or_create(NormalizedNick("scaryyyyy"), "Scaryyyyy", now=_NOW)
+    assert player.id is not None
+    await players.set_discord_id(player.id, 111, now=_NOW)
 
-    bound = await bind_discord(users, sheets, clock, NormalizedNick("scaryyyyy"), 999, force=True)
+    bound = await bind_discord(players, _CLOCK, NormalizedNick("scaryyyyy"), 999, force=True)
 
     assert bound is True
-    sheets.batch_update.assert_awaited_once_with({"DataBase!I3": [[999]]})
+    updated = await players.get_by_nick(NormalizedNick("scaryyyyy"))
+    assert updated is not None
+    assert updated.discord_id == 999

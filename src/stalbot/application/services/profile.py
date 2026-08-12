@@ -4,6 +4,12 @@ Both commands share the same access rule: a player may only look up their
 own profile unless the requester is an admin and `ADMIN_CAN_VIEW_ANY_PROFILE`
 allows it. Centralizing that check here (rather than duplicating it in both
 cog handlers) is the whole reason this service exists.
+
+sqlite_migration.md Э6: reads `players`/`player_progression` instead of the
+sheet-era `users`/`transactions` cache. `list_referrals` now reads
+`players.referrer_player_id` directly (`PlayersRepository.list_by_referrer`)
+instead of scanning `transactions.referrer_norm` — the referee's own row
+carries the referrer, so no per-transaction scan is needed.
 """
 
 from collections.abc import Sequence
@@ -11,24 +17,22 @@ from collections.abc import Sequence
 from stalbot.application.dto.profile_view import ProfileView, ReferredPlayer
 from stalbot.domain.errors import PlayerNotFoundError, ProfileAccessDeniedError
 from stalbot.domain.nick import normalize_nick
-from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
-from stalbot.infrastructure.cache.repositories.users import UsersCacheRepository
+from stalbot.infrastructure.cache.repositories.players import PlayersRepository
+from stalbot.infrastructure.cache.repositories.progression import ProgressionRepository
 
 
 class ProfileService:
     """Looks up a player's profile and referral list from the cache."""
 
-    def __init__(
-        self, users: UsersCacheRepository, transactions: TransactionsCacheRepository
-    ) -> None:
+    def __init__(self, players: PlayersRepository, progression: ProgressionRepository) -> None:
         """Wire the service to its collaborators.
 
         Args:
-            users: Cache repository for player profiles.
-            transactions: Cache repository, used to list who a player referred.
+            players: Cache repository for player identity.
+            progression: Cache repository for materialized Coins/XP/rank.
         """
-        self._users = users
-        self._transactions = transactions
+        self._players = players
+        self._progression = progression
 
     async def get_profile(
         self, nick: str, *, requester_id: int, is_admin: bool, admin_can_view_any: bool
@@ -47,14 +51,15 @@ class ProfileService:
                 bound account, and is not an admin permitted to look up others.
         """
         nick_norm = normalize_nick(nick)
-        profile = await self._users.get_by_nick(nick_norm)
-        if profile is None:
+        player = await self._players.get_by_nick(nick_norm)
+        if player is None:
             raise PlayerNotFoundError(nick)
-        if not (is_admin and admin_can_view_any) and profile.discord_id != requester_id:
+        if not (is_admin and admin_can_view_any) and player.discord_id != requester_id:
             raise ProfileAccessDeniedError(nick)
 
-        display = await self._users.get_nick_display(nick_norm) or nick_norm
-        return ProfileView(profile=profile, nick_display=display)
+        assert player.id is not None  # noqa: S101 - a fetched player always has a persisted id
+        record = await self._progression.get(player.id)
+        return ProfileView(player=player, progression=record, nick_display=player.nick_display)
 
     async def list_referrals(
         self, nick: str, *, requester_id: int, is_admin: bool, admin_can_view_any: bool
@@ -76,20 +81,10 @@ class ProfileService:
             admin_can_view_any=admin_can_view_any,
         )
 
-        referred_nicks = await self._transactions.list_referral_targets(view.profile.nick)
-        # Two batched lookups instead of two per referred nick (APP-6).
-        referred_profiles = await self._users.get_by_nicks(referred_nicks)
-        referred_displays = await self._users.get_nick_displays(referred_nicks)
-        referred: list[ReferredPlayer] = []
-        for referred_nick in referred_nicks:
-            referred_profile = referred_profiles.get(referred_nick)
-            display = referred_displays.get(referred_nick) or referred_nick
-            referred.append(
-                ReferredPlayer(
-                    nick_display=display,
-                    discord_id=(
-                        referred_profile.discord_id if referred_profile is not None else None
-                    ),
-                )
-            )
+        assert view.player.id is not None  # noqa: S101 - see get_profile
+        referred_players = await self._players.list_by_referrer(view.player.id)
+        referred = [
+            ReferredPlayer(nick_display=p.nick_display, discord_id=p.discord_id)
+            for p in referred_players
+        ]
         return view, referred

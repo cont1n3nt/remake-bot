@@ -19,9 +19,17 @@ from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.application.dto.transaction_request import TransactionRegistrationResult
 from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
+from stalbot.domain.entities.deal import Deal
 from stalbot.domain.entities.screenshot import OcrResult
-from stalbot.domain.entities.transaction import TransactionRecord
-from stalbot.domain.enums import DealType, DeliveryMethod, ItemCategory, TicketKind, TicketStatus
+from stalbot.domain.enums import (
+    DealSource,
+    DealType,
+    DeliveryMethod,
+    ItemCategory,
+    OccurredAtKind,
+    TicketKind,
+    TicketStatus,
+)
 from stalbot.domain.errors import AmountParseError
 from stalbot.presentation.cogs.tickets.cog import TicketsCog, _infer_author_id, _resolve_member
 from stalbot.presentation.cogs.tickets.modals import AmountModal
@@ -108,21 +116,26 @@ def _fake_screenshots() -> MagicMock:
 
 
 def _fake_transactions(**overrides: object) -> MagicMock:
-    record_defaults: dict[str, object] = {
-        "row": 3,
-        "at": datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-        "nick": "scaryyyyy",
-        "nick_display": "Scaryyyyy",
+    deal_defaults: dict[str, object] = {
+        "id": 1,
+        "player_id": 1,
+        "occurred_at": datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        "occurred_at_kind": OccurredAtKind.BOT,
         "deal_type": DealType.SALE,
         "amount": Decimal(100000),
         "coins": 1,
         "xp": 10,
-        "referrer": None,
+        "rank_at_deal": None,
+        "booster_at_deal": False,
+        "recorded_by": None,
+        "source": DealSource.TICKET,
+        "legacy_sheet_row": None,
+        "created_at": datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
     }
     result = TransactionRegistrationResult(
-        record=TransactionRecord(**record_defaults),  # type: ignore[arg-type]
+        deal=Deal(**deal_defaults),  # type: ignore[arg-type]
+        nick_display="Scaryyyyy",
         discord_bound=False,
-        formula_pending=False,
     )
     transactions = MagicMock()
     transactions.register = AsyncMock(return_value=overrides.get("register_result", result))
@@ -505,19 +518,24 @@ async def test_amount_submitted_skips_duplicate_side_effects_on_a_replayed_regis
     `TransactionService.register()`'s idempotent replay back and must not re-run announcements.
     """
     session = _session(game_nick="Scaryyyyy")
-    replayed_record = TransactionRecord(
-        row=3,
-        at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-        nick="scaryyyyy",  # type: ignore[arg-type]
-        nick_display="Scaryyyyy",
+    replayed_deal = Deal(
+        id=1,
+        player_id=1,
+        occurred_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        occurred_at_kind=OccurredAtKind.BOT,
         deal_type=DealType.SALE,
-        amount=Decimal(100000),
+        amount=Decimal(100000),  # type: ignore[arg-type]
         coins=1,
         xp=10,
-        referrer=None,
+        rank_at_deal=None,
+        booster_at_deal=False,
+        recorded_by=None,
+        source=DealSource.TICKET,
+        legacy_sheet_row=None,
+        created_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
     )
     replayed_result = TransactionRegistrationResult(
-        record=replayed_record, discord_bound=False, formula_pending=False, replayed=True
+        deal=replayed_deal, nick_display="Scaryyyyy", discord_bound=False, replayed=True
     )
     cog, tickets, screenshots, boost_orders, _transactions, progression = _cog(
         tickets=_fake_tickets(get_return=session),

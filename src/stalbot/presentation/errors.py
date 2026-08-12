@@ -18,6 +18,7 @@ from stalbot.domain.errors import (
     DeadlineParseError,
     DomainError,
     DuplicateItemError,
+    InvalidCategoryPriceError,
     InvalidPeriodError,
     ItemNotFoundError,
     NickNotBoundError,
@@ -49,6 +50,9 @@ _DOMAIN_MESSAGES: dict[type[StalbotError], str] = {
     ProfileAccessDeniedError: "Вы можете смотреть только свой профиль.",
     ItemNotFoundError: "Предмет не найден в базе.",
     DuplicateItemError: "Такой предмет уже есть в базе.",
+    InvalidCategoryPriceError: (
+        "У ресурса указывается только цена покупки, у буста — только цена продажи."
+    ),
     InvalidPeriodError: "Некорректный период.",
     TicketSessionNotFoundError: (
         "Тикет не найден или ещё не инициализирован. Обратитесь к администратору."

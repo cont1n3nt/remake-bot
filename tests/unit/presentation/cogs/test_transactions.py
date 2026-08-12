@@ -1,10 +1,11 @@
-"""Tests for `stalbot.presentation.cogs.transactions.TransactionsCog` (PLAN.md §10.1).
+"""Tests for `stalbot.presentation.cogs.transactions.TransactionsCog`.
 
-`TransactionService`/`ProgressionService`/`UsersCacheRepository` are
-mocked — their own behavior is covered elsewhere; this file is about
-whether the cog validates input and orchestrates them correctly. The
-command's callback is invoked directly (`TransactionsCog.add.callback`),
-bypassing discord.py's own dispatch machinery.
+PLAN.md §10.1; sqlite_migration.md Э7. `TransactionService`/`ProgressionService`/
+`PlayersRepository` are mocked — their own behavior is covered elsewhere;
+this file is about whether the cog validates input and orchestrates them
+correctly. The command's callback is invoked directly
+(`TransactionsCog.add.callback`), bypassing discord.py's own dispatch
+machinery.
 """
 
 from datetime import UTC, datetime
@@ -19,68 +20,77 @@ from stalbot.application.dto.transaction_request import (
     AddTransactionRequest,
     TransactionRegistrationResult,
 )
-from stalbot.domain.entities.transaction import TransactionRecord
-from stalbot.domain.entities.user_profile import UserProfile
-from stalbot.domain.enums import DealType
+from stalbot.domain.entities.deal import Deal
+from stalbot.domain.entities.player import Player
+from stalbot.domain.enums import DealSource, DealType, OccurredAtKind
+from stalbot.domain.money import Rub
 from stalbot.domain.nick import NormalizedNick
 from stalbot.presentation.cogs.transactions import TransactionsCog
 from stalbot.presentation.embeds.factory import EmbedFactory
 
+_NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 
-def _result(**overrides: object) -> TransactionRegistrationResult:
-    record_defaults: dict[str, object] = {
-        "row": 3,
-        "at": datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-        "nick": NormalizedNick("scaryyyyy"),
-        "nick_display": "Scaryyyyy",
+
+def _deal(**overrides: object) -> Deal:
+    defaults: dict[str, object] = {
+        "id": 1,
+        "player_id": 1,
+        "occurred_at": _NOW,
+        "occurred_at_kind": OccurredAtKind.BOT,
         "deal_type": DealType.PURCHASE,
-        "amount": Decimal(299900),
+        "amount": Rub(299900),
         "coins": 1,
         "xp": 10,
-        "referrer": None,
+        "rank_at_deal": None,
+        "booster_at_deal": False,
+        "recorded_by": 999,
+        "source": DealSource.ADD,
+        "legacy_sheet_row": None,
+        "created_at": _NOW,
     }
+    defaults.update(overrides)
+    return Deal(**defaults)  # type: ignore[arg-type]
+
+
+def _result(**overrides: object) -> TransactionRegistrationResult:
     defaults: dict[str, object] = {
-        "record": TransactionRecord(**record_defaults),  # type: ignore[arg-type]
+        "deal": _deal(),
+        "nick_display": "Scaryyyyy",
         "discord_bound": False,
-        "formula_pending": False,
     }
     defaults.update(overrides)
     return TransactionRegistrationResult(**defaults)  # type: ignore[arg-type]
 
 
-def _profile(**overrides: object) -> UserProfile:
+def _player(**overrides: object) -> Player:
     defaults: dict[str, object] = {
-        "row": 3,
-        "nick": NormalizedNick("scaryyyyy"),
+        "id": 1,
+        "nick_norm": NormalizedNick("scaryyyyy"),
+        "nick_display": "Scaryyyyy",
         "discord_id": None,
-        "coins": 0,
-        "xp": 0,
-        "buy_turnover": Decimal(0),
-        "sell_turnover": Decimal(0),
-        "total_turnover": Decimal(0),
-        "referrals_count": 0,
+        "referrer_player_id": None,
         "is_booster": False,
-        "rank": None,
-        "referral_role": None,
+        "created_at": _NOW,
+        "updated_at": _NOW,
     }
     defaults.update(overrides)
-    return UserProfile(**defaults)  # type: ignore[arg-type]
+    return Player(**defaults)  # type: ignore[arg-type]
 
 
 def _cog(
     *,
     register_result: TransactionRegistrationResult | None = None,
-    existing_profile: UserProfile | None = None,
+    existing_player: Player | None = None,
 ) -> tuple[TransactionsCog, MagicMock, MagicMock, MagicMock]:
     transactions = MagicMock()
     transactions.register = AsyncMock(return_value=register_result or _result())
     progression = MagicMock()
     progression.sync = AsyncMock(return_value=[])
-    users = MagicMock()
-    users.get_by_nick = AsyncMock(return_value=existing_profile)
+    players = MagicMock()
+    players.get_by_nick = AsyncMock(return_value=existing_player)
     settings = MagicMock(reviews_channel_id=1490342809075716237)
-    cog = TransactionsCog(transactions, progression, users, EmbedFactory(), settings)
-    return cog, transactions, progression, users
+    cog = TransactionsCog(transactions, progression, players, EmbedFactory(), settings)
+    return cog, transactions, progression, players
 
 
 def _interaction(*, channel: MagicMock | None = None) -> MagicMock:
@@ -141,7 +151,7 @@ async def _call_add(
 
 
 async def test_add_writes_and_sends_confirmation_and_public_notice() -> None:
-    cog, transactions, progression, _users = _cog()
+    cog, transactions, progression, _players = _cog()
     channel = _messageable_channel()
     interaction = _interaction(channel=channel)
 
@@ -161,7 +171,7 @@ async def test_add_writes_and_sends_confirmation_and_public_notice() -> None:
 
 
 async def test_add_rejects_referrer_equal_to_self() -> None:
-    cog, transactions, _progression, _users = _cog()
+    cog, transactions, _progression, _players = _cog()
     interaction = _interaction()
 
     await _call_add(cog, interaction, ник="Scaryyyyy", реферал_ник="  scaryyyyy ")
@@ -174,7 +184,7 @@ async def test_add_rejects_referrer_equal_to_self() -> None:
 
 
 async def test_add_warns_when_referrer_nick_given_without_discord() -> None:
-    cog, transactions, _progression, _users = _cog()
+    cog, transactions, _progression, _players = _cog()
     interaction = _interaction()
 
     await _call_add(cog, interaction, реферал_ник="OtherNick", реферал_discord=None)
@@ -186,33 +196,21 @@ async def test_add_warns_when_referrer_nick_given_without_discord() -> None:
     assert "без его Discord-аккаунта" in (embed.description or "")
 
 
-async def test_add_shows_formula_pending_notice() -> None:
-    cog, _transactions, _progression, _users = _cog(
-        register_result=_result(
-            formula_pending=True,
-            record=TransactionRecord(
-                row=3,
-                at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-                nick=NormalizedNick("scaryyyyy"),
-                nick_display="Scaryyyyy",
-                deal_type=DealType.PURCHASE,
-                amount=Decimal(299900),
-                coins=0,
-                xp=0,
-                referrer=None,
-            ),
-        )
+async def test_add_shows_coins_and_xp_immediately() -> None:
+    cog, _transactions, _progression, _players = _cog(
+        register_result=_result(deal=_deal(coins=7, xp=42))
     )
     interaction = _interaction()
 
     await _call_add(cog, interaction)
 
     embed = interaction.followup.send.call_args.kwargs["embed"]
-    assert "ожидает пересчёта формул" in (embed.description or "")
+    assert "7 Coins" in (embed.description or "")
+    assert "42 XP" in (embed.description or "")
 
 
 async def test_add_skips_confirmation_when_nick_unbound() -> None:
-    cog, transactions, _progression, _users = _cog(existing_profile=_profile(discord_id=None))
+    cog, transactions, _progression, _players = _cog(existing_player=_player(discord_id=None))
     interaction = _interaction()
 
     await _call_add(cog, interaction)
@@ -224,7 +222,7 @@ async def test_add_skips_confirmation_when_nick_unbound() -> None:
 
 async def test_add_skips_confirmation_when_discord_id_matches() -> None:
     member = _member(999)
-    cog, transactions, _progression, _users = _cog(existing_profile=_profile(discord_id=999))
+    cog, transactions, _progression, _players = _cog(existing_player=_player(discord_id=999))
     interaction = _interaction()
 
     await _call_add(cog, interaction, discord_member=member)
@@ -235,7 +233,7 @@ async def test_add_skips_confirmation_when_discord_id_matches() -> None:
 
 
 async def test_add_asks_for_confirmation_on_binding_conflict_and_proceeds_when_confirmed() -> None:
-    cog, transactions, _progression, _users = _cog(existing_profile=_profile(discord_id=111))
+    cog, transactions, _progression, _players = _cog(existing_player=_player(discord_id=111))
     interaction = _interaction()
     cog._confirm_rebind = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
@@ -248,7 +246,7 @@ async def test_add_asks_for_confirmation_on_binding_conflict_and_proceeds_when_c
 
 
 async def test_add_aborts_when_rebind_not_confirmed() -> None:
-    cog, transactions, progression, _users = _cog(existing_profile=_profile(discord_id=111))
+    cog, transactions, progression, _players = _cog(existing_player=_player(discord_id=111))
     interaction = _interaction()
     cog._confirm_rebind = AsyncMock(return_value=False)  # type: ignore[method-assign]
 

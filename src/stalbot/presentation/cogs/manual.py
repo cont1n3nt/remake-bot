@@ -4,7 +4,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from stalbot.application.dto.manual_grant import SetReferralResult
 from stalbot.application.services.manual_grants import ManualGrantService
 from stalbot.application.services.progression import ProgressionService
 from stalbot.domain.nick import NormalizedNick, normalize_nick
@@ -75,7 +74,7 @@ class ManualCog(commands.Cog):
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
-        result = await self._manual_grants.set_referral(
+        await self._manual_grants.set_referral(
             ник, ник_пригласившего, discord_member.id, referrer_discord_member.id
         )
 
@@ -84,7 +83,7 @@ class ManualCog(commands.Cog):
         )
 
         await self._send_referral_confirmation(
-            interaction, ник, discord_member, ник_пригласившего, referrer_discord_member, result
+            interaction, ник, discord_member, ник_пригласившего, referrer_discord_member
         )
         await self._send_public_notice(
             interaction,
@@ -114,12 +113,10 @@ class ManualCog(commands.Cog):
         member: discord.Member,
         referrer_nick: str,
         referrer_member: discord.Member,
-        result: SetReferralResult,
     ) -> None:
         lines = [
             f"👤 Игрок: {nick} ({member.mention})",
             f"🤝 Пригласил: {referrer_nick} ({referrer_member.mention})",
-            f"📄 Строка: {result.row}",
         ]
         embed = self._embeds.success("✅ Реферал указан", "\n".join(lines))
         await interaction.followup.send(embed=embed, ephemeral=True)

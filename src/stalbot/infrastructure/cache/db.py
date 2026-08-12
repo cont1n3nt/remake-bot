@@ -72,6 +72,41 @@ class CacheDb:
             await self._connection.close()
             self._connection = None
 
+    async def schema_version(self) -> int:
+        """Return `PRAGMA user_version` — the applied migration count (Э6, `/healthcheck`).
+
+        Raises:
+            RuntimeError: `connect()` has not been called yet.
+        """
+        connection = self._require_connection()
+        cursor = await connection.execute("PRAGMA user_version")
+        row = await cursor.fetchone()
+        return int(row[0]) if row is not None else 0
+
+    async def integrity_ok(self) -> bool:
+        """Return whether `PRAGMA quick_check` currently reports `ok` (Э6, `/healthcheck`).
+
+        A point-in-time display check, unlike `_check_integrity` (which
+        raises and refuses to start) — a corrupt file after startup should
+        show up in `/healthcheck`, not crash the running bot.
+
+        Raises:
+            RuntimeError: `connect()` has not been called yet.
+        """
+        connection = self._require_connection()
+        cursor = await connection.execute("PRAGMA quick_check")
+        row = await cursor.fetchone()
+        return row is not None and row[0] == "ok"
+
+    def size_bytes(self) -> int:
+        """Return the main database file's size in bytes, or `0` if it doesn't exist yet."""
+        return self._path.stat().st_size if self._path.exists() else 0
+
+    def _require_connection(self) -> aiosqlite.Connection:
+        if self._connection is None:
+            raise RuntimeError("CacheDb method called before connect()")
+        return self._connection
+
     def transaction(self) -> "Transaction":
         """Open an explicit `BEGIN IMMEDIATE` transaction as an async context manager.
 

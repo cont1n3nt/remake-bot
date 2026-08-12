@@ -346,10 +346,12 @@ async def test_run_metrics_log_gets_a_fresh_trace_id_each_tick(
     health_service = MagicMock()
     health_service.snapshot = AsyncMock(
         return_value=SimpleNamespace(
-            sheets_read_requests=0,
-            sheets_write_requests=0,
-            cache_hit_rate=None,
-            cache_age_seconds=None,
+            schema_version=7,
+            integrity_ok=True,
+            player_count=0,
+            deal_count=0,
+            last_deal_at=None,
+            db_size_bytes=0,
             audit_queue_size=0,
             ocr_sample_count=0,
             ocr_confirmed_sample_count=0,

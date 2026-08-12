@@ -1,14 +1,15 @@
 """Tests for `stalbot.presentation.cogs.tickets.order_views` (PLAN.md §11.6)."""
 
 from collections.abc import Awaitable, Callable, Sequence
-from decimal import Decimal
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory
+from stalbot.domain.money import Rub
 from stalbot.presentation.cogs.tickets.order_views import (
     BoostMultiSelectView,
     OrderEditorView,
@@ -16,19 +17,26 @@ from stalbot.presentation.cogs.tickets.order_views import (
 )
 from stalbot.presentation.embeds.factory import EmbedFactory
 
-_OnChange = Callable[[Any, Sequence[Item], frozenset[int]], Awaitable[frozenset[int]]]
+_OnChange = Callable[[Any, Sequence[CatalogItem], frozenset[int]], Awaitable[frozenset[int]]]
+
+_NOW = datetime(2026, 7, 31, 21, 45, tzinfo=UTC)
 
 
-def _item(item_id: int, name: str) -> Item:
-    return Item(
+def _item(item_id: int, name: str) -> CatalogItem:
+    return CatalogItem(
         id=item_id,
         name=name,
+        name_norm=name.lower(),
         category=ItemCategory.BOOST,
+        section=None,
         price_buy=None,
-        price_sell=Decimal(1000),
+        price_sell=Rub(1000),
         emoji=None,
+        sort_order=0,
+        shelter_item_id=None,
+        created_at=_NOW,
         updated_at=None,
-        row=item_id + 2,
+        deleted_at=None,
     )
 
 
@@ -161,7 +169,7 @@ async def test_order_summary_buttons_delegate_to_their_handlers() -> None:
 
 
 def _multiselect(
-    items: list[Item], selected: frozenset[int], *, on_change: _OnChange | None = None
+    items: list[CatalogItem], selected: frozenset[int], *, on_change: _OnChange | None = None
 ) -> BoostMultiSelectView:
     return BoostMultiSelectView(
         items,

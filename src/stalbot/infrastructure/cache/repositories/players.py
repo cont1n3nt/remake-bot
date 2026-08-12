@@ -5,7 +5,7 @@ existing independently of whether they have ever made a deal (§XIV.1). No
 Sheets counterpart — cache-only from day one.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 
 import aiosqlite
@@ -62,6 +62,44 @@ class PlayersRepository:
         """Return every player, ordered by id."""
         cursor = await self._conn.execute("SELECT * FROM players ORDER BY id")
         return [_row_to_player(row) async for row in cursor]
+
+    async def get_by_ids(self, ids: Iterable[int]) -> dict[int, Player]:
+        """Batch-look-up several players by id, keyed by id (Э6: avoids N+1).
+
+        Args:
+            ids: Player ids to look up. Duplicates are harmless.
+        """
+        id_list = list(dict.fromkeys(ids))
+        if not id_list:
+            return {}
+        placeholders = ",".join("?" * len(id_list))
+        cursor = await self._conn.execute(
+            f"SELECT * FROM players WHERE id IN ({placeholders})",  # noqa: S608 - `?` placeholders only
+            id_list,
+        )
+        return {row["id"]: _row_to_player(row) async for row in cursor}
+
+    async def list_by_referrer(self, referrer_player_id: int) -> Sequence[Player]:
+        """Return every player referred by *referrer_player_id* (Э6, `/referrals`).
+
+        Replaces the sheet-era `TransactionsCacheRepository.list_referral_targets`
+        (a per-transaction `referrer_norm` scan) — the new schema tracks the
+        referrer on the *referee* directly, so this is a plain lookup.
+
+        Args:
+            referrer_player_id: The referring player's id.
+        """
+        cursor = await self._conn.execute(
+            "SELECT * FROM players WHERE referrer_player_id = ? ORDER BY id",
+            (referrer_player_id,),
+        )
+        return [_row_to_player(row) async for row in cursor]
+
+    async def count(self) -> int:
+        """Return the total number of players (`/healthcheck`, Э6)."""
+        cursor = await self._conn.execute("SELECT COUNT(*) AS n FROM players")
+        row = await cursor.fetchone()
+        return int(row["n"]) if row is not None else 0
 
     async def get_or_create(
         self, nick: NormalizedNick, nick_display: str, *, now: datetime

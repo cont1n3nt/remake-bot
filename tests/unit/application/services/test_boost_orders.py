@@ -2,9 +2,15 @@
 
 Both cache repositories are real, SQLite-backed, for genuine round-trip
 confidence (same approach as `test_transaction_service.py`).
+
+sqlite_migration.md Э7: catalog items are `CatalogItem`s with a DB-assigned
+surrogate id now, not a hand-picked sheet-row-derived one — every test
+inserts its fixture items and reads back the assigned ids rather than
+hardcoding them.
 """
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,11 +24,14 @@ from stalbot.application.services.boost_orders import (
     MIN_QUANTITY,
     BoostOrderService,
 )
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory
+from stalbot.domain.money import Rub
 from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
-from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
+from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
+
+_NOW = datetime(2026, 7, 31, 21, 45, tzinfo=UTC)
 
 
 @pytest_asyncio.fixture
@@ -33,68 +42,93 @@ async def connection(tmp_path: Path) -> AsyncIterator[aiosqlite.Connection]:
     await db.close()
 
 
-def _item(item_id: int, name: str, *, price_sell: Decimal | None, category: ItemCategory) -> Item:
-    return Item(
-        id=item_id,
+def _draft(name: str, *, price_sell: Decimal | None, category: ItemCategory) -> CatalogItem:
+    return CatalogItem(
+        id=None,
         name=name,
+        name_norm=name.lower(),
         category=category,
+        section=None,
         price_buy=None,
-        price_sell=price_sell,
+        price_sell=Rub(int(price_sell)) if price_sell is not None else None,
         emoji=None,
+        sort_order=0,
+        shelter_item_id=None,
+        created_at=_NOW,
         updated_at=None,
-        row=item_id + 2,
+        deleted_at=None,
     )
 
 
-async def _service(connection: aiosqlite.Connection, items: list[Item]) -> BoostOrderService:
-    items_repo = ItemsCacheRepository(connection)
-    await items_repo.replace_all(items)
-    return BoostOrderService(BoostOrderLinesRepository(connection), items_repo)
+async def _service_with_items(
+    connection: aiosqlite.Connection, drafts: list[CatalogItem]
+) -> tuple[BoostOrderService, list[CatalogItem]]:
+    items_repo = CatalogItemsRepository(connection)
+    persisted = [await items_repo.insert(draft) for draft in drafts]
+    return BoostOrderService(BoostOrderLinesRepository(connection), items_repo), persisted
 
 
-_BOOST_A = _item(1, "Топот", price_sell=Decimal(300000), category=ItemCategory.BOOST)
-_BOOST_B = _item(2, "Ускорение", price_sell=Decimal(150000), category=ItemCategory.BOOST)
-_RESOURCE = _item(3, "Кристалл", price_sell=Decimal(1000), category=ItemCategory.RESOURCE)
+def _ids(items: list[CatalogItem]) -> frozenset[int]:
+    return frozenset(item.id for item in items if item.id is not None)
+
+
+def _boost_a() -> CatalogItem:
+    return _draft("Топот", price_sell=Decimal(300000), category=ItemCategory.BOOST)
+
+
+def _boost_b() -> CatalogItem:
+    return _draft("Ускорение", price_sell=Decimal(150000), category=ItemCategory.BOOST)
+
+
+def _resource() -> CatalogItem:
+    return _draft("Кристалл", price_sell=None, category=ItemCategory.RESOURCE)
 
 
 async def test_list_available_boosts_filters_by_category(connection: aiosqlite.Connection) -> None:
-    service = await _service(connection, [_BOOST_A, _BOOST_B, _RESOURCE])
+    service, (boost_a, boost_b, _resource_item) = await _service_with_items(
+        connection, [_boost_a(), _boost_b(), _resource()]
+    )
 
     boosts = await service.list_available_boosts()
 
-    assert {item.id for item in boosts} == {1, 2}
+    assert {item.id for item in boosts} == {boost_a.id, boost_b.id}
 
 
 async def test_apply_page_selection_adds_newly_checked_items(
     connection: aiosqlite.Connection,
 ) -> None:
-    service = await _service(connection, [_BOOST_A, _BOOST_B])
+    service, (boost_a, boost_b) = await _service_with_items(connection, [_boost_a(), _boost_b()])
+    assert boost_a.id is not None
 
-    await service.apply_page_selection(111, [_BOOST_A, _BOOST_B], frozenset({1}))
+    await service.apply_page_selection(111, [boost_a, boost_b], frozenset({boost_a.id}))
 
     lines = await service.list_lines(111)
-    assert [line.item_id for line in lines] == [1]
+    assert [line.item_id for line in lines] == [boost_a.id]
     assert lines[0].quantity == 1
 
 
 async def test_apply_page_selection_removes_newly_unchecked_items(
     connection: aiosqlite.Connection,
 ) -> None:
-    service = await _service(connection, [_BOOST_A, _BOOST_B])
-    await service.apply_page_selection(111, [_BOOST_A, _BOOST_B], frozenset({1, 2}))
+    service, (boost_a, boost_b) = await _service_with_items(connection, [_boost_a(), _boost_b()])
+    assert boost_a.id is not None and boost_b.id is not None
+    await service.apply_page_selection(111, [boost_a, boost_b], frozenset({boost_a.id, boost_b.id}))
 
-    await service.apply_page_selection(111, [_BOOST_A, _BOOST_B], frozenset({1}))
+    await service.apply_page_selection(111, [boost_a, boost_b], frozenset({boost_a.id}))
 
     lines = await service.list_lines(111)
-    assert [line.item_id for line in lines] == [1]
+    assert [line.item_id for line in lines] == [boost_a.id]
 
 
 async def test_apply_page_selection_reports_no_rejections_under_the_cap(
     connection: aiosqlite.Connection,
 ) -> None:
-    service = await _service(connection, [_BOOST_A, _BOOST_B])
+    service, (boost_a, boost_b) = await _service_with_items(connection, [_boost_a(), _boost_b()])
+    assert boost_a.id is not None and boost_b.id is not None
 
-    rejected = await service.apply_page_selection(111, [_BOOST_A, _BOOST_B], frozenset({1, 2}))
+    rejected = await service.apply_page_selection(
+        111, [boost_a, boost_b], frozenset({boost_a.id, boost_b.id})
+    )
 
     assert rejected == frozenset()
 
@@ -104,13 +138,14 @@ async def test_apply_page_selection_caps_the_draft_at_max_order_lines(
 ) -> None:
     """TICK-5: the editor renders one Select with one option per line — Discord hard-caps
     a Select at 25 options, so the draft itself must never grow past that."""
-    items = [
-        _item(i, f"Boost {i}", price_sell=Decimal(1000), category=ItemCategory.BOOST)
-        for i in range(1, MAX_ORDER_LINES + 2)
+    drafts = [
+        _draft(f"Boost {i}", price_sell=Decimal(1000), category=ItemCategory.BOOST)
+        for i in range(MAX_ORDER_LINES + 1)
     ]
-    service = await _service(connection, items)
+    service, items = await _service_with_items(connection, drafts)
     full_page, overflow_item = items[:MAX_ORDER_LINES], items[MAX_ORDER_LINES]
-    await service.apply_page_selection(111, full_page, frozenset(item.id for item in full_page))
+    assert overflow_item.id is not None
+    await service.apply_page_selection(111, full_page, _ids(full_page))
 
     rejected = await service.apply_page_selection(
         111, [overflow_item], frozenset({overflow_item.id})
@@ -127,17 +162,18 @@ async def test_apply_page_selection_lets_a_same_page_swap_through_at_the_cap(
 ) -> None:
     """A page can uncheck one item and check another in the same submission — the freed
     slot must count toward the cap immediately, regardless of catalog id order."""
-    items = [
-        _item(i, f"Boost {i}", price_sell=Decimal(1000), category=ItemCategory.BOOST)
-        for i in range(1, MAX_ORDER_LINES + 2)
+    drafts = [
+        _draft(f"Boost {i}", price_sell=Decimal(1000), category=ItemCategory.BOOST)
+        for i in range(MAX_ORDER_LINES + 1)
     ]
-    service = await _service(connection, items)
-    full_page = items[1 : MAX_ORDER_LINES + 1]  # ids 2..26, filling the draft to the cap
-    await service.apply_page_selection(111, full_page, frozenset(item.id for item in full_page))
-    swap_in, swap_out = items[0], items[1]  # id 1 (not in the draft), id 2 (in the draft)
+    service, items = await _service_with_items(connection, drafts)
+    full_page = items[1 : MAX_ORDER_LINES + 1]  # everything but the first item
+    await service.apply_page_selection(111, full_page, _ids(full_page))
+    swap_in, swap_out = items[0], items[1]  # not-yet-in-draft, already-in-draft
+    assert swap_in.id is not None
 
-    # Same page submit: id 1 newly checked, id 2 newly unchecked — a page
-    # always reports every option's current state, so both appear here.
+    # Same page submit: swap_in newly checked, swap_out newly unchecked — a
+    # page always reports every option's current state, so both appear here.
     rejected = await service.apply_page_selection(111, [swap_in, swap_out], frozenset({swap_in.id}))
 
     assert rejected == frozenset()
@@ -151,43 +187,47 @@ async def test_apply_page_selection_lets_a_same_page_swap_through_at_the_cap(
 async def test_apply_page_selection_leaves_other_pages_alone(
     connection: aiosqlite.Connection,
 ) -> None:
-    service = await _service(connection, [_BOOST_A, _BOOST_B])
-    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
+    service, (boost_a, boost_b) = await _service_with_items(connection, [_boost_a(), _boost_b()])
+    assert boost_a.id is not None and boost_b.id is not None
+    await service.apply_page_selection(111, [boost_a], frozenset({boost_a.id}))
 
-    # A different page's submit, not mentioning item 1 at all.
-    await service.apply_page_selection(111, [_BOOST_B], frozenset({2}))
+    # A different page's submit, not mentioning boost_a at all.
+    await service.apply_page_selection(111, [boost_b], frozenset({boost_b.id}))
 
     lines = await service.list_lines(111)
-    assert {line.item_id for line in lines} == {1, 2}
+    assert {line.item_id for line in lines} == {boost_a.id, boost_b.id}
 
 
 async def test_apply_page_selection_does_not_reset_an_existing_lines_quantity(
     connection: aiosqlite.Connection,
 ) -> None:
-    service = await _service(connection, [_BOOST_A])
-    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
-    await service.set_quantity(111, 1, 5)
+    service, (boost_a,) = await _service_with_items(connection, [_boost_a()])
+    assert boost_a.id is not None
+    await service.apply_page_selection(111, [boost_a], frozenset({boost_a.id}))
+    await service.set_quantity(111, boost_a.id, 5)
 
-    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
+    await service.apply_page_selection(111, [boost_a], frozenset({boost_a.id}))
 
     lines = await service.list_lines(111)
     assert lines[0].quantity == 5
 
 
 async def test_set_quantity_updates_an_existing_line(connection: aiosqlite.Connection) -> None:
-    service = await _service(connection, [_BOOST_A])
-    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
+    service, (boost_a,) = await _service_with_items(connection, [_boost_a()])
+    assert boost_a.id is not None
+    await service.apply_page_selection(111, [boost_a], frozenset({boost_a.id}))
 
-    await service.set_quantity(111, 1, 7)
+    await service.set_quantity(111, boost_a.id, 7)
 
     lines = await service.list_lines(111)
     assert lines[0].quantity == 7
 
 
 async def test_set_quantity_is_a_no_op_for_a_missing_line(connection: aiosqlite.Connection) -> None:
-    service = await _service(connection, [_BOOST_A])
+    service, (boost_a,) = await _service_with_items(connection, [_boost_a()])
+    assert boost_a.id is not None
 
-    await service.set_quantity(111, 1, 7)  # must not raise
+    await service.set_quantity(111, boost_a.id, 7)  # must not raise
 
     assert await service.list_lines(111) == []
 
@@ -195,36 +235,39 @@ async def test_set_quantity_is_a_no_op_for_a_missing_line(connection: aiosqlite.
 async def test_set_quantity_clamps_to_the_valid_range(connection: aiosqlite.Connection) -> None:
     """APP-7: unlike `adjust_quantity`, this had no clamp of its own — safe today only
     because the sole caller already validates, which isn't a guarantee this method makes."""
-    service = await _service(connection, [_BOOST_A])
-    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
+    service, (boost_a,) = await _service_with_items(connection, [_boost_a()])
+    assert boost_a.id is not None
+    await service.apply_page_selection(111, [boost_a], frozenset({boost_a.id}))
 
-    await service.set_quantity(111, 1, MAX_QUANTITY + 1000)
+    await service.set_quantity(111, boost_a.id, MAX_QUANTITY + 1000)
     lines = await service.list_lines(111)
     assert lines[0].quantity == MAX_QUANTITY
 
-    await service.set_quantity(111, 1, MIN_QUANTITY - 1000)
+    await service.set_quantity(111, boost_a.id, MIN_QUANTITY - 1000)
     lines = await service.list_lines(111)
     assert lines[0].quantity == MIN_QUANTITY
 
 
 async def test_adjust_quantity_increments_and_decrements(connection: aiosqlite.Connection) -> None:
-    service = await _service(connection, [_BOOST_A])
-    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
+    service, (boost_a,) = await _service_with_items(connection, [_boost_a()])
+    assert boost_a.id is not None
+    await service.apply_page_selection(111, [boost_a], frozenset({boost_a.id}))
 
-    after_plus = await service.adjust_quantity(111, 1, 1)
-    after_minus = await service.adjust_quantity(111, 1, -1)
+    after_plus = await service.adjust_quantity(111, boost_a.id, 1)
+    after_minus = await service.adjust_quantity(111, boost_a.id, -1)
 
     assert after_plus == 2
     assert after_minus == 1
 
 
 async def test_adjust_quantity_clamps_to_the_valid_range(connection: aiosqlite.Connection) -> None:
-    service = await _service(connection, [_BOOST_A])
-    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
+    service, (boost_a,) = await _service_with_items(connection, [_boost_a()])
+    assert boost_a.id is not None
+    await service.apply_page_selection(111, [boost_a], frozenset({boost_a.id}))
 
-    at_minimum = await service.adjust_quantity(111, 1, -100)
-    await service.set_quantity(111, 1, MAX_QUANTITY)
-    at_maximum = await service.adjust_quantity(111, 1, 100)
+    at_minimum = await service.adjust_quantity(111, boost_a.id, -100)
+    await service.set_quantity(111, boost_a.id, MAX_QUANTITY)
+    at_maximum = await service.adjust_quantity(111, boost_a.id, 100)
 
     assert at_minimum == MIN_QUANTITY
     assert at_maximum == MAX_QUANTITY
@@ -233,16 +276,18 @@ async def test_adjust_quantity_clamps_to_the_valid_range(connection: aiosqlite.C
 async def test_adjust_quantity_returns_none_for_a_missing_line(
     connection: aiosqlite.Connection,
 ) -> None:
-    service = await _service(connection, [_BOOST_A])
+    service, (boost_a,) = await _service_with_items(connection, [_boost_a()])
+    assert boost_a.id is not None
 
-    assert await service.adjust_quantity(111, 1, 1) is None
+    assert await service.adjust_quantity(111, boost_a.id, 1) is None
 
 
 async def test_remove_line_deletes_it(connection: aiosqlite.Connection) -> None:
-    service = await _service(connection, [_BOOST_A])
-    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
+    service, (boost_a,) = await _service_with_items(connection, [_boost_a()])
+    assert boost_a.id is not None
+    await service.apply_page_selection(111, [boost_a], frozenset({boost_a.id}))
 
-    await service.remove_line(111, 1)
+    await service.remove_line(111, boost_a.id)
 
     assert await service.list_lines(111) == []
 
@@ -250,14 +295,15 @@ async def test_remove_line_deletes_it(connection: aiosqlite.Connection) -> None:
 async def test_list_lines_with_items_pairs_lines_with_their_catalog_item(
     connection: aiosqlite.Connection,
 ) -> None:
-    service = await _service(connection, [_BOOST_A])
-    await service.apply_page_selection(111, [_BOOST_A], frozenset({1}))
+    service, (boost_a,) = await _service_with_items(connection, [_boost_a()])
+    assert boost_a.id is not None
+    await service.apply_page_selection(111, [boost_a], frozenset({boost_a.id}))
 
     lines_with_items = await service.list_lines_with_items(111)
 
     assert len(lines_with_items) == 1
     line, item = lines_with_items[0]
-    assert line.item_id == 1
+    assert line.item_id == boost_a.id
     assert item is not None
     assert item.name == "Топот"
 
@@ -265,9 +311,8 @@ async def test_list_lines_with_items_pairs_lines_with_their_catalog_item(
 async def test_list_lines_with_items_reports_none_for_a_deleted_item(
     connection: aiosqlite.Connection,
 ) -> None:
-    items_repo = ItemsCacheRepository(connection)
+    items_repo = CatalogItemsRepository(connection)
     lines_repo = BoostOrderLinesRepository(connection)
-    await items_repo.replace_all([])
     await lines_repo.upsert(
         BoostOrderLine(
             channel_id=111,
@@ -285,9 +330,10 @@ async def test_list_lines_with_items_reports_none_for_a_deleted_item(
 
 
 async def test_compute_total_sums_quantity_times_price(connection: aiosqlite.Connection) -> None:
-    service = await _service(connection, [_BOOST_A, _BOOST_B])
-    await service.apply_page_selection(111, [_BOOST_A, _BOOST_B], frozenset({1, 2}))
-    await service.set_quantity(111, 1, 3)
+    service, (boost_a, boost_b) = await _service_with_items(connection, [_boost_a(), _boost_b()])
+    assert boost_a.id is not None and boost_b.id is not None
+    await service.apply_page_selection(111, [boost_a, boost_b], frozenset({boost_a.id, boost_b.id}))
+    await service.set_quantity(111, boost_a.id, 3)
 
     total = await service.compute_total(111)
 
@@ -297,9 +343,10 @@ async def test_compute_total_sums_quantity_times_price(connection: aiosqlite.Con
 async def test_compute_total_skips_items_without_a_sell_price(
     connection: aiosqlite.Connection,
 ) -> None:
-    no_price = _item(5, "Без цены", price_sell=None, category=ItemCategory.BOOST)
-    service = await _service(connection, [no_price])
-    await service.apply_page_selection(111, [no_price], frozenset({5}))
+    no_price = _draft("Без цены", price_sell=None, category=ItemCategory.BOOST)
+    service, (no_price_item,) = await _service_with_items(connection, [no_price])
+    assert no_price_item.id is not None
+    await service.apply_page_selection(111, [no_price_item], frozenset({no_price_item.id}))
 
     total = await service.compute_total(111)
 
@@ -307,8 +354,9 @@ async def test_compute_total_skips_items_without_a_sell_price(
 
 
 async def test_clear_removes_every_line(connection: aiosqlite.Connection) -> None:
-    service = await _service(connection, [_BOOST_A, _BOOST_B])
-    await service.apply_page_selection(111, [_BOOST_A, _BOOST_B], frozenset({1, 2}))
+    service, (boost_a, boost_b) = await _service_with_items(connection, [_boost_a(), _boost_b()])
+    assert boost_a.id is not None and boost_b.id is not None
+    await service.apply_page_selection(111, [boost_a, boost_b], frozenset({boost_a.id, boost_b.id}))
 
     await service.clear(111)
 

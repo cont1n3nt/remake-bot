@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS sync_meta (
 -- Shared by TransactionService.register() for both /add and ticket confirmation.
 CREATE TABLE IF NOT EXISTS write_idempotency (
     idempotency_key TEXT PRIMARY KEY,
-    sheet_row INTEGER NOT NULL,
+    deal_id INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
 

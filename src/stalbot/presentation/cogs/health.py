@@ -1,10 +1,13 @@
-"""`/healthcheck` — Sheets/cache/audit/OCR-dataset status (PLAN.md §12, M11).
+"""`/healthcheck` — database/audit/OCR-dataset status (PLAN.md §12, M11).
 
 Hidden admin command (`@admin_only()`, same as every other command except
-`/profile`/`/referrals`): Sheets/cache health is operational information,
-not something a player needs. Uptime and the started-at timestamp are
-bot-level runtime state that doesn't belong in `HealthService` (which stays
+`/profile`/`/referrals`): database health is operational information, not
+something a player needs. Uptime and the started-at timestamp are bot-level
+runtime state that doesn't belong in `HealthService` (which stays
 Discord-free and independently testable) — this cog merges them in.
+
+sqlite_migration.md Э6: shows SQLite's own state instead of Sheets/cache-sync
+counters — there is no sync to report on anymore.
 """
 
 from datetime import datetime
@@ -13,9 +16,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from stalbot.application.dto.health_status import HealthStatus
 from stalbot.application.services.health import HealthService
-from stalbot.domain.clock import format_duration
+from stalbot.domain.clock import format_datetime, format_duration
 from stalbot.presentation.checks import admin_only
 from stalbot.presentation.embeds.factory import EmbedFactory
 
@@ -24,6 +26,7 @@ _OCR_SAMPLE_TARGET = 150
 _OCR_CONFIRMED_TARGET = 50
 
 _SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━"
+_BYTES_PER_MB = 1024 * 1024
 
 
 class HealthCog(commands.Cog):
@@ -59,12 +62,11 @@ class HealthCog(commands.Cog):
         lines = [
             _SEPARATOR,
             f"⏱️ Uptime: {format_duration(uptime)}",
-            f"📡 Sheets: {status.sheets_read_requests} чтений • "
-            f"{status.sheets_write_requests} записей",
-            f"💾 Кэш: {_cache_age_text(status.cache_age_seconds)} • "
-            f"{_hit_rate_text(status.cache_hit_rate)}",
-            _users_sync_line(status),
-            _items_sync_line(status),
+            f"🗄️ Схема: v{status.schema_version} • "
+            f"{'✅ целостность ок' if status.integrity_ok else '🔻 ЦЕЛОСТНОСТЬ НАРУШЕНА'} • "
+            f"{_size_text(status.db_size_bytes)}",
+            f"👥 Игроков: {status.player_count} • 🧾 Сделок: {status.deal_count}",
+            f"🕓 Последняя сделка: {_last_deal_text(status.last_deal_at)}",
             f"📬 Очередь аудита: {status.audit_queue_size}",
             f"🔍 Датасет OCR: {status.ocr_sample_count} / {_OCR_SAMPLE_TARGET} образцов • "
             f"{status.ocr_confirmed_sample_count} / {_OCR_CONFIRMED_TARGET} с эталоном",
@@ -74,29 +76,11 @@ class HealthCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-def _cache_age_text(age_seconds: float | None) -> str:
-    if age_seconds is None:
+def _size_text(size_bytes: int) -> str:
+    return f"{size_bytes / _BYTES_PER_MB:.1f} МБ"
+
+
+def _last_deal_text(last_deal_at: datetime | None) -> str:
+    if last_deal_at is None:
         return "нет данных"
-    return f"обновлён {format_duration(age_seconds)} назад"
-
-
-def _hit_rate_text(hit_rate: float | None) -> str:
-    return f"hit-rate {hit_rate:.0%}" if hit_rate is not None else "hit-rate н/д"
-
-
-def _users_sync_line(status: HealthStatus) -> str:
-    report = status.last_users_sync
-    if report is None:
-        return "🔄 Синк пользователей: ещё не выполнялся"
-    return (
-        f"🔄 Синк пользователей: {report.users_synced} польз. • "
-        f"{report.transactions_synced} сделок ({report.transactions_skipped} пропущено) • "
-        f"{report.duration_seconds:.2f} с • формул свободно: {report.formula_free_rows}"
-    )
-
-
-def _items_sync_line(status: HealthStatus) -> str:
-    report = status.last_items_sync
-    if report is None:
-        return "🔄 Синк предметов: ещё не выполнялся"
-    return f"🔄 Синк предметов: {report.items_synced} предметов • {report.duration_seconds:.2f} с"
+    return format_datetime(last_deal_at)

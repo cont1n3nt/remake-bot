@@ -80,6 +80,57 @@ class DealsRepository:
         row = await cursor.fetchone()
         return int(row["n"]) if row is not None else 0
 
+    async def last_occurred_at(self) -> datetime | None:
+        """Return the most recent `occurred_at` across every deal, or `None` if empty.
+
+        `/healthcheck` (Э6): a stand-in for the sheet-era "last sync"
+        timestamp — how fresh the trading data itself is, not when a
+        background sync last ran (there is no sync anymore).
+        """
+        cursor = await self._conn.execute("SELECT MAX(occurred_at) AS m FROM deals")
+        row = await cursor.fetchone()
+        value = row["m"] if row is not None else None
+        return datetime.fromisoformat(value) if value is not None else None
+
+    async def list_by_period(self, start: datetime, end: datetime) -> Sequence[Deal]:
+        """Return every deal whose `occurred_at` falls within `[start, end]` (Э6, `/day`-`/month`).
+
+        Args:
+            start: Inclusive lower bound (tz-aware).
+            end: Inclusive upper bound (tz-aware).
+        """
+        cursor = await self._conn.execute(
+            "SELECT * FROM deals WHERE occurred_at BETWEEN ? AND ? ORDER BY occurred_at, id",
+            (start.isoformat(), end.isoformat()),
+        )
+        return [_row_to_deal(row) async for row in cursor]
+
+    async def list_numbered_page(self, *, offset: int, limit: int) -> Sequence[tuple[int, Deal]]:
+        """Return one page of `/logs`, newest first, numbered within each calendar day.
+
+        `day_number` resets to `1` at each `00:00` boundary of `occurred_at`'s
+        own date, computed by a window function over the whole table before
+        pagination — stays correct regardless of which page is requested,
+        same guarantee the sheet-era `TransactionsCacheRepository` gave.
+
+        Args:
+            offset: Rows to skip, newest-first.
+            limit: Maximum rows to return.
+        """
+        cursor = await self._conn.execute(
+            """
+            WITH numbered AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY date(occurred_at) ORDER BY id
+                ) AS day_number
+                FROM deals
+            )
+            SELECT * FROM numbered ORDER BY occurred_at DESC, day_number DESC LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        return [(row["day_number"], _row_to_deal(row)) async for row in cursor]
+
 
 _INSERT_SQL = """
     INSERT INTO deals (

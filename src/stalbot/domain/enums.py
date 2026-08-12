@@ -92,3 +92,19 @@ class DealSource(StrEnum):
 
     IMPORT = "import"
     """`scripts/import_from_sheets.py` (Э4)."""
+
+
+class PriceChangeSource(StrEnum):
+    """What produced an `item_price_history` row (sqlite_migration.md §IV.2, Э7)."""
+
+    SETPRICE = "setprice"
+    """`/setprice` or `/setboost`."""
+
+    IMPORT = "import"
+    """`/new_price`'s TXT import."""
+
+    CATALOG = "catalog"
+    """A price set at `/item_add` time."""
+
+    MIGRATION = "migration"
+    """A one-time importer (Э4's `scripts/import_from_sheets.py`)."""

@@ -33,8 +33,8 @@ from stalbot.application.services.transactions import TransactionService
 from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
 from stalbot.config.settings import Settings
 from stalbot.domain.clock import SystemClock, parse_deadline
-from stalbot.domain.entities.item import Item
-from stalbot.domain.enums import DealType, DeliveryMethod, TicketKind, TicketStatus
+from stalbot.domain.entities.catalog_item import CatalogItem
+from stalbot.domain.enums import DealSource, DealType, DeliveryMethod, TicketKind, TicketStatus
 from stalbot.domain.errors import AmountParseError, DeadlineParseError
 from stalbot.domain.money import evaluate_amount, format_amount, parse_amount
 from stalbot.domain.nick import normalize_nick
@@ -490,7 +490,7 @@ class TicketsCog(commands.Cog):
     async def _on_order_boosts_changed(
         self,
         interaction: discord.Interaction,
-        page_items: Sequence[Item],
+        page_items: Sequence[CatalogItem],
         chosen_ids: frozenset[int],
     ) -> frozenset[int]:
         channel_id = interaction.channel_id or 0
@@ -625,7 +625,7 @@ class TicketsCog(commands.Cog):
     def _build_order_editor_view(
         self,
         active_item_id: int | None,
-        lines_with_items: Sequence[tuple[BoostOrderLine, Item | None]],
+        lines_with_items: Sequence[tuple[BoostOrderLine, CatalogItem | None]],
     ) -> OrderEditorView:
         options = [
             discord.SelectOption(
@@ -833,6 +833,7 @@ class TicketsCog(commands.Cog):
             idempotency_key=f"ticket:{session.channel_id}",
             referrer_nick=session.referrer_nick,
             force_rebind=False,
+            source=DealSource.TICKET,
         )
         result = await self._transactions.register(request)
         if result.replayed:
@@ -846,7 +847,7 @@ class TicketsCog(commands.Cog):
             await self._tickets.record_confirmed(session.channel_id)
             embed = self._embeds.success(
                 "✅ Сделка уже зафиксирована",
-                f"Сумма: {format_amount(result.record.amount)} — строка {result.record.row}.",
+                f"Сумма: {format_amount(result.deal.amount)}.",
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
@@ -865,7 +866,7 @@ class TicketsCog(commands.Cog):
 
         embed = self._embeds.success(
             "✅ Сделка зафиксирована",
-            f"Сумма: {format_amount(result.record.amount)} — строка {result.record.row}.",
+            f"Сумма: {format_amount(result.deal.amount)}.",
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
         if isinstance(channel, discord.abc.Messageable):

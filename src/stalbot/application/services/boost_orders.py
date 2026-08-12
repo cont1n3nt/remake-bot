@@ -2,7 +2,7 @@
 
 `BoostOrderService` never touches Discord or Sheets — it only reconciles
 `boost_order_lines` against the live item catalog. Prices are always read
-fresh from `ItemsCacheRepository` rather than cached on the line itself, so
+fresh from `CatalogItemsRepository` rather than cached on the line itself, so
 a `/setboost` price change between "added to the draft" and "confirmed"
 is never stale (PLAN.md §11.6: "цена берётся... на момент подтверждения").
 """
@@ -13,13 +13,11 @@ from decimal import Decimal
 from typing import Final
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
-from stalbot.infrastructure.cache.repositories.items import (
-    ItemsCacheRepository,
-    normalize_item_name,
-)
+from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
+from stalbot.infrastructure.cache.repositories.items import normalize_item_name
 
 #: PLAN.md §11.6: quantity modal validates `1 ≤ qty ≤ 9999`.
 MIN_QUANTITY = 1
@@ -40,7 +38,7 @@ _DEFAULT_QUANTITY = 1
 class BoostOrderService:
     """Backs the boost-order editor: draft lines, quantities, live pricing."""
 
-    def __init__(self, lines: BoostOrderLinesRepository, items: ItemsCacheRepository) -> None:
+    def __init__(self, lines: BoostOrderLinesRepository, items: CatalogItemsRepository) -> None:
         """Wire the service to its collaborators.
 
         Args:
@@ -51,7 +49,7 @@ class BoostOrderService:
         self._lines = lines
         self._items = items
 
-    async def list_available_boosts(self) -> Sequence[Item]:
+    async def list_available_boosts(self) -> Sequence[CatalogItem]:
         """Return every catalog item in the `BOOST` category, for the "add boosts" picker."""
         return await self._items.by_category(ItemCategory.BOOST)
 
@@ -65,7 +63,7 @@ class BoostOrderService:
 
     async def list_lines_with_items(
         self, channel_id: int
-    ) -> list[tuple[BoostOrderLine, Item | None]]:
+    ) -> list[tuple[BoostOrderLine, CatalogItem | None]]:
         """Return every draft line paired with its current catalog item.
 
         `Item` is `None` if the item was deleted from the catalog since
@@ -84,7 +82,7 @@ class BoostOrderService:
         return [(line, items.get(line.item_id)) for line in lines]
 
     async def apply_page_selection(
-        self, channel_id: int, page_items: Sequence[Item], selected_ids: frozenset[int]
+        self, channel_id: int, page_items: Sequence[CatalogItem], selected_ids: frozenset[int]
     ) -> frozenset[int]:
         """Reconcile one multiselect page against the draft (PLAN.md §11.6).
 
@@ -102,12 +100,17 @@ class BoostOrderService:
             Ids from *selected_ids* that were newly checked but NOT added,
             because the draft was already at `MAX_ORDER_LINES` (TICK-5).
         """
+        persisted_items = [item for item in page_items if item.id is not None]
         existing_ids = {line.item_id for line in await self._lines.list_for_channel(channel_id)}
         to_add = [
-            item for item in page_items if item.id in selected_ids and item.id not in existing_ids
+            item
+            for item in persisted_items
+            if item.id in selected_ids and item.id not in existing_ids
         ]
         to_remove = [
-            item for item in page_items if item.id not in selected_ids and item.id in existing_ids
+            item
+            for item in persisted_items
+            if item.id not in selected_ids and item.id in existing_ids
         ]
         # Removals first: a page can uncheck one item and check another in
         # the same submission, and the freed slot must count toward the cap
@@ -115,11 +118,13 @@ class BoostOrderService:
         # instead would reject the addition whenever it happens to come
         # first, even though the net effect stays within `MAX_ORDER_LINES`.
         for item in to_remove:
+            assert item.id is not None  # noqa: S101 - filtered into persisted_items above
             await self._lines.delete_line(channel_id, item.id)
             existing_ids.discard(item.id)
 
         rejected: set[int] = set()
         for item in to_add:
+            assert item.id is not None  # noqa: S101 - filtered into persisted_items above
             if len(existing_ids) >= MAX_ORDER_LINES:
                 rejected.add(item.id)
                 continue

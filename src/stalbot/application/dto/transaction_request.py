@@ -1,10 +1,13 @@
-"""Request/result DTOs for `TransactionService.register()` (PLAN.md §10.1, §7.4)."""
+"""Request/result DTOs for `TransactionService.register()`.
+
+PLAN.md §10.1, §7.4; sqlite_migration.md Э7.
+"""
 
 from dataclasses import dataclass
 from decimal import Decimal
 
-from stalbot.domain.entities.transaction import TransactionRecord
-from stalbot.domain.enums import DealType
+from stalbot.domain.entities.deal import Deal
+from stalbot.domain.enums import DealSource, DealType
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,22 +24,23 @@ class AddTransactionRequest:
     """As typed by the admin, if given."""
     force_rebind: bool = False
     """Set once the admin has confirmed overwriting an existing Discord binding."""
+    source: DealSource = DealSource.ADD
+    """What produced this request — `/add` vs. ticket confirmation."""
 
 
 @dataclass(frozen=True, slots=True)
 class TransactionRegistrationResult:
     """What `register()` actually did, for the caller to build a response from."""
 
-    record: TransactionRecord
+    deal: Deal
+    nick_display: str
+    """Original-case nick, for display — `Deal` itself only carries `player_id`."""
     discord_bound: bool
     """Whether this call bound (or rebound) the nick's Discord id."""
-    formula_pending: bool
-    """`True` if `F`/`G` never resolved even after the `copyPaste` fallback —
-    the caller should show `coins`/`xp` as pending rather than as final."""
     replayed: bool = False
     """`True` if this call didn't write anything — the idempotency key was
     already recorded by an earlier (or concurrently racing) call with the
-    same key, so `record` is that earlier write, replayed back. Callers
+    same key, so `deal` is that earlier write, replayed back. Callers
     that trigger their own post-confirm side effects (announcements,
     downstream syncs) should skip them on a replay: the winning call
     already ran them (CLUSTER-1/TICK-1, PLAN.md §7.4)."""

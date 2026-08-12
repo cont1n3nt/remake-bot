@@ -48,6 +48,15 @@ class ItemNotFoundError(DomainError):
     """A catalog lookup for an item failed."""
 
 
+class InvalidCategoryPriceError(DomainError):
+    """A resource was given a sell price, or a boost a buy price (sqlite_migration.md §I.5).
+
+    `category` is the trade side, not a taxonomy: a resource is only ever
+    bought, a boost only ever sold — `catalog_items`'s own `CHECK` enforces
+    the same rule at the storage layer.
+    """
+
+
 class DuplicateItemError(DomainError):
     """An item with the same name and category already exists in the catalog."""
 

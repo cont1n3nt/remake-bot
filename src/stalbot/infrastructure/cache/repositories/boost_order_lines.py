@@ -70,30 +70,6 @@ class BoostOrderLinesRepository:
                 (channel_id, item_id),
             )
 
-    async def reassign_item_id(
-        self, *, old_item_id: int, new_item_id: int, name_norm: str, category: ItemCategory
-    ) -> None:
-        """Repoint draft lines to a renumbered item id after `/del_item` (PLAN.md §10.9).
-
-        `/del_item` renumbers every surviving item's `id`; a draft line
-        still identifies its item by `item_name_norm`/`category`, so this
-        just needs to catch `item_id` up to the new number.
-
-        Args:
-            old_item_id: The id the line currently has.
-            new_item_id: The id the surviving item was renumbered to.
-            name_norm: Normalized item name the line was drafted against.
-            category: The item's category.
-        """
-        if old_item_id == new_item_id:
-            return
-        async with transaction(self._conn):
-            await self._conn.execute(
-                "UPDATE boost_order_lines SET item_id = ? "
-                "WHERE item_name_norm = ? AND category = ?",
-                (new_item_id, name_norm, category.value),
-            )
-
     async def delete_by_name(self, *, name_norm: str, category: ItemCategory) -> Sequence[int]:
         """Remove every draft line referencing a permanently deleted item.
 

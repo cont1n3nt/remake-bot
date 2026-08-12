@@ -26,8 +26,15 @@ from stalbot.config.settings import Settings
 from stalbot.domain.clock import SystemClock
 from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
+from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
+from stalbot.infrastructure.cache.repositories.deals import DealsRepository
 from stalbot.infrastructure.cache.repositories.idempotency import IdempotencyRepository
+from stalbot.infrastructure.cache.repositories.item_price_history import (
+    ItemPriceHistoryRepository,
+)
 from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
+from stalbot.infrastructure.cache.repositories.players import PlayersRepository
+from stalbot.infrastructure.cache.repositories.progression import ProgressionRepository
 from stalbot.infrastructure.cache.repositories.progression_state import ProgressionStateRepository
 from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
     ScreenshotAnalysesRepository,
@@ -146,6 +153,10 @@ class StalbotBot(commands.Bot):
 
     async def _setup_cache(self) -> None:
         connection = await self.cache_db.connect()
+        players_repo = PlayersRepository(connection)
+        deals_repo = DealsRepository(connection)
+        progression_repo = ProgressionRepository(connection)
+
         transactions_repo = TransactionsCacheRepository(connection)
         cache_sync = CacheSync(
             self.sheets_client,
@@ -161,66 +172,64 @@ class StalbotBot(commands.Bot):
 
         assert self.audit_service is not None  # noqa: S101 - set synchronously in bootstrap.build_bot
         self.progression_service = ProgressionService(
-            UsersCacheRepository(connection),
+            players_repo,
+            progression_repo,
             ProgressionStateRepository(connection),
             DiscordRoleGateway(self, self.settings.guild_id),
             AuditChannelGateway(self, self.settings.log_channel_id),
             self.audit_service,
             self.embed_factory,
-            sheets=self.sheets_client,
             clock=SystemClock(),
         )
 
         transaction_service = TransactionService(
-            self.sheets_client,
-            transactions_repo,
-            UsersCacheRepository(connection),
+            players_repo,
+            deals_repo,
+            progression_repo,
             IdempotencyRepository(connection),
-            cache_sync,
             clock=SystemClock(),
         )
         await self.add_cog(
             TransactionsCog(
                 transaction_service,
                 self.progression_service,
-                UsersCacheRepository(connection),
+                players_repo,
                 self.embed_factory,
                 self.settings,
             )
         )
 
-        profile_service = ProfileService(UsersCacheRepository(connection), transactions_repo)
+        profile_service = ProfileService(players_repo, progression_repo)
         await self.add_cog(ProfileCog(profile_service, self.embed_factory, self.settings))
 
-        items_repo = ItemsCacheRepository(connection)
+        catalog_items_repo = CatalogItemsRepository(connection)
         catalog_service = CatalogService(
-            self.sheets_client,
-            items_repo,
+            catalog_items_repo,
             BoostOrderLinesRepository(connection),
-            TicketSessionsRepository(connection),
             clock=SystemClock(),
         )
-        pricing_service = PricingService(self.sheets_client, items_repo, clock=SystemClock())
+        pricing_service = PricingService(
+            catalog_items_repo, ItemPriceHistoryRepository(connection), clock=SystemClock()
+        )
         await self.add_cog(
             CatalogCog(
                 catalog_service,
                 pricing_service,
-                items_repo,
+                catalog_items_repo,
                 self.emoji_resolver,
                 self.embed_factory,
             )
         )
         await self.add_cog(
-            PricingCog(pricing_service, items_repo, self.embed_factory, self.settings)
+            PricingCog(pricing_service, catalog_items_repo, self.embed_factory, self.settings)
         )
 
-        stats_service = StatsService(transactions_repo, UsersCacheRepository(connection))
-        await self.add_cog(StatsCog(stats_service, transactions_repo, self.embed_factory))
+        stats_service = StatsService(deals_repo, players_repo)
+        await self.add_cog(StatsCog(stats_service, deals_repo, players_repo, self.embed_factory))
 
         manual_grants = ManualGrantService(
-            self.sheets_client,
-            transactions_repo,
-            UsersCacheRepository(connection),
+            players_repo,
+            progression_repo,
             ProgressionStateRepository(connection),
             DiscordRoleGateway(self, self.settings.guild_id),
             clock=SystemClock(),
@@ -235,7 +244,9 @@ class StalbotBot(commands.Bot):
             self.settings,
             clock=SystemClock(),
         )
-        boost_order_service = BoostOrderService(BoostOrderLinesRepository(connection), items_repo)
+        boost_order_service = BoostOrderService(
+            BoostOrderLinesRepository(connection), catalog_items_repo
+        )
         tickets_cog = TicketsCog(
             ticket_service,
             screenshot_service,
@@ -251,12 +262,11 @@ class StalbotBot(commands.Bot):
             self.add_view(view)
 
         health_service = HealthService(
-            self.sheets_client,
-            cache_sync,
-            UsersCacheRepository(connection),
+            self.cache_db,
+            players_repo,
+            deals_repo,
             self.audit_service,
             ScreenshotAnalysesRepository(connection),
-            clock=SystemClock(),
         )
         self.health_service = health_service
         await self.add_cog(
@@ -315,18 +325,18 @@ class StalbotBot(commands.Bot):
         await self.progression_service.sync()
 
     async def _run_metrics_log(self) -> None:
-        """Log Sheets/cache/audit counters once a minute (PLAN.md §12, M11)."""
+        """Log database/audit counters once a minute (PLAN.md §12, M11)."""
         set_trace_id(new_trace_id())  # INFRA2-3, see `_run_users_sync`
         if self.health_service is None:
             return
         status = await self.health_service.snapshot()
         logger.info(
-            "metrics: sheets reads %d, writes %d, cache hit-rate %s, cache age %ss, "
+            "metrics: schema v%d, integrity %s, players %d, deals %d, "
             "audit queue %d, ocr samples %d, confirmed %d",
-            status.sheets_read_requests,
-            status.sheets_write_requests,
-            f"{status.cache_hit_rate:.0%}" if status.cache_hit_rate is not None else "n/a",
-            f"{status.cache_age_seconds:.0f}" if status.cache_age_seconds is not None else "n/a",
+            status.schema_version,
+            "ok" if status.integrity_ok else "FAILED",
+            status.player_count,
+            status.deal_count,
             status.audit_queue_size,
             status.ocr_sample_count,
             status.ocr_confirmed_sample_count,

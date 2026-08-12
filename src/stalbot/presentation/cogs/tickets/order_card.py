@@ -14,7 +14,7 @@ import discord
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.domain.clock import format_datetime
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.money import format_amount
 from stalbot.presentation.embeds.factory import EmbedFactory
 
@@ -24,7 +24,7 @@ _SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━"
 
 
 def _order_body(
-    session: TicketSession, lines_with_items: Sequence[tuple[BoostOrderLine, Item | None]]
+    session: TicketSession, lines_with_items: Sequence[tuple[BoostOrderLine, CatalogItem | None]]
 ) -> list[str]:
     """The order's line list + total + deadline — shared by the editor and summary embeds.
 
@@ -55,7 +55,7 @@ def _order_body(
 
 def render_order_editor(
     session: TicketSession,
-    lines_with_items: Sequence[tuple[BoostOrderLine, Item | None]],
+    lines_with_items: Sequence[tuple[BoostOrderLine, CatalogItem | None]],
     embeds: EmbedFactory,
 ) -> discord.Embed:
     """Build the boost-order editor embed from `session` and its draft lines (UX #1).
@@ -71,7 +71,7 @@ def render_order_editor(
 
 def render_order_summary(
     session: TicketSession,
-    lines_with_items: Sequence[tuple[BoostOrderLine, Item | None]],
+    lines_with_items: Sequence[tuple[BoostOrderLine, CatalogItem | None]],
     embeds: EmbedFactory,
 ) -> discord.Embed:
     """Build the read-only boost-order summary embed (UX #1).

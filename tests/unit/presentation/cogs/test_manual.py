@@ -20,7 +20,6 @@ from stalbot.presentation.embeds.factory import EmbedFactory
 
 def _referral_result(**overrides: object) -> SetReferralResult:
     defaults: dict[str, object] = {
-        "row": 3,
         "previous_referrer": None,
         "player_discord_bound": False,
         "referrer_discord_bound": False,

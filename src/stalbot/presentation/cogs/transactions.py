@@ -1,4 +1,4 @@
-"""`/add` — record a deal (PLAN.md §10.1)."""
+"""`/add` — record a deal (PLAN.md §10.1; sqlite_migration.md Э7)."""
 
 import discord
 from discord import app_commands
@@ -15,7 +15,7 @@ from stalbot.domain.clock import format_datetime
 from stalbot.domain.enums import DealType
 from stalbot.domain.money import evaluate_amount, format_amount
 from stalbot.domain.nick import normalize_nick
-from stalbot.infrastructure.cache.repositories.users import UsersCacheRepository
+from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.presentation.checks import admin_only
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.views.confirm import ConfirmView
@@ -33,22 +33,22 @@ class TransactionsCog(commands.Cog):
         self,
         transactions: TransactionService,
         progression: ProgressionService,
-        users: UsersCacheRepository,
+        players: PlayersRepository,
         embeds: EmbedFactory,
         settings: Settings,
     ) -> None:
         """Wire the cog to the services it delegates to.
 
         Args:
-            transactions: Writes the deal and waits for the formulas.
+            transactions: Writes the deal.
             progression: Reconciles roles and announces promotions.
-            users: Read-only lookup for the binding-conflict warning.
+            players: Read-only lookup for the binding-conflict warning.
             embeds: Builds every embed this cog sends.
             settings: For the reviews-channel reminder.
         """
         self._transactions = transactions
         self._progression = progression
-        self._users = users
+        self._players = players
         self._embeds = embeds
         self._settings = settings
 
@@ -100,7 +100,7 @@ class TransactionsCog(commands.Cog):
             )
 
         force_rebind = False
-        existing = await self._users.get_by_nick(nick_norm)
+        existing = await self._players.get_by_nick(nick_norm)
         if (
             existing is not None
             and existing.discord_id is not None
@@ -170,16 +170,12 @@ class TransactionsCog(commands.Cog):
             f"📌 Тип: {_DEAL_TYPE_LABEL[deal_type]}",
             f"👤 Ник: {nick}",
             f"💬 Discord: {member.mention}",
-            f"💰 Сумма: {format_amount(result.record.amount)}",
+            f"💰 Сумма: {format_amount(result.deal.amount)}",
+            f"🪙 Начислено: {result.deal.coins} Coins • ⚡ {result.deal.xp} XP",
         ]
-        if result.formula_pending:
-            lines.append("🪙 Начисление: ожидает пересчёта формул, проверьте таблицу позже")
-        else:
-            lines.append(f"🪙 Начислено: {result.record.coins} Coins • ⚡ {result.record.xp} XP")
         if referrer_nick:
             lines.append(f"🤝 Реферал: {referrer_nick}")
-        lines.append(f"🕒 Дата: {format_datetime(result.record.at)}")
-        lines.append(f"📄 Строка: {result.record.row}")
+        lines.append(f"🕒 Дата: {format_datetime(result.deal.occurred_at)}")
         if result.discord_bound:
             lines.append("🔗 Discord ID привязан к нику")
         lines.extend(warnings)
