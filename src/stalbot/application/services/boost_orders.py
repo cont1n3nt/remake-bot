@@ -5,14 +5,22 @@
 fresh from `CatalogItemsRepository` rather than cached on the line itself, so
 a `/setboost` price change between "added to the draft" and "confirmed"
 is never stale (PLAN.md §11.6: "цена берётся... на момент подтверждения").
+
+sqlite_migration.md Э8: the same `boost_order_lines`-backed draft also
+serves the daily скупка calculator (§I.9), which admits resources as well
+as boosts and — via `apply_bulk_entry` — can grow past `MAX_ORDER_LINES`.
+That cap stays scoped to `apply_page_selection`'s Select-based picker (the
+only path actually bounded by Discord's 25-option limit).
 """
 
+import re
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Final
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
+from stalbot.application.dto.bulk_entry_report import BulkEntryReport
 from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
@@ -23,16 +31,51 @@ from stalbot.infrastructure.cache.repositories.items import normalize_item_name
 MIN_QUANTITY = 1
 MAX_QUANTITY = 9999
 
-#: Discord's `Select` component hard-caps at 25 options, and the order
-#: editor renders one per draft line in a single `Select` — so the draft
-#: itself must never exceed this many lines (TICK-5). Nothing upstream
-#: enforces it: the "add boosts" picker paginates the *catalog* 25/page,
-#: not the cumulative draft, so a player can otherwise check boosts across
-#: enough pages to push the draft past the limit and crash the editor's
-#: every future render.
+#: Discord's `Select` component hard-caps at 25 options, and the *ticket*
+#: order editor renders one per draft line in a single `Select` — so a draft
+#: reachable through that picker must never exceed this many lines (TICK-5).
+#: Nothing upstream enforces it: the "add boosts" picker paginates the
+#: *catalog* 25/page, not the cumulative draft, so a player can otherwise
+#: check boosts across enough pages to push the draft past the limit and
+#: crash the editor's every future render. `apply_bulk_entry` (Э8) does NOT
+#: check this cap — the скупка calculator has no Select to overflow and is
+#: explicitly meant to hold 100+ lines (sqlite_migration.md §I.9).
 MAX_ORDER_LINES: Final = 25
 
 _DEFAULT_QUANTITY = 1
+
+#: "Название xКоличество" / "Название х5" / "Название×5" — Latin/Cyrillic
+#: х and × all accepted, since the owner types this by hand (§I.9, Э8).
+_BULK_LINE_RE = re.compile(r"^(?P<name>.+?)\s*[xхX×]\s*(?P<quantity>\d+)\s*$")
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedBulkLine:
+    raw: str
+    name: str
+    quantity: int
+
+
+def _parse_bulk_entry_lines(text: str) -> tuple[list[_ParsedBulkLine], list[str]]:
+    """Split a bulk paste into successfully-parsed lines and raw rejects.
+
+    Pure and Discord-agnostic on purpose — every format edge case belongs
+    in a unit test here, not exercised through a modal.
+    """
+    parsed: list[_ParsedBulkLine] = []
+    not_parsed: list[str] = []
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        match = _BULK_LINE_RE.match(stripped)
+        name = match.group("name").strip() if match else ""
+        quantity = int(match.group("quantity")) if match else 0
+        if match is None or not name or not (MIN_QUANTITY <= quantity <= MAX_QUANTITY):
+            not_parsed.append(raw_line)
+            continue
+        parsed.append(_ParsedBulkLine(raw=raw_line, name=name, quantity=quantity))
+    return parsed, not_parsed
 
 
 class BoostOrderService:
@@ -185,16 +228,70 @@ class BoostOrderService:
         await self._lines.delete_line(channel_id, item_id)
 
     async def compute_total(self, channel_id: int) -> Decimal:
-        """Sum every line's `quantity * price_sell`, read fresh from the catalog.
+        """Sum every line's `quantity * price`, read fresh from the catalog.
+
+        A resource only ever has `price_buy`, a boost only ever `price_sell`
+        (§I.5's `CHECK`) — so "the line's price" is unambiguous per category.
 
         Args:
             channel_id: The order-boosts ticket channel.
         """
         total = Decimal(0)
         for line, item in await self.list_lines_with_items(channel_id):
-            if item is not None and item.price_sell is not None:
-                total += item.price_sell * line.quantity
+            if item is None:
+                continue
+            price = item.price_sell if item.category is ItemCategory.BOOST else item.price_buy
+            if price is not None:
+                total += price * line.quantity
         return total
+
+    async def apply_bulk_entry(self, channel_id: int, text: str) -> BulkEntryReport:
+        """Parse a "Название xКоличество"-per-line paste and upsert every resolved line.
+
+        sqlite_migration.md §I.9, Э8: the owner's daily bulk-count workflow —
+        deliberately does NOT enforce `MAX_ORDER_LINES` (that cap exists only
+        for the ticket's Select-based picker, which this bypasses entirely).
+        A line that fails to parse, matches no catalog item, or matches an
+        item that exists in both categories (§I.5) is reported back rather
+        than silently dropped, so the caller can show it for correction
+        without discarding everything else that *did* resolve.
+
+        Args:
+            channel_id: The channel/ticket whose draft to update.
+            text: Raw pasted text, one "Название xКоличество" entry per line.
+        """
+        parsed, not_parsed = _parse_bulk_entry_lines(text)
+        catalog = await self._items.all()
+        by_name: dict[str, list[CatalogItem]] = {}
+        for item in catalog:
+            by_name.setdefault(item.name_norm, []).append(item)
+
+        applied: list[tuple[CatalogItem, int]] = []
+        not_found: list[str] = []
+        ambiguous: list[str] = []
+        for line in parsed:
+            matches = by_name.get(normalize_item_name(line.name), [])
+            if not matches:
+                not_found.append(line.raw)
+                continue
+            if len(matches) > 1:
+                ambiguous.append(line.raw)
+                continue
+            item = matches[0]
+            assert item.id is not None  # noqa: S101 - a cataloged item always has an id
+            await self._lines.upsert(
+                BoostOrderLine(
+                    channel_id=channel_id,
+                    item_id=item.id,
+                    item_name_norm=item.name_norm,
+                    category=item.category,
+                    quantity=line.quantity,
+                )
+            )
+            applied.append((item, line.quantity))
+        return BulkEntryReport(
+            applied=applied, not_parsed=not_parsed, not_found=not_found, ambiguous=ambiguous
+        )
 
     async def clear(self, channel_id: int) -> None:
         """Drop every draft line once the order is confirmed.

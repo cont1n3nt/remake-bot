@@ -42,14 +42,20 @@ async def connection(tmp_path: Path) -> AsyncIterator[aiosqlite.Connection]:
     await db.close()
 
 
-def _draft(name: str, *, price_sell: Decimal | None, category: ItemCategory) -> CatalogItem:
+def _draft(
+    name: str,
+    *,
+    price_sell: Decimal | None = None,
+    price_buy: Decimal | None = None,
+    category: ItemCategory,
+) -> CatalogItem:
     return CatalogItem(
         id=None,
         name=name,
         name_norm=name.lower(),
         category=category,
         section=None,
-        price_buy=None,
+        price_buy=Rub(int(price_buy)) if price_buy is not None else None,
         price_sell=Rub(int(price_sell)) if price_sell is not None else None,
         emoji=None,
         sort_order=0,
@@ -82,6 +88,10 @@ def _boost_b() -> CatalogItem:
 
 def _resource() -> CatalogItem:
     return _draft("Кристалл", price_sell=None, category=ItemCategory.RESOURCE)
+
+
+def _resource_with_price(name: str, price_buy: Decimal) -> CatalogItem:
+    return _draft(name, price_buy=price_buy, category=ItemCategory.RESOURCE)
 
 
 async def test_list_available_boosts_filters_by_category(connection: aiosqlite.Connection) -> None:
@@ -353,6 +363,21 @@ async def test_compute_total_skips_items_without_a_sell_price(
     assert total == Decimal(0)
 
 
+async def test_compute_total_uses_price_buy_for_resources(
+    connection: aiosqlite.Connection,
+) -> None:
+    """Э8: resources only ever have `price_buy` (§I.5) — the calculator must sum that side."""
+    resource = _resource_with_price("Аптечка", Decimal(500))
+    service, (resource_item,) = await _service_with_items(connection, [resource])
+    assert resource_item.id is not None
+    await service.apply_page_selection(111, [resource_item], frozenset({resource_item.id}))
+    await service.set_quantity(111, resource_item.id, 4)
+
+    total = await service.compute_total(111)
+
+    assert total == Decimal(500) * 4
+
+
 async def test_clear_removes_every_line(connection: aiosqlite.Connection) -> None:
     service, (boost_a, boost_b) = await _service_with_items(connection, [_boost_a(), _boost_b()])
     assert boost_a.id is not None and boost_b.id is not None
@@ -361,3 +386,134 @@ async def test_clear_removes_every_line(connection: aiosqlite.Connection) -> Non
     await service.clear(111)
 
     assert await service.list_lines(111) == []
+
+
+async def test_apply_bulk_entry_resolves_matching_lines(
+    connection: aiosqlite.Connection,
+) -> None:
+    resource = _resource_with_price("Аптечка проводника", Decimal(500))
+    service, (resource_item,) = await _service_with_items(connection, [resource])
+
+    report = await service.apply_bulk_entry(111, "Аптечка проводника x12")
+
+    assert [(item.id, qty) for item, qty in report.applied] == [(resource_item.id, 12)]
+    assert report.not_parsed == []
+    assert report.not_found == []
+    assert report.ambiguous == []
+    lines = await service.list_lines(111)
+    assert lines[0].quantity == 12
+
+
+async def test_apply_bulk_entry_accepts_cyrillic_and_multiplication_sign_separators(
+    connection: aiosqlite.Connection,
+) -> None:
+    resource = _resource_with_price("Кристалл", Decimal(100))
+    service, _ = await _service_with_items(connection, [resource])
+
+    report = await service.apply_bulk_entry(111, "Кристалл х3\nКристалл×3")
+
+    # Same item twice: the second line wins (bulk paste sets outright, not additive).
+    assert len(report.applied) == 2
+    lines = await service.list_lines(111)
+    assert len(lines) == 1
+    assert lines[0].quantity == 3
+
+
+async def test_apply_bulk_entry_is_case_insensitive_and_trims_whitespace(
+    connection: aiosqlite.Connection,
+) -> None:
+    resource = _resource_with_price("Аптечка проводника", Decimal(500))
+    service, (resource_item,) = await _service_with_items(connection, [resource])
+
+    report = await service.apply_bulk_entry(111, "  АПТЕЧКА ПРОВОДНИКА   x  7  ")
+
+    assert [(item.id, qty) for item, qty in report.applied] == [(resource_item.id, 7)]
+
+
+async def test_apply_bulk_entry_reports_unparseable_lines(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, _ = await _service_with_items(connection, [])
+
+    report = await service.apply_bulk_entry(111, "просто текст без количества\nx5")
+
+    assert report.applied == []
+    assert report.not_parsed == ["просто текст без количества", "x5"]
+
+
+async def test_apply_bulk_entry_rejects_quantity_out_of_range(
+    connection: aiosqlite.Connection,
+) -> None:
+    resource = _resource_with_price("Кристалл", Decimal(100))
+    service, _ = await _service_with_items(connection, [resource])
+
+    report = await service.apply_bulk_entry(111, f"Кристалл x{MAX_QUANTITY + 1}\nКристалл x0")
+
+    assert report.applied == []
+    assert len(report.not_parsed) == 2
+
+
+async def test_apply_bulk_entry_skips_blank_lines(connection: aiosqlite.Connection) -> None:
+    resource = _resource_with_price("Кристалл", Decimal(100))
+    service, (resource_item,) = await _service_with_items(connection, [resource])
+
+    report = await service.apply_bulk_entry(111, "\n\nКристалл x2\n\n")
+
+    assert [(item.id, qty) for item, qty in report.applied] == [(resource_item.id, 2)]
+    assert report.not_parsed == []
+
+
+async def test_apply_bulk_entry_reports_names_with_no_catalog_match(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, _ = await _service_with_items(connection, [])
+
+    report = await service.apply_bulk_entry(111, "Несуществующий предмет x5")
+
+    assert report.applied == []
+    assert report.not_found == ["Несуществующий предмет x5"]
+
+
+async def test_apply_bulk_entry_reports_names_matching_both_categories_as_ambiguous(
+    connection: aiosqlite.Connection,
+) -> None:
+    """§I.5: 25 items (e.g. «Уха») exist as both a resource and a boost — bulk entry can't
+    guess which one the owner meant, so it surfaces the line instead of picking one."""
+    resource = _draft("Уха", price_buy=Decimal(3000), category=ItemCategory.RESOURCE)
+    boost = _draft("Уха", price_sell=Decimal(6500), category=ItemCategory.BOOST)
+    service, _ = await _service_with_items(connection, [resource, boost])
+
+    report = await service.apply_bulk_entry(111, "Уха x2")
+
+    assert report.applied == []
+    assert report.ambiguous == ["Уха x2"]
+
+
+async def test_apply_bulk_entry_does_not_enforce_max_order_lines(
+    connection: aiosqlite.Connection,
+) -> None:
+    """Э8, §I.9: the calculator must hold 100+ lines — only the ticket's Select-based
+    picker (`apply_page_selection`) is bounded by `MAX_ORDER_LINES`."""
+    drafts = [
+        _resource_with_price(f"Предмет {i}", Decimal(100)) for i in range(MAX_ORDER_LINES + 5)
+    ]
+    service, _ = await _service_with_items(connection, drafts)
+    text = "\n".join(f"Предмет {i} x1" for i in range(MAX_ORDER_LINES + 5))
+
+    report = await service.apply_bulk_entry(111, text)
+
+    assert len(report.applied) == MAX_ORDER_LINES + 5
+    assert len(await service.list_lines(111)) == MAX_ORDER_LINES + 5
+
+
+async def test_apply_bulk_entry_does_not_apply_unresolved_lines_but_keeps_the_rest(
+    connection: aiosqlite.Connection,
+) -> None:
+    resource = _resource_with_price("Кристалл", Decimal(100))
+    service, (resource_item,) = await _service_with_items(connection, [resource])
+
+    report = await service.apply_bulk_entry(111, "Кристалл x5\nНесуществующий x2\nсломанная строка")
+
+    assert [(item.id, qty) for item, qty in report.applied] == [(resource_item.id, 5)]
+    assert report.not_found == ["Несуществующий x2"]
+    assert report.not_parsed == ["сломанная строка"]
