@@ -879,8 +879,20 @@ PRAGMA-набор, `CacheDb.transaction()`, `infrastructure/cache/migrations/` +
 
 **Что нужно от вас:** ничего блокирующего. Реальный импорт в боевую базу — на Э7 (переключение записей), не сейчас.
 
-**Э5 — Убежище: схема, импорт, себестоимость ★**
+**Э5 — Убежище: схема, импорт, себестоимость ★** — ✅ **готово на уровне данных, кроме ревью владельцем**
 Миграция `0006`. `scripts/import_shelter.py`: 421 предмет, 8 профессий с уровнями, 370 рецептов, 1 490 ингредиентов, 369×5 выходов, настройки. `domain/shelter/cost.py` + `ShelterRepository`. Мост `items.shelter_item_id`: 171 сопоставляется автоматически по нормализованному имени (NFKC → lower → `ё`→`е` → снятие `«»"'` → схлопывание пробелов), **28 остаются на ручное подтверждение** — список короткий и приведён в §II.4.
+
+**Сделано** (на снимке 2026-08-10, книга выросла так же, как на Э4):
+- `compute_costs()` реализован и прогнан на реальном графе — 421 предмет, 370 рецептов, guard от цикла («Антитоксин»), `Fraction`-арифметика без `float`.
+- Тесты E–H (§VI.2) реализованы — в `test_import_shelter.py`, а не отдельным файлом, как в исходном плане; по существу покрывают то же самое: `test_level_e_leaf_item_costs_match_sheet_totals`, `test_level_f_multi_recipe_item_resolves_via_one_of_its_recipes`, `test_level_g_low_level_recipes_are_unavailable`, `test_level_h_antitoxin_cycle_does_not_crash_and_resolves`.
+- **Выгода по «БУСТЫ» до рубля** — [test_boost_profit_parity.py](tests/unit/scripts/test_boost_profit_parity.py), сверено на реальной строке снимка («Убийца боли», qty=200, профит 530 200). Себестоимость для формулы берётся из собственного `cost` столбца строки листа, а не из пересчитанного `shelter_cost` — пересчёт по свежим ценам ингредиентов честно и ожидаемо расходится с закэшированным в листе значением на копейки (та же причина, что уже задокументирована в `test_level_e_leaf_item_costs_match_sheet_totals` для крафтовых предметов); формула выгоды и пересчёт себестоимости — разные проверяемые вещи, тест не должен их смешивать.
+- Мост на реальных данных: **190 автосопоставлено, 34 несопоставлено** (план оценивал 171/28 — расхождение из-за роста книги). Отчёт получен разовым прогоном обоих импортёров; 18 из 34 — ожидаемая неоднозначность «сырой ингредиент vs крафтовое блюдо» для вещей с обеими категориями (Уха/Незабываемый/Гейзер/Батарейка/Подорожник/Напалм/Вонючка/Гром/Завеса, §I.5), требует игрового знания владельца, не автоматики; часть остальных совпадает с уже описанным в §II.4 дрейфом имён (Кустарник-1, сумки), часть — новые позиции, появившиеся с ревизии 3 (Изумруд минералы, Жаркое из мутанта, Альфабиоматериал, Мутировавшие фрагменты, баллоны, Схрон мастера).
+
+**Осознанно не сделано на этом этапе** (по аналогии с Э4 — реальное переключение и Discord-команды не блокируют пометку «готово на уровне данных»):
+- Slash-команды `/shelter_price`, `/shelter_level`, `/shelter_setting`, `/shelter_import`, `/себестоимость` — presentation-слой, естественно тяготеет к Э7 (переключение записей), а не к построению доменной модели.
+- Идемпотентность `scripts/import_shelter.py`: повторный запуск на той же базе упадёт на `UNIQUE(name_norm)` в `shelter_items` (нет `ON CONFLICT`) и молча задвоит `recipes` (там уникального ограничения нет вовсе). Это одноразовый скрипт для разового переноса, как и `scripts/import_from_sheets.py` на Э4 — идемпотентность нужна только `/shelter_import`-команде для регулярного обновления рецептов, а не этому скрипту.
+
+**Что нужно от вас:** ревью 34 несопоставленных позиций моста (список выше) — который из двух смыслов «Уха»/«Гром»/... в убежке соответствует какому каталожному ряду (resource/boost), решить может только тот, кто знает игру. Ничего блокирующего для дальнейшей работы над Э6.
 **Поддержка после миграции — гибрид** (решение владельца): то, что меняется часто и поштучно, правится командами бота; то, что меняется редко и пачками, — импортом.
 
 | Что | Как обновляется | Почему |
@@ -895,13 +907,43 @@ PRAGMA-набор, `CacheDb.transaction()`, `infrastructure/cache/migrations/` +
 
 *Готовность:* тесты E–H зелёные; отчёт по 28 несопоставленным отревьюен; `/себестоимость <предмет>` отвечает тем же числом, что лист; повторный `/shelter_import` того же файла не меняет ни одной строки.
 
-**Э6 — Переключение чтений**
+**Э6 — Переключение чтений** — ✅ **готово**
 `ProfileService`, `StatsService`, `ProgressionService`, `HealthService`, коги — на новые репозитории. `ProgressionService` переходит с label-строк с эмодзи на `rank_key`/`referral_role_key`. Отдельно: `/stats` и отчёты за период корректно показывают пометку «дата ориентировочная» для 534 сделок с `occurred_at_kind='sheet_interpolated'` — они участвуют в разрезе по периодам (дата теперь есть у всех), но UI обязан визуально отличать интерполированную дату от настоящей.
 
-**Э7 — Переключение записей ★ точка невозврата**
-`TransactionService.register()`: INSERT в `deals` + upsert игрока + пересчёт в одной транзакции. Исчезают `_find_free_row`, `_write_raw_columns`, `_await_formulas`, `_extend_formulas`, `formula_pending`. `bind_discord` → `players.discord_id`; `set_referral` → `players.referrer_player_id`; `sync_booster_flag` → `players.is_booster`; `catalog`/`pricing` → SQLite + `item_price_history` + инвалидация `shelter_cost`.
+**Сделано:**
+- `ProfileService`/`ProfileCog` — читают `PlayersRepository`/`ProgressionRepository`. `/referrals` больше не сканирует `transactions.referrer_norm`: `PlayersRepository.list_by_referrer` читает `players.referrer_player_id` напрямую (новый метод репозитория, как и `get_by_ids`/`count`).
+- `StatsService`/`StatsCog` — читают `DealsRepository`/`PlayersRepository` (новые методы `list_by_period`, `list_numbered_page`, `last_occurred_at`). `PeriodReport`/`LogEntry` переехали на `Deal`; интерполированные сделки помечаются `≈` перед датой и в отчётах за период, и в `/logs`.
+- `ProgressionService` — `Ladder.by_label` заменён на `by_key` везде; `sync_booster_flag` пишет `players.is_booster` и гоняет `ProgressionRepository.recompute()` вместо записи в колонку `Q` листа — `SheetsClient`-зависимость исчезла из сервиса полностью.
+- `HealthService`/`HealthCog`/`HealthStatus` — вместо счётчиков Sheets/cache-sync показывают `schema_version` (`PRAGMA user_version`), `player_count`, `deal_count`, `last_deal_at`, `db_size_bytes`, `integrity_ok` (`PRAGMA quick_check`, новые методы на `CacheDb`).
+- Старый `TransactionsCacheRepository.list_numbered_page` (Sheets-эры, больше никем не вызывается вживую) получил собственный `LegacyLogEntry` вместо расшаренного `LogEntry` — тот теперь принадлежит новой схеме и не может одновременно обслуживать старую.
+- 1159 тестов зелёные, `ruff`/`mypy --strict` чисто.
+
+**Осознанно не тронуто** (Э7, «Переключение записей»): `TransactionService`, `ManualGrantService`, `CatalogService`/`PricingService`, `TicketsCog`/`TransactionsCog`/`ManualCog` — они пишут в Sheets-эру `users`/`transactions` и переключаются вместе с точкой невозврата, не раньше.
+
+**Что нужно от вас:** ничего блокирующего. Ручная проверка `/profile`, `/referrals`, `/day`-`/week`-`/month`, `/logs`, `/healthcheck` на реальном боте — когда удобно; `/top` из этого раздела плана в кодовой базе не существует (не реализован ни разу, не в объёме Э6).
+
+**Э7 — Переключение записей ★ точка невозврата** — ✅ **код готов (обе части); реальное боевое переключение — впереди**
+`TransactionService.register()`: INSERT в `deals` + upsert игрока + пересчёт в одной транзакции. Исчезают `_find_free_row`, `_write_raw_columns`, `_await_formulas`, `_extend_formulas`, `formula_pending`. `bind_discord` → `players.discord_id`; `set_referral` → `players.referrer_player_id`; `sync_booster_flag` → `players.is_booster` (сделано ещё в Э6); `catalog`/`pricing` → SQLite + `item_price_history` + инвалидация `shelter_cost`.
 Перед мержем: повторный снимок обеих книг, повторный прогон A–H, реальный импорт.
 *Готовность:* `grep -rn "SheetsClient" src/stalbot/application/` пусто; `/add` отвечает за миллисекунды.
+
+**Сделано (часть 1 — сделки, привязка, реферер):**
+- `TransactionService.register()` переписан целиком: `Deal` вставляется в `deals` одной операцией, Coins/XP считаются на месте чистой функцией `domain.progression.calculator.deal_reward()` (воспроизводит формулы `F`/`G` без ожидания пересчёта — задержки на формулы, `formula_pending`, `_find_free_row` больше не существует). `rank_at_deal`/`booster_at_deal` — реальный снимок статуса игрока на момент сделки (читается из `ProgressionRepository`/`Player.is_booster` до вставки), а не задним числом, как формула листа.
+- `write_idempotency` мигрирован (`0007_idempotency_deal_id.sql`): ключ теперь `deal_id`, не номер строки листа.
+- `binding.py`/`ManualGrantService.set_referral` переведены на `PlayersRepository` — `/set_referral` **больше не требует существующей сделки** (осознанное изменение поведения: `players` — самостоятельная таблица, §XIV.1/§III.3), заводит обоих игроков через `get_or_create` и гоняет `ProgressionRepository.recompute()` для обоих сразу.
+- Когги `TransactionsCog`/`ManualCog`/`TicketsCog` обновлены: убраны `📄 Строка: N` и «ожидает пересчёта формул» — Coins/XP показываются сразу, у `AddTransactionRequest` появилось поле `source` (`/add` vs тикет).
+- 1159 тестов зелёные, `ruff`/`mypy --strict` чисто.
+
+**Сделано (часть 2 — каталог и цены):**
+- `CatalogService.add_item`/`delete_item` переведены на `CatalogItemsRepository`: id — стабильный суррогат, никогда не переприсваивается; `/del_item` теперь **soft-delete** (`deleted_at`), вся машинерия плотной перенумерации + `reassign_item_id`/`reassign_active_order_item`/`clear_active_order_item_for`/`save_delete_backup` удалена как мёртвый код (список на удаление совпал с Частью VIII план'а). Миграция схемы `boost_order_lines` не понадобилась: раз id стабилен, поле `item_id` там просто стало ссылаться на новое пространство id без изменения структуры таблицы.
+- Добавлена валидация `InvalidCategoryPriceError`: ресурс не может иметь цену продажи, буст — цену покупки (§I.5, зеркалит `CHECK` таблицы).
+- `PricingService` переведён на `CatalogItemsRepository`; `/sync_prices` и `SyncPricesReport` удалены целиком (нечего больше синхронизировать — прайс-листов не осталось). Каждое изменение цены (`/setprice`, `/setboost`, `/new_price`) пишет запись в новый `item_price_history` (репозиторий и сущность построены с нуля).
+- `BoostOrderService`, автодополнение (`item_choices`) и редактор заказа бустов (`order_card.py`, `order_views.py`) переведены на `CatalogItem`.
+- Осознанно не сделано: автоматическая инвалидация `shelter_cost` при изменении цены в каталоге — по решению владельца (§II.4) каталог и себестоимость крафта синхронизируются не автоматически, а через отдельную команду `/shelter_price` (сама команда — вне объёма Э7).
+- Найдено и исправлено два реальных бага в процессе: (1) `PricingService.apply_import` повторно округляла уже округлённую цену (`PriceChange.old_price`/`new_price` были типизированы как `Decimal`, а фактически хранили `Rub`); (2) `preview_import` при разрешении по имени/категории (ID из файла не найден) записывала в `PriceChange.item_id` исходный ненайденный ID вместо реального id найденного предмета — импорт по имени тихо не применялся бы.
+- 1150 тестов зелёные, `ruff`/`mypy --strict` чисты.
+
+**Что нужно от вас:** ничего блокирующего для кода. Реальное боевое переключение (остановка бота, финальный снимок обеих книг, повторный прогон A–H, реальный импорт) — по-прежнему ваша ручная операция по процедуре из Части VII.
 
 **Э8 — Калькулятор скупки ★ блокирует удаление Sheets**
 Замена ежедневного рабочего инструмента (§I.9): позиции с количествами, живой итог, сброс одним действием. Обобщение существующего `boost_orders.py` + `boost_order_lines` с бустов на ресурсы; `ticket_sessions.active_order_item_id` уже помнит активную строку.
