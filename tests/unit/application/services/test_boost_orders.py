@@ -441,16 +441,44 @@ async def test_apply_bulk_entry_reports_unparseable_lines(
     assert report.not_parsed == ["просто текст без количества", "x5"]
 
 
-async def test_apply_bulk_entry_rejects_quantity_out_of_range(
+async def test_apply_bulk_entry_rejects_quantity_above_the_max(
     connection: aiosqlite.Connection,
 ) -> None:
     resource = _resource_with_price("Кристалл", Decimal(100))
     service, _ = await _service_with_items(connection, [resource])
 
-    report = await service.apply_bulk_entry(111, f"Кристалл x{MAX_QUANTITY + 1}\nКристалл x0")
+    report = await service.apply_bulk_entry(111, f"Кристалл x{MAX_QUANTITY + 1}")
 
     assert report.applied == []
-    assert len(report.not_parsed) == 2
+    assert report.not_parsed == [f"Кристалл x{MAX_QUANTITY + 1}"]
+
+
+async def test_apply_bulk_entry_treats_quantity_zero_as_removal(
+    connection: aiosqlite.Connection,
+) -> None:
+    """Э8: no Select exists to pick one line out of a 100+-line draft — re-pasting
+    "Название x0" is how a single line gets deleted instead."""
+    resource = _resource_with_price("Кристалл", Decimal(100))
+    service, (resource_item,) = await _service_with_items(connection, [resource])
+    await service.apply_bulk_entry(111, "Кристалл x5")
+
+    report = await service.apply_bulk_entry(111, "Кристалл x0")
+
+    assert report.applied == []
+    assert [item.id for item in report.removed] == [resource_item.id]
+    assert await service.list_lines(111) == []
+
+
+async def test_apply_bulk_entry_removal_is_a_no_op_for_a_line_not_in_the_draft(
+    connection: aiosqlite.Connection,
+) -> None:
+    resource = _resource_with_price("Кристалл", Decimal(100))
+    service, (resource_item,) = await _service_with_items(connection, [resource])
+
+    report = await service.apply_bulk_entry(111, "Кристалл x0")
+
+    assert [item.id for item in report.removed] == [resource_item.id]
+    assert await service.list_lines(111) == []
 
 
 async def test_apply_bulk_entry_skips_blank_lines(connection: aiosqlite.Connection) -> None:

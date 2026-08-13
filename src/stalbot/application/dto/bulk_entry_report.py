@@ -19,6 +19,10 @@ class BulkEntryReport:
     applied: Sequence[tuple[CatalogItem, int]]
     """Lines that resolved to exactly one catalog item and were upserted."""
 
+    removed: Sequence[CatalogItem]
+    """Lines with `xКоличество` of `0` — resolved and deleted from the draft
+    instead of upserted (the calculator's point-edit-by-repaste path)."""
+
     not_parsed: Sequence[str]
     """Lines that don't match "Название xКоличество", or whose quantity is out of range."""
 

@@ -59,6 +59,11 @@ class _ParsedBulkLine:
 def _parse_bulk_entry_lines(text: str) -> tuple[list[_ParsedBulkLine], list[str]]:
     """Split a bulk paste into successfully-parsed lines and raw rejects.
 
+    `xКоличество` of `0` is a valid parse — `apply_bulk_entry` treats it as
+    "remove this line" (Э8's point-edit path: there's no Select to pick a
+    line out of a 100+-line draft, so a re-pasted "Название x0" is how a
+    single line gets deleted instead).
+
     Pure and Discord-agnostic on purpose — every format edge case belongs
     in a unit test here, not exercised through a modal.
     """
@@ -70,8 +75,8 @@ def _parse_bulk_entry_lines(text: str) -> tuple[list[_ParsedBulkLine], list[str]
             continue
         match = _BULK_LINE_RE.match(stripped)
         name = match.group("name").strip() if match else ""
-        quantity = int(match.group("quantity")) if match else 0
-        if match is None or not name or not (MIN_QUANTITY <= quantity <= MAX_QUANTITY):
+        quantity = int(match.group("quantity")) if match else -1
+        if match is None or not name or not (0 <= quantity <= MAX_QUANTITY):
             not_parsed.append(raw_line)
             continue
         parsed.append(_ParsedBulkLine(raw=raw_line, name=name, quantity=quantity))
@@ -256,6 +261,10 @@ class BoostOrderService:
         than silently dropped, so the caller can show it for correction
         without discarding everything else that *did* resolve.
 
+        `xКоличество` of `0` removes the line instead of upserting it — the
+        calculator's point-edit path, since a 100+-line draft has no Select
+        to pick a single line out of (unlike the ticket editor's `🗑️ Удалить`).
+
         Args:
             channel_id: The channel/ticket whose draft to update.
             text: Raw pasted text, one "Название xКоличество" entry per line.
@@ -267,6 +276,7 @@ class BoostOrderService:
             by_name.setdefault(item.name_norm, []).append(item)
 
         applied: list[tuple[CatalogItem, int]] = []
+        removed: list[CatalogItem] = []
         not_found: list[str] = []
         ambiguous: list[str] = []
         for line in parsed:
@@ -279,6 +289,10 @@ class BoostOrderService:
                 continue
             item = matches[0]
             assert item.id is not None  # noqa: S101 - a cataloged item always has an id
+            if line.quantity == 0:
+                await self._lines.delete_line(channel_id, item.id)
+                removed.append(item)
+                continue
             await self._lines.upsert(
                 BoostOrderLine(
                     channel_id=channel_id,
@@ -290,7 +304,11 @@ class BoostOrderService:
             )
             applied.append((item, line.quantity))
         return BulkEntryReport(
-            applied=applied, not_parsed=not_parsed, not_found=not_found, ambiguous=ambiguous
+            applied=applied,
+            removed=removed,
+            not_parsed=not_parsed,
+            not_found=not_found,
+            ambiguous=ambiguous,
         )
 
     async def clear(self, channel_id: int) -> None:
