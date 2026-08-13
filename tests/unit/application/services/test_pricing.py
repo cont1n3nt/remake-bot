@@ -425,5 +425,5 @@ def _price_change(*, item_id: int, name: str, category: ItemCategory) -> PriceCh
         category=category,
         field=PriceField.BUY,
         old_price=None,
-        new_price=Decimal(1),
+        new_price=Rub(1),
     )
