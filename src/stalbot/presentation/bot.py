@@ -54,6 +54,7 @@ from stalbot.presentation.cogs.health import HealthCog
 from stalbot.presentation.cogs.manual import ManualCog
 from stalbot.presentation.cogs.pricing import PricingCog
 from stalbot.presentation.cogs.profile import ProfileCog
+from stalbot.presentation.cogs.purchase_calculator import PurchaseCalculatorCog
 from stalbot.presentation.cogs.stats import StatsCog
 from stalbot.presentation.cogs.tag import TagCog
 from stalbot.presentation.cogs.tickets.cog import TicketsCog
@@ -259,6 +260,11 @@ class StalbotBot(commands.Bot):
         )
         await self.add_cog(tickets_cog)
         for view in tickets_cog.persistent_views():
+            self.add_view(view)
+
+        calculator_cog = PurchaseCalculatorCog(boost_order_service, self.embed_factory)
+        await self.add_cog(calculator_cog)
+        for view in calculator_cog.persistent_views():
             self.add_view(view)
 
         health_service = HealthService(
