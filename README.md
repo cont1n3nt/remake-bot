@@ -1,6 +1,6 @@
 # stalbot
 
-Discord-бот для Stalcraft (Stalzone) × Google Sheets.
+Discord-бот для Stalcraft (Stalzone).
 
 Архитектура и план реализации — см. [`PLAN.md`](PLAN.md).
 Статус выполнения — см. [`PLAN_PROGRESS.md`](PLAN_PROGRESS.md).
@@ -10,7 +10,6 @@ Discord-бот для Stalcraft (Stalzone) × Google Sheets.
 ## Требования
 
 - Python **3.12+**
-- Google Cloud service account с доступом к Google Sheets API
 - Discord-приложение (бот) с включёнными privileged intents
 - (опционально) Docker 24+ / Docker Compose v2, либо `systemd` для деплоя как сервиса
 
@@ -41,24 +40,7 @@ pip install -e ".[ocr]"
 
 ---
 
-## 2. Google Cloud service account
-
-1. В [Google Cloud Console](https://console.cloud.google.com/) создайте проект (или используйте
-   существующий) и включите **Google Sheets API**.
-2. Создайте service account (IAM & Admin → Service Accounts → Create Service Account).
-3. Создайте ключ типа `JSON` для этого service account и скачайте файл.
-4. Положите его в `credentials/service_account.json` (путь по умолчанию, см. `GOOGLE_CREDENTIALS_PATH`
-   в `.env`). Директория `credentials/` уже в `.gitignore` — файл никогда не попадёт в git.
-5. Откройте нужную Google-таблицу и выдайте право **«Редактор»** e-mail'у service account'а
-   (вида `xxx@yyy.iam.gserviceaccount.com` — он указан в поле `client_email` скачанного JSON).
-   Без этого доступа бот сможет читать таблицу, но упадёт при любой попытке записи.
-
-Бот использует только один OAuth-скоуп — `https://www.googleapis.com/auth/spreadsheets`
-(`infrastructure/sheets/client.py`).
-
----
-
-## 3. Discord-приложение
+## 2. Discord-приложение
 
 1. Создайте приложение в [Discord Developer Portal](https://discord.com/developers/applications) →
    вкладка **Bot** → **Reset Token** → сохраните токен (он показывается один раз).
@@ -81,7 +63,7 @@ pip install -e ".[ocr]"
 
 ---
 
-## 4. Конфигурация
+## 3. Конфигурация
 
 Скопируйте шаблон и заполните значениями:
 
@@ -98,19 +80,13 @@ cp .env.example .env
 | `GUILD_ID` | ID сервера |
 | `LOG_CHANNEL_ID` | канал аудита/ошибок |
 | `REVIEWS_CHANNEL_ID` | канал с напоминанием об отзыве после сделки |
-| `SPREADSHEET_ID` | ID Google-таблицы (из её URL) |
 
-Остальные переменные — с рабочими значениями по умолчанию (интервалы синка, поведенческие
-флаги, пути к данным, OCR — см. комментарии в `.env.example` и `src/stalbot/config/settings.py`).
-
-Также сверьте точные названия листов таблицы (`DataBase`, `Мейн скуп`, `Скуп бустов`, `БУСТЫ`) —
-структура листов задана в `src/stalbot/infrastructure/sheets/layouts.py` и проверяется при
-каждом старте (`validate_layout()`); при расхождении бот откажется работать вместо того, чтобы
-писать не туда.
+Остальные переменные — с рабочими значениями по умолчанию (поведенческие флаги, пути к
+данным, OCR — см. комментарии в `.env.example` и `src/stalbot/config/settings.py`).
 
 ---
 
-## 5. Первый запуск
+## 4. Первый запуск
 
 ```bash
 python -m stalbot
@@ -121,33 +97,31 @@ stalbot
 При старте бот:
 
 1. Валидирует `.env` (fail-fast при отсутствии обязательных переменных).
-2. Проверяет структуру Google-таблицы (`validate_layout()`).
-3. Выполняет полный синк каталога предметов, пользователей и сделок в локальный SQLite-кэш
-   (`data/cache.sqlite3` по умолчанию — директория создаётся автоматически).
-4. Регистрирует slash-команды (`tree.sync()`) и persistent views.
-5. Подключается к Discord.
+2. Открывает локальный SQLite-кэш (`data/cache.sqlite3` по умолчанию — файл и директория
+   создаются автоматически) и применяет накопившиеся миграции схемы.
+3. Регистрирует slash-команды (`tree.sync()`) и persistent views.
+4. Подключается к Discord.
 
-Проверить, что всё поднялось: команда `/healthcheck` (админ-only) показывает состояние Sheets,
-кэша, задержку синка, uptime и остаток строк под формулами.
+Проверить, что всё поднялось: команда `/healthcheck` (админ-only) показывает состояние кэша,
+целостность базы (`PRAGMA quick_check`) и uptime.
 
 ---
 
-## 6. Запуск в Docker
+## 5. Запуск в Docker
 
 ```bash
 docker compose up -d --build
 ```
 
-`docker-compose.yml` монтирует `./data` и `./credentials` как volume'ы наружу контейнера и
-читает `.env` из корня проекта — оба файла с секретами (`credentials/service_account.json`,
-`.env`) должны существовать на хосте до старта (см. разделы 2–4 выше). Контейнер работает от
-непривилегированного пользователя (см. `Dockerfile`).
+`docker-compose.yml` монтирует `./data` как volume наружу контейнера и читает `.env` из корня
+проекта — `.env` должен существовать на хосте до старта (см. раздел 3 выше). Контейнер работает
+от непривилегированного пользователя (см. `Dockerfile`).
 
 Логи: `docker compose logs -f stalbot`. Остановка: `docker compose down`.
 
 ---
 
-## 7. Запуск как systemd-сервис (альтернатива Docker)
+## 6. Запуск как systemd-сервис (альтернатива Docker)
 
 ```bash
 sudo cp deploy/stalbot.service /etc/systemd/system/
@@ -166,7 +140,7 @@ journalctl -u stalbot -f
 
 ---
 
-## 8. Бэкапы
+## 7. Бэкапы
 
 SQLite — единственный источник истины (sqlite_migration.md): потерянная база — это потерянные
 данные, а не «пересоберётся следующим синком».
@@ -217,7 +191,7 @@ RCLONE_REMOTE=b2:stalbot-backups ./scripts/backup.sh
 
 ---
 
-## 9. Разработка
+## 8. Разработка
 
 ```bash
 ruff check .
@@ -242,5 +216,3 @@ CI (`.github/workflows/ci.yml`) прогоняет тот же набор про
 - OCR распознавания скриншотов нет — сумма сделки вводится администратором вручную
   (`NullOcrGateway`). Вся инфраструктура под OCR уже собирает датасет для будущего этапа M13
   (см. `PLAN_PROGRESS.md`).
-- Бот никогда не пишет в формульные колонки таблицы (`F, G, J, K, L, M, N, O, P, R, S`) —
-  это осознанное архитектурное ограничение, не баг.

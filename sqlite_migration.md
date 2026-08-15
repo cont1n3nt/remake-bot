@@ -979,7 +979,24 @@ PRAGMA-набор, `CacheDb.transaction()`, `infrastructure/cache/migrations/` +
 
 **Что нужно от вас:** реальная проверка на живом канале — `/skupka`, вставить полный список (100+ позиций), проверить итог и правку через `x0`. Строка «Готовность» выше (§I.9) описывала целевой критерий приёмки, а не уже состоявшийся факт — Discord-слой до этого коммита не существовал, так что она ещё не подтверждена на практике.
 
-**Э9 — Удаление Sheets** (см. Часть VIII). Не начинается, пока Э8 не принят.
+**Э9 — Удаление Sheets** (см. Часть VIII) — ✅ **готово (код)**
+
+Владелец вручную проверил `/skupka` 2026-08-15 (bulk-вставка, upsert по имени, ambiguous/not-found/not-parsed отчёт, `x0`-удаление, сброс) — Э8 принят, блокер снят.
+
+**Сделано:**
+- Весь `src/stalbot/infrastructure/sheets/` (a1/client/layouts/protection/ratelimit, ~1025 строк) и `src/stalbot/infrastructure/cache/sync.py` (536 строк, обе sync-петли + startup-sync) удалены целиком.
+- `presentation/bot.py`: убраны `sheets_client`, `cache_sync`, `_users_sync_loop`/`_items_sync_loop`, `_run_users_sync`/`_run_items_sync`, `run_startup_sync()`, `_send_warnings`/`_startup_warnings` (были специфичны для Sheets-формул). `bootstrap.py` больше не строит `SheetsClient`.
+- `application/services/binding.py` схлопнут в `PlayersRepository.bind_discord` (в самой доктрине это было ошибочно описано как уже сделанное на Э7 — на деле схлопывание произошло только сейчас).
+- `domain/errors.py`: удалены `SheetsUnavailableError`/`SheetsWriteConflictError`/`ProtectedRangeWriteError`/`SheetStructureError`/`CacheStaleError`, добавлен `DatabaseError`; `presentation/errors.py` — маппинг обновлён.
+- Репозитории: удалены `ItemsCacheRepository.save_delete_backup`/`replace_all`, `UsersCacheRepository.last_synced_at`/`replace_all` (мёртвый код после удаления `sync.py`, других вызывающих не было).
+- `domain/clock.py`: `parse_sheet_datetime` удалён — импортёр (`scripts/import_from_sheets.py`) его никогда не переиспользовал (у него собственный парсинг дат, докстринг это прямо оговаривал), так что переносить было нечего.
+- **Найдено сверх текста доктрины:** `scripts/export_sheet_snapshot.py` (832 строки, живой `gspread`-клиент для Э0-снепшотов) в Части VIII не упомянут, но напрямую зависел от `infrastructure/sheets/a1.py`/`layouts.py` и от `gspread`/`google-auth`, которые эта же миграция убирает из зависимостей. Его работа (захват Э0-снепшота) уже выполнена и закоммичена (`tests/fixtures/sheet_snapshot_2026-08-10/`) — удалён вместе с тестом и `openpyxl`/`types-openpyxl`/`migration`-extra (был нужен только ему).
+- `config/settings.py`: убраны `google_credentials_path`, `spreadsheet_id`, `sync_users_interval_seconds`, `sync_items_interval_seconds`. `pyproject.toml`: `gspread`/`google-auth` убраны из зависимостей, `Pillow` перемещён в основные (готовим Э11), mypy-override для `gspread.*`/`google.oauth2.*` вырезан точечно (не трогая нужный `aiosqlite.*`).
+- `.env.example`, `Dockerfile`, `docker-compose.yml` (+ `stop_grace_period: 60s`), `deploy/stalbot.service`, `README.md` — обновлены (полный проход, не только перечисленные в Части VIII строки).
+- Тесты: `tests/unit/infrastructure/sheets/` (6 файлов, ~78 тестов) и `test_sync.py` (35 тестов) удалены; Sheets-специфичные кейсы вычищены из `test_{bot,errors,clock}.py`; `test_binding.py` перенесён в `test_players.py` (логика теперь метод репозитория); `test_write_safety_invariants.py` заменён на новый [`tests/unit/test_architecture_invariants.py`](tests/unit/test_architecture_invariants.py) — 4 новых SQLite-эры инварианта вместо gspread-специфичных (Часть XI): `INSERT INTO deals|players` только в репозиториях, SQL не собирается f-строкой (кроме именованных подстановок), PIL — только из будущего `infrastructure/posters/`, `Rub`/`Kopeks` не складываются в одном выражении.
+- `pytest`/`mypy --strict`/`ruff check`/`ruff format --check` зелёные; `grep -rin "gspread\|spreadsheet\|google" src/ tests/ pyproject.toml` не находит ничего вне комментариев/докстрингов, поясняющих историю миграции.
+
+**Что нужно от вас:** реальное боевое переключение на сервере — по-прежнему ручная операция, и её нужно сделать одним заходом из-за `extra="forbid"` в `Settings`: остановить бота, `git pull`, убрать из серверного `.env` `GOOGLE_CREDENTIALS_PATH`/`SPREADSHEET_ID`/`SYNC_USERS_INTERVAL_SECONDS`/`SYNC_ITEMS_INTERVAL_SECONDS`, пересобрать образ и перезапустить — иначе следующий рестарт с новым кодом и старым `.env` упадёт на старте.
 
 **Э10 — Тестовая инфраструктура и покрытие**
 
