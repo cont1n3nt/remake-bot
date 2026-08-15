@@ -12,7 +12,6 @@ _REQUIRED_ENV: dict[str, str] = {
     "GUILD_ID": "1475147129201627208",
     "LOG_CHANNEL_ID": "1518330495505797143",
     "REVIEWS_CHANNEL_ID": "1490342809075716237",
-    "SPREADSHEET_ID": "1W3HDdzvnQ4Uzyn86RQUUp-hrzFgBikowtP5LBoq_Ov0",
 }
 
 
@@ -24,8 +23,6 @@ def _isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "CACHE_DB_PATH",
         "OCR_ENABLED",
         "LOG_LEVEL",
-        "SYNC_USERS_INTERVAL_SECONDS",
-        "SYNC_ITEMS_INTERVAL_SECONDS",
         "PROGRESSION_POLL_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -43,7 +40,6 @@ def test_loads_with_all_required_fields(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert settings.discord_token.get_secret_value() == "fake-token"
     assert settings.guild_id == 1475147129201627208
-    assert settings.spreadsheet_id == "1W3HDdzvnQ4Uzyn86RQUUp-hrzFgBikowtP5LBoq_Ov0"
 
 
 @pytest.mark.parametrize("missing", sorted(_REQUIRED_ENV))
@@ -86,18 +82,14 @@ def test_invalid_log_level_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
         Settings(_env_file=None)  # type: ignore[call-arg]
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["SYNC_USERS_INTERVAL_SECONDS", "SYNC_ITEMS_INTERVAL_SECONDS", "PROGRESSION_POLL_SECONDS"],
-)
 @pytest.mark.parametrize("value", ["0", "-1"])
-def test_non_positive_sync_interval_fails_fast(
-    monkeypatch: pytest.MonkeyPatch, field: str, value: str
+def test_non_positive_progression_poll_seconds_fails_fast(
+    monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
     """INFRA2-7: `0`/negative would drive the matching `tasks.loop` into a
-    hot loop hammering Discord/Sheets — must be rejected at startup, not
-    discovered from a rate-limit storm in production."""
+    hot loop hammering Discord — must be rejected at startup, not discovered
+    from a rate-limit storm in production."""
     _set_required_env(monkeypatch)
-    monkeypatch.setenv(field, value)
+    monkeypatch.setenv("PROGRESSION_POLL_SECONDS", value)
     with pytest.raises(ValidationError):
         Settings(_env_file=None)  # type: ignore[call-arg]

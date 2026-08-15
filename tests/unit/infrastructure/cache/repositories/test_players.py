@@ -120,3 +120,66 @@ async def test_referrer_cannot_be_self(connection: aiosqlite.Connection) -> None
 
     with pytest.raises(aiosqlite.IntegrityError):
         await repo.set_referrer(player.id, player.id, now=NOW)
+
+
+async def test_bind_discord_binds_an_unbound_nick(connection: aiosqlite.Connection) -> None:
+    repo = PlayersRepository(connection)
+    await repo.get_or_create(NormalizedNick("scaryyyyy"), "Scaryyyyy", now=NOW)
+
+    bound = await repo.bind_discord(NormalizedNick("scaryyyyy"), 999, force=False, now=NOW)
+
+    assert bound is True
+    player = await repo.get_by_nick(NormalizedNick("scaryyyyy"))
+    assert player is not None
+    assert player.discord_id == 999
+
+
+async def test_bind_discord_no_op_for_unknown_nick(connection: aiosqlite.Connection) -> None:
+    repo = PlayersRepository(connection)
+
+    bound = await repo.bind_discord(NormalizedNick("nobody"), 999, force=False, now=NOW)
+
+    assert bound is False
+
+
+async def test_bind_discord_no_op_when_already_bound_to_same_id(
+    connection: aiosqlite.Connection,
+) -> None:
+    repo = PlayersRepository(connection)
+    player = await repo.get_or_create(NormalizedNick("scaryyyyy"), "Scaryyyyy", now=NOW)
+    assert player.id is not None
+    await repo.set_discord_id(player.id, 999, now=NOW)
+
+    bound = await repo.bind_discord(NormalizedNick("scaryyyyy"), 999, force=False, now=NOW)
+
+    assert bound is False
+
+
+async def test_bind_discord_does_not_rebind_without_force(
+    connection: aiosqlite.Connection,
+) -> None:
+    repo = PlayersRepository(connection)
+    player = await repo.get_or_create(NormalizedNick("scaryyyyy"), "Scaryyyyy", now=NOW)
+    assert player.id is not None
+    await repo.set_discord_id(player.id, 111, now=NOW)
+
+    bound = await repo.bind_discord(NormalizedNick("scaryyyyy"), 999, force=False, now=NOW)
+
+    assert bound is False
+    unchanged = await repo.get_by_nick(NormalizedNick("scaryyyyy"))
+    assert unchanged is not None
+    assert unchanged.discord_id == 111
+
+
+async def test_bind_discord_rebinds_when_forced(connection: aiosqlite.Connection) -> None:
+    repo = PlayersRepository(connection)
+    player = await repo.get_or_create(NormalizedNick("scaryyyyy"), "Scaryyyyy", now=NOW)
+    assert player.id is not None
+    await repo.set_discord_id(player.id, 111, now=NOW)
+
+    bound = await repo.bind_discord(NormalizedNick("scaryyyyy"), 999, force=True, now=NOW)
+
+    assert bound is True
+    updated = await repo.get_by_nick(NormalizedNick("scaryyyyy"))
+    assert updated is not None
+    assert updated.discord_id == 999

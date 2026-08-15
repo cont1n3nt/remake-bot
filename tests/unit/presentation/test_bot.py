@@ -13,25 +13,8 @@ from stalbot.application.services.audit import AuditService
 from stalbot.config.settings import Settings
 from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.logging.trace import current_trace_id
-from stalbot.infrastructure.sheets.client import SheetsClient
 from stalbot.presentation.bot import StalbotBot, _channel_display, _format_arguments
 from stalbot.presentation.embeds.factory import EmbedFactory
-
-
-class _FakeSheetsClient:
-    """Just enough of `SheetsClient` for `CacheSync` to run against empty data."""
-
-    def __init__(self) -> None:
-        self.validate_calls = 0
-
-    async def validate_layout(self) -> None:
-        self.validate_calls += 1
-
-    async def batch_get(self, ranges: list[str]) -> dict[str, list[list[object]]]:
-        return {}
-
-    async def read_formula_extent(self, ref: str) -> int:
-        return 1000
 
 
 def _settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
@@ -40,19 +23,17 @@ def _settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
         "GUILD_ID": "1475147129201627208",
         "LOG_CHANNEL_ID": "1518330495505797143",
         "REVIEWS_CHANNEL_ID": "1490342809075716237",
-        "SPREADSHEET_ID": "1W3HDdzvnQ4Uzyn86RQUUp-hrzFgBikowtP5LBoq_Ov0",
     }.items():
         monkeypatch.setenv(key, value)
     return Settings(_env_file=None)  # type: ignore[call-arg]
 
 
 def _bot(settings: Settings, *, embed_factory: EmbedFactory | None = None) -> StalbotBot:
-    """Build a `StalbotBot` with lazy (network-untouched) cache/Sheets collaborators."""
+    """Build a `StalbotBot` with a lazy (network-untouched) cache collaborator."""
     return StalbotBot(
         settings,
         embed_factory=embed_factory or EmbedFactory(),
         cache_db=CacheDb(settings.cache_db_path),
-        sheets_client=SheetsClient(settings),
     )
 
 
@@ -64,7 +45,6 @@ def test_construction_wires_embed_factory_and_settings(monkeypatch: pytest.Monke
     assert bot.settings is settings
     assert bot.embed_factory is factory
     assert bot.audit_service is None
-    assert bot.cache_sync is None
 
 
 def test_channel_display_uses_hash_prefix() -> None:
@@ -157,7 +137,7 @@ async def test_close_awaits_a_cancelled_loops_task_before_closing_the_cache(
     task = asyncio.create_task(in_flight_iteration())
     fake_loop = MagicMock()
     fake_loop.get_task = MagicMock(return_value=task)
-    bot._users_sync_loop = fake_loop
+    bot._progression_loop = fake_loop
 
     async def tracking_cache_close() -> None:
         order.append("cache_closed")
@@ -184,7 +164,7 @@ async def test_close_still_closes_the_cache_when_a_loop_task_raises(
     task = asyncio.create_task(failing_iteration())
     fake_loop = MagicMock()
     fake_loop.get_task = MagicMock(return_value=task)
-    bot._users_sync_loop = fake_loop
+    bot._progression_loop = fake_loop
 
     cache_close = AsyncMock()
     monkeypatch.setattr(bot.cache_db, "close", cache_close)
@@ -194,69 +174,26 @@ async def test_close_still_closes_the_cache_when_a_loop_task_raises(
     cache_close.assert_awaited_once()
 
 
-async def test_setup_cache_runs_startup_sync_before_starting_loops(
+async def test_setup_cache_wires_progression_service_and_starts_loops(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     settings = _settings(monkeypatch)
     bot = _bot(settings)
     bot.cache_db = CacheDb(tmp_path / "cache.sqlite3")
-    fake_client = _FakeSheetsClient()
-    bot.sheets_client = fake_client  # type: ignore[assignment]
     bot.audit_service = MagicMock(spec=AuditService)
 
     await bot._setup_cache()
 
-    assert fake_client.validate_calls == 1
-    assert bot.cache_sync is not None
     assert bot.progression_service is not None
-    assert bot._users_sync_loop is not None
-    assert bot._users_sync_loop.is_running()
-    assert bot._items_sync_loop is not None
-    assert bot._items_sync_loop.is_running()
+    assert bot.health_service is not None
     assert bot._progression_loop is not None
     assert bot._progression_loop.is_running()
+    assert bot._metrics_loop is not None
+    assert bot._metrics_loop.is_running()
 
-    bot._users_sync_loop.cancel()
-    bot._items_sync_loop.cancel()
     bot._progression_loop.cancel()
+    bot._metrics_loop.cancel()
     await bot.cache_db.close()
-
-
-async def test_run_users_sync_delegates_to_cache_sync(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(monkeypatch)
-    bot = _bot(settings)
-    cache_sync = MagicMock()
-    cache_sync.sync_users_and_transactions = AsyncMock(
-        return_value=SimpleNamespace(warnings=("⚠️ test",))
-    )
-    bot.cache_sync = cache_sync
-    bot._send_warnings = AsyncMock()  # type: ignore[method-assign]
-
-    await bot._run_users_sync()
-
-    cache_sync.sync_users_and_transactions.assert_awaited_once()
-    bot._send_warnings.assert_awaited_once_with(("⚠️ test",))
-
-
-async def test_run_users_sync_is_a_no_op_before_cache_sync_exists(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = _settings(monkeypatch)
-    bot = _bot(settings)
-
-    await bot._run_users_sync()  # must not raise
-
-
-async def test_run_items_sync_delegates_to_cache_sync(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(monkeypatch)
-    bot = _bot(settings)
-    cache_sync = MagicMock()
-    cache_sync.sync_items = AsyncMock()
-    bot.cache_sync = cache_sync
-
-    await bot._run_items_sync()
-
-    cache_sync.sync_items.assert_awaited_once()
 
 
 async def test_run_progression_poll_delegates_to_progression_service(
@@ -280,45 +217,6 @@ async def test_run_progression_poll_is_a_no_op_before_progression_service_exists
     bot = _bot(settings)
 
     await bot._run_progression_poll()  # must not raise
-
-
-async def test_run_users_sync_gets_a_fresh_trace_id_each_tick(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """INFRA2-3: a `tasks.loop` runs as one long-lived `asyncio.Task` for the
-    whole process — without stamping a fresh trace id every tick, every log
-    line from every future tick would share whatever the very first tick
-    generated."""
-    settings = _settings(monkeypatch)
-    bot = _bot(settings)
-    cache_sync = MagicMock()
-    cache_sync.sync_users_and_transactions = AsyncMock(return_value=SimpleNamespace(warnings=()))
-    bot.cache_sync = cache_sync
-    bot._send_warnings = AsyncMock()  # type: ignore[method-assign]
-
-    await bot._run_users_sync()
-    first = current_trace_id()
-    await bot._run_users_sync()
-    second = current_trace_id()
-
-    assert first != second
-
-
-async def test_run_items_sync_gets_a_fresh_trace_id_each_tick(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = _settings(monkeypatch)
-    bot = _bot(settings)
-    cache_sync = MagicMock()
-    cache_sync.sync_items = AsyncMock()
-    bot.cache_sync = cache_sync
-
-    await bot._run_items_sync()
-    first = current_trace_id()
-    await bot._run_items_sync()
-    second = current_trace_id()
-
-    assert first != second
 
 
 async def test_run_progression_poll_gets_a_fresh_trace_id_each_tick(
@@ -411,48 +309,6 @@ async def test_on_member_update_is_a_no_op_before_progression_service_exists(
     after = SimpleNamespace(premium_since=datetime.now(UTC), id=42)
 
     await bot.on_member_update(before, after)  # type: ignore[arg-type]  # must not raise
-
-
-async def test_send_warnings_is_a_no_op_for_empty_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(monkeypatch)
-    bot = _bot(settings)
-    monkeypatch.setattr(bot, "get_channel", MagicMock(return_value=MagicMock()))
-
-    await bot._send_warnings(())  # must not raise, and must not touch get_channel's result
-
-
-async def test_send_warnings_sends_one_embed_per_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(monkeypatch)
-    bot = _bot(settings)
-    channel = MagicMock(spec=discord.abc.Messageable)
-    channel.send = AsyncMock()
-    monkeypatch.setattr(bot, "get_channel", MagicMock(return_value=channel))
-
-    await bot._send_warnings(("⚠️ first", "⚠️ second"))
-
-    assert channel.send.await_count == 2
-
-
-async def test_send_warnings_is_a_no_op_when_channel_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = _settings(monkeypatch)
-    bot = _bot(settings)
-    monkeypatch.setattr(bot, "get_channel", MagicMock(return_value=None))
-
-    await bot._send_warnings(("⚠️ test",))  # must not raise
-
-
-async def test_on_ready_flushes_startup_warnings_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(monkeypatch)
-    bot = _bot(settings)
-    bot._startup_warnings = ("⚠️ test",)
-    bot._send_warnings = AsyncMock()  # type: ignore[method-assign]
-
-    await bot.on_ready()
-
-    bot._send_warnings.assert_awaited_once_with(("⚠️ test",))
-    assert len(bot._startup_warnings) == 0
 
 
 async def test_on_ready_refreshes_emoji_cache_when_guild_available(
