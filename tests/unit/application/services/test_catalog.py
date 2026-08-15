@@ -6,47 +6,28 @@ sheet block, no more renumbering, and no more "reassign this line's item id"
 machinery to test. Cache repositories are real, SQLite-backed.
 """
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import aiosqlite
 import pytest
-import pytest_asyncio
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.services.catalog import CatalogService
 from stalbot.domain.enums import ItemCategory
 from stalbot.domain.errors import DuplicateItemError, InvalidCategoryPriceError, ItemNotFoundError
-from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
-
-
-@pytest_asyncio.fixture
-async def connection(tmp_path: Path) -> AsyncIterator[aiosqlite.Connection]:
-    db = CacheDb(tmp_path / "cache.sqlite3")
-    conn = await db.connect()
-    yield conn
-    await db.close()
-
-
-class _FixedClock:
-    def __init__(self, now: datetime) -> None:
-        self.current = now
-
-    def now(self) -> datetime:
-        return self.current
+from tests.support.fake_clock import FakeClock
 
 
 def _service(
-    connection: aiosqlite.Connection, *, clock: _FixedClock | None = None
+    connection: aiosqlite.Connection, *, clock: FakeClock | None = None
 ) -> tuple[CatalogService, CatalogItemsRepository, BoostOrderLinesRepository]:
     items = CatalogItemsRepository(connection)
     lines = BoostOrderLinesRepository(connection)
     service = CatalogService(
-        items, lines, clock=clock or _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+        items, lines, clock=clock or FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     )
     return service, items, lines
 

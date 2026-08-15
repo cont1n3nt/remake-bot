@@ -35,6 +35,7 @@ from stalbot.presentation.cogs.tickets.cog import TicketsCog, _infer_author_id, 
 from stalbot.presentation.cogs.tickets.modals import AmountModal
 from stalbot.presentation.cogs.tickets.order_views import OrderEditorView, OrderSummaryView
 from stalbot.presentation.embeds.factory import EmbedFactory
+from tests.support.fake_clock import FakeClock
 
 _SELL_ITEMS_CATEGORY = next(
     cid for cid, kind in TICKET_CATEGORIES.items() if kind is TicketKind.SELL_ITEMS
@@ -42,14 +43,6 @@ _SELL_ITEMS_CATEGORY = next(
 _ORDER_BOOSTS_CATEGORY = next(
     cid for cid, kind in TICKET_CATEGORIES.items() if kind is TicketKind.ORDER_BOOSTS
 )
-
-
-class _FixedClock:
-    def __init__(self, now: datetime) -> None:
-        self._now = now
-
-    def now(self) -> datetime:
-        return self._now
 
 
 def _session(**overrides: object) -> TicketSession:
@@ -726,7 +719,7 @@ async def test_handle_screenshot_is_byte_identical_regardless_of_the_ocr_outcome
     nothing to do with OCR — a false red unrelated to the contract this
     test actually guards.
     """
-    embeds = EmbedFactory(clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)))
+    embeds = EmbedFactory(clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)))
     outcomes: list[AsyncMock] = [
         AsyncMock(return_value=OcrResult(status="disabled")),
         AsyncMock(

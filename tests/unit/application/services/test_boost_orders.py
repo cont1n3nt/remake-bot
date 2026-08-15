@@ -9,13 +9,10 @@ inserts its fixture items and reads back the assigned ids rather than
 hardcoding them.
 """
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import aiosqlite
-import pytest_asyncio
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.services.boost_orders import (
@@ -27,19 +24,10 @@ from stalbot.application.services.boost_orders import (
 from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory
 from stalbot.domain.money import Rub
-from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
 
 _NOW = datetime(2026, 7, 31, 21, 45, tzinfo=UTC)
-
-
-@pytest_asyncio.fixture
-async def connection(tmp_path: Path) -> AsyncIterator[aiosqlite.Connection]:
-    db = CacheDb(tmp_path / "cache.sqlite3")
-    conn = await db.connect()
-    yield conn
-    await db.close()
 
 
 def _draft(

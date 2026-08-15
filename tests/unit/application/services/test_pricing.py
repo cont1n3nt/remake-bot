@@ -7,14 +7,11 @@ rather than asserting on `SheetsClient` calls. Cache repositories are real,
 SQLite-backed.
 """
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import aiosqlite
 import pytest
-import pytest_asyncio
 
 from stalbot.application.dto.price_change import PriceChange, group_price_changes
 from stalbot.application.dto.price_import import PriceImportPlan
@@ -27,38 +24,22 @@ from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory, PriceChangeSource, PriceField
 from stalbot.domain.errors import ItemNotFoundError
 from stalbot.domain.money import Rub, format_amount
-from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
 from stalbot.infrastructure.cache.repositories.item_price_history import (
     ItemPriceHistoryRepository,
 )
+from tests.support.fake_clock import FakeClock
 
 _NOW = datetime(2026, 7, 31, 21, 45, tzinfo=UTC)
 
 
-@pytest_asyncio.fixture
-async def connection(tmp_path: Path) -> AsyncIterator[aiosqlite.Connection]:
-    db = CacheDb(tmp_path / "cache.sqlite3")
-    conn = await db.connect()
-    yield conn
-    await db.close()
-
-
-class _FixedClock:
-    def __init__(self, now: datetime) -> None:
-        self.current = now
-
-    def now(self) -> datetime:
-        return self.current
-
-
 def _service(
-    connection: aiosqlite.Connection, *, clock: _FixedClock | None = None
+    connection: aiosqlite.Connection, *, clock: FakeClock | None = None
 ) -> tuple[PricingService, CatalogItemsRepository, ItemPriceHistoryRepository]:
     items = CatalogItemsRepository(connection)
     history = ItemPriceHistoryRepository(connection)
     service = PricingService(
-        items, history, clock=clock or _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+        items, history, clock=clock or FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     )
     return service, items, history
 

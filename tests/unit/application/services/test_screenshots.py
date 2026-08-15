@@ -12,16 +12,9 @@ from stalbot.domain.entities.screenshot import OcrResult
 from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
     ScreenshotAnalysesRepository,
 )
+from tests.support.fake_clock import FakeClock
 
 _DATA = b"fake-screenshot-bytes"
-
-
-class _FixedClock:
-    def __init__(self, now: datetime) -> None:
-        self._now = now
-
-    def now(self) -> datetime:
-        return self._now
 
 
 def _fake_analyses() -> MagicMock:
@@ -47,7 +40,7 @@ async def test_on_attached_records_the_hash_and_size(tmp_path: Path) -> None:
         analyses,
         _fake_ocr(),
         _settings(ocr_keep_samples=False, samples_dir=tmp_path),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
     await service.on_attached(
@@ -71,7 +64,7 @@ async def test_on_attached_calls_the_ocr_gateway() -> None:
         _fake_analyses(),
         ocr,
         _settings(ocr_keep_samples=False, samples_dir=Path(".")),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
     result = await service.on_attached(
@@ -92,7 +85,7 @@ async def test_on_attached_degrades_to_failed_status_when_ocr_raises(tmp_path: P
         analyses,
         ocr,
         _settings(ocr_keep_samples=False, samples_dir=tmp_path),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
     result = await service.on_attached(
@@ -109,7 +102,7 @@ async def test_on_attached_keeps_a_sample_when_enabled(tmp_path: Path) -> None:
         _fake_analyses(),
         _fake_ocr(),
         _settings(ocr_keep_samples=True, samples_dir=tmp_path),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
     await service.on_attached(
@@ -131,7 +124,7 @@ async def test_on_attached_prefers_mime_over_a_mismatched_filename_extension(
         _fake_analyses(),
         _fake_ocr(),
         _settings(ocr_keep_samples=True, samples_dir=tmp_path),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
     await service.on_attached(
@@ -151,7 +144,7 @@ async def test_on_attached_strips_mime_parameters_before_matching(tmp_path: Path
         _fake_analyses(),
         _fake_ocr(),
         _settings(ocr_keep_samples=True, samples_dir=tmp_path),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
     await service.on_attached(
@@ -173,7 +166,7 @@ async def test_on_attached_falls_back_to_filename_for_an_unrecognized_mime(
         _fake_analyses(),
         _fake_ocr(),
         _settings(ocr_keep_samples=True, samples_dir=tmp_path),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
     await service.on_attached(
@@ -190,7 +183,7 @@ async def test_on_attached_skips_the_sample_when_disabled(tmp_path: Path) -> Non
         analyses,
         _fake_ocr(),
         _settings(ocr_keep_samples=False, samples_dir=tmp_path),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
     await service.on_attached(
@@ -207,7 +200,7 @@ async def test_record_confirmed_amount_forwards_the_stringified_decimal(tmp_path
         analyses,
         _fake_ocr(),
         _settings(ocr_keep_samples=False, samples_dir=tmp_path),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
     await service.record_confirmed_amount(111, Decimal(299900))

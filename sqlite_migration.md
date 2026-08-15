@@ -998,7 +998,17 @@ PRAGMA-набор, `CacheDb.transaction()`, `infrastructure/cache/migrations/` +
 
 **Что нужно от вас:** реальное боевое переключение на сервере — по-прежнему ручная операция, и её нужно сделать одним заходом из-за `extra="forbid"` в `Settings`: остановить бота, `git pull`, убрать из серверного `.env` `GOOGLE_CREDENTIALS_PATH`/`SPREADSHEET_ID`/`SYNC_USERS_INTERVAL_SECONDS`/`SYNC_ITEMS_INTERVAL_SECONDS`, пересобрать образ и перезапустить — иначе следующий рестарт с новым кодом и старым `.env` упадёт на старте.
 
-**Э10 — Тестовая инфраструктура и покрытие**
+**Э10 — Тестовая инфраструктура и покрытие** — ✅ **готово**
+
+Реализовано ровно то, что описывает Часть XI, за вычетом пунктов, которые к этому моменту оказались неактуальны (см. ниже).
+
+**Сделано:**
+- Корневой [`tests/conftest.py`](tests/conftest.py): фикстуры `connection` (`CacheDb` на `tmp_path`) и `synced_at`. Убрало 8 построчных копий `connection` — `tests/unit/infrastructure/cache/conftest.py` (удалён целиком, теперь избыточен) и семь `test_{boost_orders,catalog,manual_grants,pricing,progression,tickets,transaction_service}.py` (`test_binding.py` из исходного списка уже не существует — его логика перешла в `test_players.py` на Э9).
+- [`tests/support/fake_clock.py`](tests/support/fake_clock.py): единый `FakeClock`, убрал `_FixedClock`, продублированный в **9** файлах (доктрина оценивала «5+»), включая `tests/integration/test_ticket_restart.py` и `tests/unit/presentation/cogs/tickets/test_cog.py`, не входившие в изначальный список Часть XI.
+- [`tests/support/fakes.py`](tests/support/fakes.py): `FakeRoleGateway`/`FakeAuditGateway`/`FakeChannel`, перенесены из `test_progression.py` — единственного файла, где они жили (дублирования на момент переноса не было, но доктрина просила вынести их на будущее).
+- **Не сделано осознанно:** `fixed_now`, session-scoped `sheet_snapshot`/`shelter_snapshot` фикстуры из Часть XI — на момент Э10 такого дублирования не возникло (импортёры и парити-тесты обращаются к `tests/fixtures/sheet_snapshot_*/` напрямую по пути, а не через общую фикстуру); заводить их сейчас было бы преждевременной абстракцией без реального потребителя.
+- `test_write_safety_invariants.py` → `tests/unit/test_architecture_invariants.py` сделано на Э9 (тот же коммит, что удалял `sheets/`), не здесь — Часть XI описывала это как часть Э10, но по факту работа была неотделима от самого удаления.
+- Coverage не просела (пункт «Удержание coverage ≥ 85» из доктрины) — рефакторинг тестовый, ни одна строка прод-кода не тронута; 955 тестов зелёные (1 намеренно исключён, см. Э9 — предсуществующий баг, не связан с этой работой), `mypy --strict`/`ruff` чисты.
 
 **Э11 — Плакаты на Pillow** — независим от Э1–Э10.
 

@@ -5,39 +5,20 @@ repositories are real, SQLite-backed, for genuine round-trip confidence
 (same approach as `test_transaction_service.py`).
 """
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import aiosqlite
-import pytest_asyncio
 
 from stalbot.application.dto.progression_state import ProgressionState
 from stalbot.application.ports.role_gateway import RoleDiff, RoleGateway, RoleSet
 from stalbot.application.services.manual_grants import ManualGrantService
 from stalbot.domain.nick import NormalizedNick
 from stalbot.domain.progression.ranks import RankLadder
-from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.infrastructure.cache.repositories.progression import ProgressionRepository
 from stalbot.infrastructure.cache.repositories.progression_state import ProgressionStateRepository
-
-
-@pytest_asyncio.fixture
-async def connection(tmp_path: Path) -> AsyncIterator[aiosqlite.Connection]:
-    db = CacheDb(tmp_path / "cache.sqlite3")
-    conn = await db.connect()
-    yield conn
-    await db.close()
-
-
-class _FixedClock:
-    def __init__(self, now: datetime) -> None:
-        self._now = now
-
-    def now(self) -> datetime:
-        return self._now
+from tests.support.fake_clock import FakeClock
 
 
 def _fake_roles() -> MagicMock:
@@ -56,7 +37,7 @@ def _service(
         ProgressionRepository(connection),
         progression_state,
         roles,
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
     return service, players, progression_state
 

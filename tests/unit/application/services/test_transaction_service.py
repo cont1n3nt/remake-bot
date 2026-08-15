@@ -7,13 +7,10 @@ orchestration.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import aiosqlite
-import pytest_asyncio
 
 from stalbot.application.dto.transaction_request import AddTransactionRequest
 from stalbot.application.services.transactions import TransactionService
@@ -21,30 +18,14 @@ from stalbot.domain.entities.player_progression import PlayerProgressionRecord
 from stalbot.domain.enums import DealSource, DealType, OccurredAtKind
 from stalbot.domain.nick import NormalizedNick
 from stalbot.domain.progression.calculator import deal_reward
-from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.deals import DealsRepository
 from stalbot.infrastructure.cache.repositories.idempotency import IdempotencyRepository
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.infrastructure.cache.repositories.progression import ProgressionRepository
+from tests.support.fake_clock import FakeClock
 
 
-@pytest_asyncio.fixture
-async def connection(tmp_path: Path) -> AsyncIterator[aiosqlite.Connection]:
-    db = CacheDb(tmp_path / "cache.sqlite3")
-    conn = await db.connect()
-    yield conn
-    await db.close()
-
-
-class _FixedClock:
-    def __init__(self, now: datetime) -> None:
-        self.current = now
-
-    def now(self) -> datetime:
-        return self.current
-
-
-def _service(connection: aiosqlite.Connection, *, clock: _FixedClock) -> TransactionService:
+def _service(connection: aiosqlite.Connection, *, clock: FakeClock) -> TransactionService:
     return TransactionService(
         PlayersRepository(connection),
         DealsRepository(connection),
@@ -71,7 +52,7 @@ def _request(**overrides: object) -> AddTransactionRequest:
 async def test_register_inserts_a_deal_with_the_computed_reward(
     connection: aiosqlite.Connection,
 ) -> None:
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
 
     result = await service.register(_request())
@@ -82,7 +63,7 @@ async def test_register_inserts_a_deal_with_the_computed_reward(
     assert result.deal.coins == expected.coins
     assert result.deal.xp == expected.xp
     assert result.deal.deal_type is DealType.PURCHASE
-    assert result.deal.occurred_at == clock.current
+    assert result.deal.occurred_at == clock.now()
     assert result.deal.occurred_at_kind is OccurredAtKind.BOT
     assert result.deal.source is DealSource.ADD
     assert result.deal.recorded_by == 12345
@@ -94,7 +75,7 @@ async def test_register_inserts_a_deal_with_the_computed_reward(
 
 
 async def test_register_ticket_source_is_recorded(connection: aiosqlite.Connection) -> None:
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
 
     result = await service.register(_request(source=DealSource.TICKET))
@@ -105,7 +86,7 @@ async def test_register_ticket_source_is_recorded(connection: aiosqlite.Connecti
 async def test_register_rounds_fractional_amount_consistently(
     connection: aiosqlite.Connection,
 ) -> None:
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
 
     result = await service.register(_request(amount=Decimal("150.5")))
@@ -119,7 +100,7 @@ async def test_register_snapshots_rank_and_booster_at_deal_time(
     """A deal freezes the player's rank/booster status as it was *before* this
     deal — later rank changes must not retroactively alter it."""
     now = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
-    clock = _FixedClock(now)
+    clock = FakeClock(now)
     players = PlayersRepository(connection)
     progression = ProgressionRepository(connection)
 
@@ -151,7 +132,7 @@ async def test_register_snapshots_rank_and_booster_at_deal_time(
 
 
 async def test_register_is_idempotent_for_the_same_key(connection: aiosqlite.Connection) -> None:
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
     request = _request()
 
@@ -172,7 +153,7 @@ async def test_register_serializes_concurrent_calls_with_the_same_idempotency_ke
     connection: aiosqlite.Connection,
 ) -> None:
     """CLUSTER-1: two concurrent registrations for the same deal must not both write."""
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
     request = _request()
 
@@ -186,7 +167,7 @@ async def test_register_serializes_concurrent_calls_with_the_same_idempotency_ke
 async def test_register_writes_referrer_only_on_the_first_deal(
     connection: aiosqlite.Connection,
 ) -> None:
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
     players = PlayersRepository(connection)
 
@@ -208,7 +189,7 @@ async def test_register_writes_referrer_only_on_the_first_deal(
 async def test_register_recomputes_progression_for_player_and_referrer(
     connection: aiosqlite.Connection,
 ) -> None:
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
     players = PlayersRepository(connection)
     progression = ProgressionRepository(connection)
@@ -223,7 +204,7 @@ async def test_register_recomputes_progression_for_player_and_referrer(
 
 
 async def test_register_binds_an_unbound_discord_id(connection: aiosqlite.Connection) -> None:
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
 
     result = await service.register(_request(discord_id=999))
@@ -235,7 +216,7 @@ async def test_register_binds_an_unbound_discord_id(connection: aiosqlite.Connec
 
 
 async def test_register_does_not_rebind_without_force(connection: aiosqlite.Connection) -> None:
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
     await service.register(_request(idempotency_key="i1", discord_id=111))
 
@@ -250,7 +231,7 @@ async def test_register_does_not_rebind_without_force(connection: aiosqlite.Conn
 
 
 async def test_register_rebinds_when_forced(connection: aiosqlite.Connection) -> None:
-    clock = _FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
     service = _service(connection, clock=clock)
     await service.register(_request(idempotency_key="i1", discord_id=111))
 

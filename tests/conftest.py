@@ -1,4 +1,10 @@
-"""Shared fixtures for cache-layer tests: a real, migrated, on-disk SQLite connection."""
+"""Root fixtures shared across the whole test suite (sqlite_migration.md Часть XI).
+
+Collapses what used to be 8 line-for-line copies of `connection` across
+`tests/unit/application/services/test_{boost_orders,catalog,manual_grants,
+pricing,progression,tickets,transaction_service}.py` and
+`tests/unit/infrastructure/cache/conftest.py` into one place.
+"""
 
 from collections.abc import AsyncIterator
 from pathlib import Path
