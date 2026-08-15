@@ -14,7 +14,6 @@ from discord import app_commands
 
 from stalbot.domain.errors import (
     AmountParseError,
-    CacheStaleError,
     DeadlineParseError,
     DomainError,
     DuplicateItemError,
@@ -25,8 +24,6 @@ from stalbot.domain.errors import (
     NoTransactionsYetError,
     PlayerNotFoundError,
     ProfileAccessDeniedError,
-    SheetsUnavailableError,
-    SheetsWriteConflictError,
     StalbotError,
     TicketSessionNotFoundError,
 )
@@ -57,9 +54,6 @@ _DOMAIN_MESSAGES: dict[type[StalbotError], str] = {
     TicketSessionNotFoundError: (
         "Тикет не найден или ещё не инициализирован. Обратитесь к администратору."
     ),
-    SheetsUnavailableError: "Google Таблица временно недоступна, попробуйте позже.",
-    SheetsWriteConflictError: "Не удалось подтвердить запись, попробуйте ещё раз.",
-    CacheStaleError: "Данные устарели, попробуйте ещё раз через несколько секунд.",
 }
 
 _PERMISSION_DENIED_MESSAGE = "Недостаточно прав для этого действия."
@@ -83,9 +77,9 @@ def _resolve_cause_message(cause: BaseException | None, trace_id: str) -> str:
             # safe to surface directly even when not explicitly mapped above.
             return str(cause) or "Произошла ошибка."
         # Anything else (InfrastructureError and any future StalbotError not
-        # rooted in DomainError) may carry internal details — sheet/column
-        # names, header diffs — that must never reach Discord. Log it under
-        # the trace id shown to the user instead of leaking `str(cause)`.
+        # rooted in DomainError) may carry internal details — SQL, table/column
+        # names — that must never reach Discord. Log it under the trace id
+        # shown to the user instead of leaking `str(cause)`.
         logger.warning("infrastructure error (trace %s): %s", trace_id, cause, exc_info=cause)
         return f"Внутренняя ошибка, обратитесь к администратору. Trace: `{trace_id}`"
 

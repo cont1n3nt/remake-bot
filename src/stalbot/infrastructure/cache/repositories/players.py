@@ -151,6 +151,32 @@ class PlayersRepository:
                 (discord_id, now.isoformat(), player_id),
             )
 
+    async def bind_discord(
+        self, nick: NormalizedNick, discord_id: int, *, force: bool, now: datetime
+    ) -> bool:
+        """Bind `discord_id` to `nick`'s player row, unless already bound elsewhere.
+
+        Args:
+            nick: Normalized nick to bind.
+            discord_id: Discord id to bind it to.
+            force: Overwrite an existing different binding instead of no-op'ing.
+            now: Timestamp for `updated_at`.
+
+        Returns:
+            `True` if a write happened, `False` if the nick has no player row
+            yet, is already bound to `discord_id`, or is bound to someone else
+            and `force` is not set.
+        """
+        player = await self.get_by_nick(nick)
+        if player is None or player.discord_id == discord_id:
+            return False
+        if player.discord_id is not None and not force:
+            return False
+
+        assert player.id is not None  # noqa: S101 - a fetched player always has a persisted id
+        await self.set_discord_id(player.id, discord_id, now=now)
+        return True
+
     async def set_referrer(
         self, player_id: int, referrer_player_id: int | None, *, now: datetime
     ) -> None:

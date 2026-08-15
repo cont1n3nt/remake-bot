@@ -20,7 +20,6 @@ from stalbot.application.dto.manual_grant import SetRankResult, SetReferralResul
 from stalbot.application.dto.progression_state import ProgressionState
 from stalbot.application.ports.clock import Clock
 from stalbot.application.ports.role_gateway import RoleGateway, RoleSet
-from stalbot.application.services.binding import bind_discord
 from stalbot.domain.nick import NormalizedNick, normalize_nick
 from stalbot.domain.progression.ranks import RankLadder, RankTier
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
@@ -108,11 +107,9 @@ class ManualGrantService:
         await self._players.set_referrer(player.id, referrer.id, now=now)
         await self._progression.recompute([player.id, referrer.id], now=now)
 
-        player_bound = await bind_discord(
-            self._players, self._clock, nick_norm, discord_id, force=False
-        )
-        referrer_bound = await bind_discord(
-            self._players, self._clock, referrer_norm, referrer_discord_id, force=False
+        player_bound = await self._players.bind_discord(nick_norm, discord_id, force=False, now=now)
+        referrer_bound = await self._players.bind_discord(
+            referrer_norm, referrer_discord_id, force=False, now=now
         )
 
         return SetReferralResult(

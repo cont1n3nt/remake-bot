@@ -22,7 +22,9 @@ What this does, in order:
 6. Run a full `ProgressionRepository.recompute()` so every player's
    Coins/XP/rank/referral-role is materialized immediately after import.
 
-Only `_to_bool`/`_to_decimal`/`_to_int_strict` are reused from `sync.py` —
+`_to_bool`/`_to_decimal`/`_to_int_strict` below were originally shared with
+the now-removed `infrastructure/cache/sync.py` (Э9); they live here now,
+since this importer is the only thing left that needs them.
 `_parse_ticket_row`'s "drop rows without a real date" behavior is exactly
 the bug Э0/Э1 exist to fix, so this importer's date handling is new, not
 reused (§VII).
@@ -34,18 +36,20 @@ import argparse
 import asyncio
 import csv
 import logging
+import math
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Final
 
 from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.entities.deal import Deal
 from stalbot.domain.enums import DealSource, DealType, ItemCategory, OccurredAtKind
-from stalbot.domain.money import Rub, to_storage
+from stalbot.domain.errors import AmountParseError
+from stalbot.domain.money import Rub, parse_amount, to_storage
 from stalbot.domain.nick import NormalizedNick, normalize_nick
 from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
@@ -53,9 +57,68 @@ from stalbot.infrastructure.cache.repositories.deals import DealsRepository
 from stalbot.infrastructure.cache.repositories.items import normalize_item_name
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.infrastructure.cache.repositories.progression import ProgressionRepository
-from stalbot.infrastructure.cache.sync import _to_bool, _to_decimal, _to_int_strict
 
 logger = logging.getLogger(__name__)
+
+_TRUTHY_STRINGS: Final = frozenset({"true", "1", "yes", "да", "истина"})
+
+
+def _to_bool(value: object) -> bool:
+    """Coerce a checkbox-column cell (`purchase`/`sale`/`is_booster`) to `bool`.
+
+    A manually typed cell — e.g. the literal text `"FALSE"` — comes back as
+    a non-empty string, and Python's own `bool("FALSE")` is `True`. Only a
+    real `bool` or a recognized truthy string counts as `True`; every other
+    string is `False`.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY_STRINGS
+    return bool(value)
+
+
+def _to_decimal(value: object) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        pass
+    # A cell typed/pasted by hand can carry the same messy formatting
+    # `parse_amount` already tolerates for Discord input (thousands-separator
+    # spaces, a trailing "₽") — fall back to it before giving up, instead of
+    # silently dropping the whole row.
+    try:
+        return parse_amount(str(value))
+    except AmountParseError:
+        return None
+
+
+def _to_int_strict(value: object) -> int | None:
+    """Coerce a cell to `int`, returning `None` if a non-empty value fails to parse.
+
+    Used only for `coins`/`xp`: those are financially meaningful values, and
+    an "anything unparseable is 0" fallback would make genuine data
+    corruption indistinguishable from a real zero everywhere downstream. An
+    empty cell is still `0`.
+    """
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if math.isfinite(value) else None
+    if isinstance(value, str):
+        try:
+            parsed = float(value)
+        except ValueError:
+            return None
+        return int(parsed) if math.isfinite(parsed) else None
+    return None
+
 
 #: Owner-confirmed lower bound for the interpolated backlog (§I.3): the
 #: 26.06.2026-27.07.2026 deals are in row order, but none has a real

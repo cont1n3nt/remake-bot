@@ -9,7 +9,6 @@ builds this once per sync, since it reads that block too).
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
 from decimal import Decimal
 
 import aiosqlite
@@ -123,37 +122,6 @@ class UsersCacheRepository:
         row = await cursor.fetchone()
         return row["nick_display"] if row is not None else None
 
-    async def last_synced_at(self) -> datetime | None:
-        """Return the most recent `synced_at` across all cached users.
-
-        Used to decide whether the cache is stale enough to warrant an
-        inline refresh before answering a read (PLAN.md §8.2).
-        """
-        cursor = await self._conn.execute("SELECT MAX(synced_at) AS ts FROM users")
-        row = await cursor.fetchone()
-        value = row["ts"] if row is not None else None
-        return datetime.fromisoformat(value) if value is not None else None
-
-    async def replace_all(
-        self,
-        profiles: Sequence[UserProfile],
-        *,
-        nick_displays: Mapping[NormalizedNick, str],
-        synced_at: str,
-    ) -> None:
-        """Atomically replace the entire cached user base (full sync).
-
-        Args:
-            profiles: The complete, current user base read from Sheets.
-            nick_displays: `nick_norm -> original-case nick`, resolved from
-                the Тикеты block. A profile missing from this map falls
-                back to its own (lower-case) nick.
-            synced_at: ISO timestamp to stamp every row with.
-        """
-        async with transaction(self._conn):
-            await self._conn.execute("DELETE FROM users")
-            await self._upsert_many(profiles, nick_displays=nick_displays, synced_at=synced_at)
-
     async def upsert_many(
         self,
         profiles: Sequence[UserProfile],
@@ -165,7 +133,9 @@ class UsersCacheRepository:
 
         Args:
             profiles: Profiles to upsert.
-            nick_displays: See `replace_all`.
+            nick_displays: `nick_norm -> original-case nick`, resolved from
+                the Тикеты block. A profile missing from this map falls
+                back to its own (lower-case) nick.
             synced_at: ISO timestamp to stamp every row with.
         """
         async with transaction(self._conn):

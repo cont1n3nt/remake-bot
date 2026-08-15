@@ -16,7 +16,6 @@ from stalbot.application.dto.transaction_request import (
     TransactionRegistrationResult,
 )
 from stalbot.application.ports.clock import Clock
-from stalbot.application.services.binding import bind_discord
 from stalbot.domain.entities.deal import Deal
 from stalbot.domain.enums import OccurredAtKind
 from stalbot.domain.money import to_storage
@@ -138,8 +137,8 @@ class TransactionService:
         recompute_ids = {player.id} | ({referrer_player_id} if referrer_player_id else set())
         await self._progression.recompute(list(recompute_ids), now=now)
 
-        discord_bound = await bind_discord(
-            self._players, self._clock, nick, request.discord_id, force=request.force_rebind
+        discord_bound = await self._players.bind_discord(
+            nick, request.discord_id, force=request.force_rebind, now=now
         )
 
         return TransactionRegistrationResult(

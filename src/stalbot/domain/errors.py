@@ -76,33 +76,8 @@ class TicketSessionNotFoundError(DomainError):
 
 
 class InfrastructureError(StalbotError):
-    """Failure talking to an external system (Sheets, cache, Discord)."""
+    """Failure talking to an external system (cache, Discord)."""
 
 
-class SheetsUnavailableError(InfrastructureError):
-    """The Google Sheets API stayed unreachable after all retries."""
-
-
-class SheetsWriteConflictError(InfrastructureError):
-    """A read-back verification after a write did not match what was sent."""
-
-
-class CacheStaleError(InfrastructureError):
-    """Cached data is older than the configured staleness threshold."""
-
-
-class ProtectedRangeWriteError(InfrastructureError):
-    """Code attempted to write a formula-owned Sheets column.
-
-    Raised by `infrastructure.sheets.protection` before any network call is
-    made, so a bug can never overwrite a formula (see PLAN.md §7.3).
-    """
-
-
-class SheetStructureError(InfrastructureError):
-    """The spreadsheet's sheets/headers do not match what the bot expects.
-
-    Raised at startup and on each full sync (PLAN.md §16: "Ручные правки
-    таблицы ломают структуру" — the bot refuses to run against a sheet whose
-    layout it can no longer trust).
-    """
+class DatabaseError(InfrastructureError):
+    """The SQLite cache failed in a way the caller should surface to the user."""

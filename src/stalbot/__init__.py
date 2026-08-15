@@ -1,1 +1,1 @@
-"""Discord bot for Stalcraft (Stalzone) x Google Sheets."""
+"""Discord bot for Stalcraft (Stalzone)."""
