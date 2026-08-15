@@ -7,10 +7,9 @@ credentials/
 *credentials*.json
 *service_account*.json
 
-# === Сырые выгрузки Sheets (Э0, sqlite_migration.md §VI.1) ===
-# Живые данные игроков в родном формате — калибровочный вход для
-# scripts/export_sheet_snapshot.py, не артефакт плана. Коммитятся только
-# производные CSV/JSON в tests/fixtures/sheet_snapshot_*/.
+# === Живые выгрузки Google-таблиц ===
+# Реальные данные игроков в родном формате, скачанные вручную владельцем
+# («Файл → Скачать → .xlsx») — никогда не коммитить.
 /СКУПКА.xlsx
 /убежка.xlsx
 

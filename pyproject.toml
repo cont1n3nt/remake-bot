@@ -1,29 +1,22 @@
 [project]
 name = "stalbot"
 version = "0.1.0"
-description = "Discord-бот для Stalcraft (Stalzone) × Google Sheets"
+description = "Discord-бот для Stalcraft (Stalzone)"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
 dependencies = [
     "discord-py==2.7.1",
-    "gspread==6.2.1",
-    "google-auth==2.56.2",
     "aiosqlite==0.22.1",
     "pydantic-settings==2.14.2",
     "structlog==26.1.0",
+    "Pillow>=10.4",
 ]
 
 [project.optional-dependencies]
 ocr = [
     "opencv-python>=4.10",
-    "Pillow>=10.4",
     "pytesseract>=0.3",
-]
-# scripts/export_sheet_snapshot.py: XlsxRangeReader (Э0, sqlite_migration.md
-# §VI.1) reads .xlsx workbooks downloaded as a live-Sheets fallback.
-migration = [
-    "openpyxl>=3.1",
 ]
 dev = [
     "ruff==0.16.1",
@@ -33,7 +26,6 @@ dev = [
     "pytest-cov==7.1.0",
     "hypothesis==6.164.0",
     "pre-commit==4.6.1",
-    "types-openpyxl>=3.1",
 ]
 
 [project.scripts]
@@ -91,15 +83,9 @@ ignore = [
 # User-facing Russian error messages are the actual UI content.
 "src/stalbot/presentation/errors.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/presentation/test_errors.py" = ["RUF001", "RUF002", "RUF003"]
-# Sheet/column names and header text are literal spreadsheet content in Russian.
-"src/stalbot/infrastructure/sheets/layouts.py" = ["RUF001", "RUF002", "RUF003"]
-"tests/unit/infrastructure/sheets/test_layouts.py" = ["RUF001", "RUF002", "RUF003"]
-"tests/unit/infrastructure/sheets/test_protection.py" = ["RUF001", "RUF002", "RUF003"]
-"tests/unit/infrastructure/sheets/test_client.py" = ["RUF001", "RUF002", "RUF003"]
 # Item names, sheet cell content, ranks and referral-role labels in test
 # fixtures are literal Russian data mirroring the real spreadsheet.
 "tests/unit/infrastructure/cache/**" = ["RUF001", "RUF002", "RUF003"]
-"src/stalbot/infrastructure/cache/sync.py" = ["RUF001", "RUF002", "RUF003"]
 # Rank/referral-role labels and perk copy are literal Russian UI content;
 # the docstring quotes PLAN.md verbatim.
 "src/stalbot/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
@@ -125,7 +111,6 @@ ignore = [
 "src/stalbot/presentation/views/logs_pager.py" = ["RUF001", "RUF002", "RUF003"]
 # sqlite_migration.md Э0: docstrings/log messages quote sheet names and
 # migration-plan prose verbatim in Russian.
-"scripts/export_sheet_snapshot.py" = ["RUF001", "RUF002", "RUF003"]
 "scripts/import_from_sheets.py" = ["RUF001", "RUF002", "RUF003"]
 "scripts/import_shelter.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/scripts/**" = ["RUF001", "RUF002", "RUF003"]
@@ -155,7 +140,7 @@ files = ["src", "tests", "scripts"]
 plugins = []
 
 [[tool.mypy.overrides]]
-module = ["gspread.*", "aiosqlite.*", "google.oauth2.*"]
+module = ["aiosqlite.*"]
 ignore_missing_imports = true
 
 # --- pytest / coverage ------------------------------------------------------
