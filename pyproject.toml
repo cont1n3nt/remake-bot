@@ -114,6 +114,7 @@ ignore = [
 "scripts/import_from_sheets.py" = ["RUF001", "RUF002", "RUF003"]
 "scripts/import_shelter.py" = ["RUF001", "RUF002", "RUF003"]
 "scripts/fix_shelter_bridge_mismatches.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/add_missing_shelter_items.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/scripts/**" = ["RUF001", "RUF002", "RUF003"]
 # CSV header text is literal spreadsheet content in Russian (§VI.1).
 "tests/support/sheet_snapshot.py" = ["RUF001", "RUF002", "RUF003"]
