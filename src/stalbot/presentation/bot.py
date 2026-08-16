@@ -15,6 +15,7 @@ from stalbot.application.services.boost_orders import BoostOrderService
 from stalbot.application.services.catalog import CatalogService
 from stalbot.application.services.health import HealthService
 from stalbot.application.services.manual_grants import ManualGrantService
+from stalbot.application.services.posters import PosterService
 from stalbot.application.services.pricing import PricingService
 from stalbot.application.services.profile import ProfileService
 from stalbot.application.services.progression import ProgressionService
@@ -44,9 +45,11 @@ from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.infrastructure.discord.role_gateway import DiscordRoleGateway
 from stalbot.infrastructure.logging.trace import current_trace_id, new_trace_id, set_trace_id
 from stalbot.infrastructure.ocr.null import NullOcrGateway
+from stalbot.infrastructure.posters.pillow_renderer import PillowRenderer
 from stalbot.presentation.cogs.catalog import CatalogCog
 from stalbot.presentation.cogs.health import HealthCog
 from stalbot.presentation.cogs.manual import ManualCog
+from stalbot.presentation.cogs.posters import PostersCog
 from stalbot.presentation.cogs.pricing import PricingCog
 from stalbot.presentation.cogs.profile import ProfileCog
 from stalbot.presentation.cogs.purchase_calculator import PurchaseCalculatorCog
@@ -192,6 +195,7 @@ class StalbotBot(commands.Bot):
         await self.add_cog(
             PricingCog(pricing_service, catalog_items_repo, self.embed_factory, self.settings)
         )
+        await self.add_cog(PostersCog(PosterService(catalog_items_repo), PillowRenderer()))
 
         stats_service = StatsService(deals_repo, players_repo)
         await self.add_cog(StatsCog(stats_service, deals_repo, players_repo, self.embed_factory))
