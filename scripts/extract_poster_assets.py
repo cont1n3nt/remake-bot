@@ -178,7 +178,14 @@ class _ExtractedItem:
 
 @dataclass(frozen=True, slots=True)
 class _ExtractedSheet:
-    logo_bytes: bytes | None
+    logo_candidates: list[bytes]
+    """Anchors with no adjacent name/price text — decorative, not items.
+
+    Not necessarily *the* logo: a sheet can have more than one orphaned
+    icon with no text next to it for unrelated reasons. `run()` picks
+    whichever image recurs across the most sheets as the real logo — it's
+    the one thing intentionally duplicated across all three.
+    """
     sections: list[tuple[str | None, list[_ExtractedItem]]]
 
 
@@ -191,7 +198,14 @@ def _extract_sheet(
 ) -> _ExtractedSheet:
     anchors = _drawing_anchors(zf, sheet_xml_path)
 
-    section_headers: dict[int, str] = {}
+    # Section headers sit several *side by side* in one row (e.g. row 3:
+    # "Кулинария" at column B, "Самогоноварение" at F, "Медицина" at J) —
+    # keying only by row (as an earlier version of this script did) makes
+    # later columns silently overwrite earlier ones in the same row,
+    # merging every section before the next header row into one. Keyed by
+    # (row, col) instead, resolved by nearest-header-row-above, then
+    # nearest-header-column-at-or-left-of the item within that row.
+    section_headers: list[tuple[int, int, str]] = []
     if has_sections:
         for row_cells in ws.iter_rows():
             for cell in row_cells:
@@ -199,17 +213,23 @@ def _extract_sheet(
                     continue
                 fill = cell.fill.fgColor.rgb if cell.fill and cell.fill.fgColor else None
                 if isinstance(fill, str) and fill == _SECTION_FILL and cell.column > 1:
-                    section_headers[cell.row] = str(cell.value)
+                    section_headers.append((cell.row, cell.column, str(cell.value)))
 
-    def _section_for_row(row_1indexed: int) -> str | None:
+    def _section_for(row_1indexed: int, col_1indexed: int) -> str | None:
         if not section_headers:
             return None
-        applicable = [r for r in section_headers if r < row_1indexed]
-        return section_headers[max(applicable)] if applicable else None
+        header_rows = sorted({r for r, _c, _n in section_headers if r < row_1indexed})
+        if not header_rows:
+            return None
+        block_row = header_rows[-1]
+        candidates = [(c, n) for r, c, n in section_headers if r == block_row and c <= col_1indexed]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda pair: pair[0])[1]
 
     items_by_section: dict[str | None, list[_ExtractedItem]] = {}
     order: list[str | None] = []
-    logo_bytes: bytes | None = None
+    logo_candidates: list[bytes] = []
 
     for anchor in sorted(anchors, key=lambda a: (a.col, a.row)):
         name_cell = ws.cell(row=anchor.row + 2, column=anchor.col + 3)
@@ -217,14 +237,13 @@ def _extract_sheet(
         image_bytes = zf.read(anchor.media_path)
 
         if name_cell.value is None and price_cell.value is None:
-            if logo_bytes is None:
-                logo_bytes = image_bytes
+            logo_candidates.append(image_bytes)
             continue
 
         name = str(name_cell.value).strip()
         if not name:
             continue
-        section = _section_for_row(anchor.row + 2) if has_sections else None
+        section = _section_for(anchor.row + 2, anchor.col + 3) if has_sections else None
         if section not in items_by_section:
             items_by_section[section] = []
             order.append(section)
@@ -233,7 +252,7 @@ def _extract_sheet(
         )
 
     sections = [(s, items_by_section[s]) for s in order]
-    return _ExtractedSheet(logo_bytes=logo_bytes, sections=sections)
+    return _ExtractedSheet(logo_candidates=logo_candidates, sections=sections)
 
 
 _KIND_BY_SHEET = {
@@ -261,7 +280,6 @@ def run(xlsx_path: Path, assets_dir: Path) -> tuple[dict[str, int], list[str]]:
 
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     counts: dict[str, int] = {}
-    logo_saved = False
 
     # Content-hash -> already-written icon filename, so the same item's
     # icon (reused across sheets) isn't written twice under two names.
@@ -277,17 +295,34 @@ def run(xlsx_path: Path, assets_dir: Path) -> tuple[dict[str, int], list[str]]:
     with zipfile.ZipFile(xlsx_path) as zf:
         sheet_xml_by_name = _sheet_name_to_xml(zf)
 
-        for sheet_name, has_sections in _TARGET_SHEETS:
-            kind = _KIND_BY_SHEET[sheet_name]
-            ws = wb[sheet_name]
-            extracted = _extract_sheet(
-                zf, ws, sheet_xml_by_name[sheet_name], has_sections=has_sections
+        extracted_by_sheet = {
+            sheet_name: _extract_sheet(
+                zf, wb[sheet_name], sheet_xml_by_name[sheet_name], has_sections=has_sections
             )
+            for sheet_name, has_sections in _TARGET_SHEETS
+        }
 
-            if not logo_saved and extracted.logo_bytes is not None:
-                logo = Image.open(io.BytesIO(extracted.logo_bytes)).convert("RGBA")
-                logo.save(assets_dir / "logo.png")
-                logo_saved = True
+        # The real logo is the one image reused across the most sheets —
+        # a genuinely orphaned icon (no text next to it, but not the logo)
+        # only ever shows up on one sheet.
+        logo_digest_counts: dict[str, int] = {}
+        logo_digest_bytes: dict[str, bytes] = {}
+        for extracted in extracted_by_sheet.values():
+            seen_this_sheet: set[str] = set()
+            for candidate in extracted.logo_candidates:
+                digest = hashlib.sha256(candidate).hexdigest()
+                logo_digest_bytes[digest] = candidate
+                if digest not in seen_this_sheet:
+                    logo_digest_counts[digest] = logo_digest_counts.get(digest, 0) + 1
+                    seen_this_sheet.add(digest)
+        if logo_digest_counts:
+            best_digest = max(logo_digest_counts, key=lambda d: logo_digest_counts[d])
+            logo = Image.open(io.BytesIO(logo_digest_bytes[best_digest])).convert("RGBA")
+            logo.save(assets_dir / "logo.png")
+
+        for sheet_name, _has_sections in _TARGET_SHEETS:
+            kind = _KIND_BY_SHEET[sheet_name]
+            extracted = extracted_by_sheet[sheet_name]
 
             layout_sections = []
             item_count = 0

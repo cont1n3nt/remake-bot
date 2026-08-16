@@ -79,6 +79,8 @@ ignore = [
 # Russian embed titles and the ℹ️ emoji glyph are the actual UI content.
 "src/stalbot/presentation/embeds/palette.py" = ["RUF001", "RUF002", "RUF003"]
 "src/stalbot/presentation/embeds/factory.py" = ["RUF001", "RUF002", "RUF003"]
+# Poster prices are rendered in Cyrillic ("р." — Comic Relief has no ₽ glyph).
+"src/stalbot/application/services/posters.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/presentation/embeds/test_factory.py" = ["RUF001", "RUF002", "RUF003"]
 # User-facing Russian error messages are the actual UI content.
 "src/stalbot/presentation/errors.py" = ["RUF001", "RUF002", "RUF003"]

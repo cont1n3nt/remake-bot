@@ -20,6 +20,21 @@ class ItemCategory(StrEnum):
     BOOST = "boost"
 
 
+class PosterKind(StrEnum):
+    """Which of the three `/poster` layouts to render (Часть IX, Э11).
+
+    Matches `scripts/extract_poster_assets.py`'s `_KIND_BY_SHEET` values —
+    the layout JSON filenames are `layout_<value>.json`. `RESOURCES` and
+    `BOOST_PURCHASES` both price against `ItemCategory.RESOURCE` (the bot
+    buying side, §I.5) — `BOOST_PURCHASES` is just a curated subset of that
+    same category (finished boost items bought back from players).
+    """
+
+    RESOURCES = "resources"
+    BOOSTS = "boosts"
+    BOOST_PURCHASES = "boost_purchases"
+
+
 class TicketKind(StrEnum):
     """Which of the three tracked ticket categories a channel belongs to."""
 

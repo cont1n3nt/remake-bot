@@ -1,7 +1,7 @@
 {
   "sections": [
     {
-      "name": "Медицина",
+      "name": "Кулинария",
       "items": [
         {
           "name": "Уха",
@@ -27,7 +27,52 @@
           "name": "Заливное",
           "name_norm": "заливное",
           "icon": "icons/заливное.png"
+        }
+      ]
+    },
+    {
+      "name": "Пиротехника",
+      "items": [
+        {
+          "name": "Подорожник",
+          "name_norm": "подорожник",
+          "icon": "icons/подорожник.png"
         },
+        {
+          "name": "Напалм",
+          "name_norm": "напалм",
+          "icon": "icons/напалм.png"
+        },
+        {
+          "name": "Вонючка",
+          "name_norm": "вонючка",
+          "icon": "icons/вонючка.png"
+        },
+        {
+          "name": "Гром",
+          "name_norm": "гром",
+          "icon": "icons/гром.png"
+        },
+        {
+          "name": "Завеса",
+          "name_norm": "завеса",
+          "icon": "icons/завеса.png"
+        },
+        {
+          "name": "Искра",
+          "name_norm": "искра",
+          "icon": "icons/искра.png"
+        },
+        {
+          "name": "M18 Claymore",
+          "name_norm": "m18 claymore",
+          "icon": "icons/m18 claymore.png"
+        }
+      ]
+    },
+    {
+      "name": "Самогоноварение",
+      "items": [
         {
           "name": "Алкобык",
           "name_norm": "алкобык",
@@ -57,7 +102,42 @@
           "name": "Панацея",
           "name_norm": "панацея",
           "icon": "icons/панацея.png"
+        }
+      ]
+    },
+    {
+      "name": "Боеприпасы",
+      "items": [
+        {
+          "name": "Сумка 12.7 Easy Mode",
+          "name_norm": "сумка 12.7 easy mode",
+          "icon": "icons/сумка 12.7 easy mode.png"
         },
+        {
+          "name": "Сумка СБП",
+          "name_norm": "сумка сбп",
+          "icon": "icons/сумка сбп.png"
+        },
+        {
+          "name": "Сумка СЭП",
+          "name_norm": "сумка сэп",
+          "icon": "icons/сумка сэп.png"
+        },
+        {
+          "name": "Сумка Баррикад",
+          "name_norm": "сумка баррикад",
+          "icon": "icons/сумка баррикад.png"
+        },
+        {
+          "name": "Сумка 5.56 Прогрев",
+          "name_norm": "сумка 5.56 прогрев",
+          "icon": "icons/сумка 5.56 прогрев.png"
+        }
+      ]
+    },
+    {
+      "name": "Медицина",
+      "items": [
         {
           "name": "Астрикцин",
           "name_norm": "астрикцин",
@@ -123,66 +203,6 @@
     {
       "name": "Прочее",
       "items": [
-        {
-          "name": "Подорожник",
-          "name_norm": "подорожник",
-          "icon": "icons/подорожник.png"
-        },
-        {
-          "name": "Напалм",
-          "name_norm": "напалм",
-          "icon": "icons/напалм.png"
-        },
-        {
-          "name": "Вонючка",
-          "name_norm": "вонючка",
-          "icon": "icons/вонючка.png"
-        },
-        {
-          "name": "Гром",
-          "name_norm": "гром",
-          "icon": "icons/гром.png"
-        },
-        {
-          "name": "Завеса",
-          "name_norm": "завеса",
-          "icon": "icons/завеса.png"
-        },
-        {
-          "name": "Искра",
-          "name_norm": "искра",
-          "icon": "icons/искра.png"
-        },
-        {
-          "name": "M18 Claymore",
-          "name_norm": "m18 claymore",
-          "icon": "icons/m18 claymore.png"
-        },
-        {
-          "name": "Сумка 12.7 Easy Mode",
-          "name_norm": "сумка 12.7 easy mode",
-          "icon": "icons/сумка 12.7 easy mode.png"
-        },
-        {
-          "name": "Сумка СБП",
-          "name_norm": "сумка сбп",
-          "icon": "icons/сумка сбп.png"
-        },
-        {
-          "name": "Сумка СЭП",
-          "name_norm": "сумка сэп",
-          "icon": "icons/сумка сэп.png"
-        },
-        {
-          "name": "Сумка Баррикад",
-          "name_norm": "сумка баррикад",
-          "icon": "icons/сумка баррикад.png"
-        },
-        {
-          "name": "Сумка 5.56 Прогрев",
-          "name_norm": "сумка 5.56 прогрев",
-          "icon": "icons/сумка 5.56 прогрев.png"
-        },
         {
           "name": "Катализатор",
           "name_norm": "катализатор",
