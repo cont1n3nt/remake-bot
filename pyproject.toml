@@ -122,6 +122,9 @@ ignore = [
 "tests/support/sheet_snapshot.py" = ["RUF001", "RUF002", "RUF003"]
 # Item names in docstrings/fixtures are literal Russian catalog content.
 "tests/unit/application/services/test_catalog.py" = ["RUF001", "RUF002", "RUF003"]
+# Poster tests exercise real item names/prices in Cyrillic (Часть IX, Э11).
+"tests/unit/application/services/test_posters.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/infrastructure/posters/test_pillow_renderer.py" = ["RUF001", "RUF002", "RUF003"]
 # Э8's bulk-entry format ("Название xКоличество") and fixture item names are
 # literal Russian content the owner types by hand (sqlite_migration.md §I.9).
 "src/stalbot/application/services/boost_orders.py" = ["RUF001", "RUF002", "RUF003"]
