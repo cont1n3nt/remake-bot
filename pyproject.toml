@@ -142,7 +142,7 @@ files = ["src", "tests", "scripts"]
 plugins = []
 
 [[tool.mypy.overrides]]
-module = ["aiosqlite.*"]
+module = ["aiosqlite.*", "PIL.*"]
 ignore_missing_imports = true
 
 # --- pytest / coverage ------------------------------------------------------
