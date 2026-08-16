@@ -60,7 +60,8 @@ async def test_build_includes_a_seeded_item_that_is_in_the_real_layout(
     all_names = [slot.name for section in spec.sections for slot in section.slots]
     assert "Уха" in all_names
     slot = next(s for section in spec.sections for s in section.slots if s.name == "Уха")
-    assert slot.price_text == "3 000 р."
+    assert slot.price_text == "3 000 р."
+    assert " " not in slot.price_text
 
 
 async def test_build_skips_layout_items_missing_from_the_catalog(
@@ -86,7 +87,7 @@ async def test_build_uses_price_sell_for_boosts_and_price_buy_for_resources(
     spec = await service.build(PosterKind.BOOSTS)
 
     slot = next(s for section in spec.sections for s in section.slots if s.name == "Уха")
-    assert slot.price_text == "6 500 р."
+    assert slot.price_text == "6 500 р."
 
 
 async def test_build_title_matches_kind(connection: aiosqlite.Connection) -> None:

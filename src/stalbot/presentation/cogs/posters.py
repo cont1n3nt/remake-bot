@@ -49,5 +49,5 @@ class PostersCog(commands.Cog):
         kind = PosterKind(тип)
         spec = await self._posters.build(kind)
         png = self._renderer.render(spec)
-        file = discord.File(io.BytesIO(png), filename=f"{kind.value}.png")
+        file = discord.File(io.BytesIO(png), filename=f"{spec.title}.png")
         await interaction.followup.send(file=file)

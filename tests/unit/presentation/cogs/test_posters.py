@@ -18,7 +18,14 @@ from stalbot.presentation.cogs.posters import PostersCog
 
 
 def _spec() -> PosterSpec:
-    return PosterSpec(title="Продажа бустов", logo_path=Path("logo.png"), sections=())
+    return PosterSpec(
+        title="Продажа бустов",
+        logo_path=Path("logo.png"),
+        sections=(),
+        blocks_per_row=3,
+        logo_position=0,
+        logo_width=1,
+    )
 
 
 def _cog(*, posters: MagicMock | None = None, renderer: MagicMock | None = None) -> PostersCog:
@@ -51,7 +58,9 @@ async def test_poster_builds_and_posts_the_chosen_kind() -> None:
     interaction.followup.send.assert_awaited_once()
     file = interaction.followup.send.call_args.kwargs["file"]
     assert isinstance(file, discord.File)
-    assert file.filename == "boosts.png"
+    # Filename matches the poster's real title (e.g. "Скуп ресурсов.png"),
+    # not the internal PosterKind enum value.
+    assert file.filename == "Продажа бустов.png"
 
 
 async def test_poster_renders_the_spec_from_the_service() -> None:

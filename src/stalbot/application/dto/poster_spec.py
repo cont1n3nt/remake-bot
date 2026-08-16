@@ -25,6 +25,11 @@ class PosterSection:
 
     name: str | None
     slots: tuple[PosterSlot, ...]
+    columns: int = 1
+    """How many block-columns this section spans (layout JSON's per-section
+    `"columns"`, default 1). E.g. boosts' «Медицина» is 2 — one header bar
+    over two card columns, filled column-major (owner bug report, Э11),
+    rather than two separate single-column blocks."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,3 +39,18 @@ class PosterSpec:
     title: str
     logo_path: Path
     sections: tuple[PosterSection, ...]
+    blocks_per_row: int
+    """How many section-blocks sit side by side per row before wrapping —
+    kind-specific (boosts: 4, matching the reference sheet's 4-column
+    layout; boost_purchases: 3; resources: 10, matching its real column
+    count), set by `PosterService`."""
+    logo_position: int
+    """Index into `sections` the logo is inserted before when packing rows
+    (kind-specific — e.g. boosts places it right before the last section,
+    "Прочее"; resources/boost_purchases default to the midpoint), set by
+    `PosterService`."""
+    logo_width: int
+    """How many block-columns wide the logo's reserved cell is (kind-specific
+    — boosts: 1, matching its single-column-per-block reference layout;
+    resources/boost_purchases: 2, a "normal" visible size), set by
+    `PosterService`."""

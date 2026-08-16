@@ -29,6 +29,49 @@ _CATEGORY_BY_KIND: Final[dict[PosterKind, ItemCategory]] = {
     PosterKind.BOOST_PURCHASES: ItemCategory.RESOURCE,
 }
 
+#: How many section-blocks `PillowRenderer` places side by side per row.
+#: Boosts: 4, matching the reference sheet's 4-columns-by-2-rows layout
+#: (owner bug report, Э11 — «Медицина» is one section with `"columns": 2`
+#: in the layout JSON, filling out the row's other two column-widths).
+#: Boost_purchases: 3. Resources: 10 —
+#: its 160 items have no header row in the source sheet at all, but
+#: `extract_poster_assets.py` still sorts anchors by `(col, row)`, so
+#: `layout_resources.json`'s unnamed sections are the sheet's *real*
+#: columns, not an invented split.
+_BLOCKS_PER_ROW_BY_KIND: Final[dict[PosterKind, int]] = {
+    PosterKind.RESOURCES: 10,
+    PosterKind.BOOSTS: 4,
+    PosterKind.BOOST_PURCHASES: 3,
+}
+
+#: How wide (in block-columns) the logo's reserved cell is. Boosts/
+#: boost_purchases: 1 — both reference sheets place it as a single
+#: normal-width column between two of their blocks. Resources: 2, a
+#: "normal" visible size inline among its narrower single-column blocks.
+_LOGO_WIDTH_BY_KIND: Final[dict[PosterKind, int]] = {
+    PosterKind.RESOURCES: 2,
+    PosterKind.BOOSTS: 1,
+    PosterKind.BOOST_PURCHASES: 1,
+}
+
+#: Kinds whose logo goes right before the *last* section (owner bug
+#: report, Э11 — boosts: between «Боеприпасы» and «Прочее»; boost_purchases:
+#: between «Самогоноварение» and «Пиротехника», both matching the reference
+#: sheets' fixed section order) rather than the generic midpoint default.
+_LOGO_BEFORE_LAST_KINDS: Final = (PosterKind.BOOSTS, PosterKind.BOOST_PURCHASES)
+
+
+def _logo_position(kind: PosterKind, section_count: int) -> int:
+    """Where the logo is inserted into the section sequence before packing.
+
+    Computed from `section_count` rather than a fixed index since a section
+    can vanish entirely if every item in it lost its catalog price
+    (empty-slot rule).
+    """
+    if kind in _LOGO_BEFORE_LAST_KINDS:
+        return max(section_count - 1, 0)
+    return section_count // 2
+
 
 class PosterService:
     """Builds a `PosterSpec` for `PosterRenderer`, from frozen layout + live catalog prices."""
@@ -71,18 +114,33 @@ class PosterService:
                         name=entry["name"],
                         # "р.", not `format_amount`'s default "₽" — Comic
                         # Relief (the poster font, chosen for Cyrillic
-                        # support) has no glyph for U+20BD.
-                        price_text=f"{format_amount(price, currency=False)} р.",
+                        # support) has no glyph for U+20BD. Same reason the
+                        # thousands-separator narrow no-break space (U+202F)
+                        # from `format_amount` is swapped for a plain space
+                        # here: the font has no glyph for it either, so it
+                        # rendered as a tofu square between digit groups.
+                        price_text=(
+                            f"{format_amount(price, currency=False).replace(chr(0x202F), ' ')} р."
+                        ),
                         icon_path=_assets_dir() / entry["icon"],
                     )
                 )
             if slots:
-                sections.append(PosterSection(name=section["name"], slots=tuple(slots)))
+                sections.append(
+                    PosterSection(
+                        name=section["name"],
+                        slots=tuple(slots),
+                        columns=section.get("columns", 1),
+                    )
+                )
 
         return PosterSpec(
             title=_TITLE_BY_KIND[kind],
             logo_path=_assets_dir() / "logo.png",
             sections=tuple(sections),
+            blocks_per_row=_BLOCKS_PER_ROW_BY_KIND[kind],
+            logo_position=_logo_position(kind, len(sections)),
+            logo_width=_LOGO_WIDTH_BY_KIND[kind],
         )
 
 
