@@ -18,6 +18,7 @@ from stalbot.application.dto.transaction_request import (
 from stalbot.application.ports.clock import Clock
 from stalbot.domain.entities.deal import Deal
 from stalbot.domain.enums import OccurredAtKind
+from stalbot.domain.errors import DealNotFoundError
 from stalbot.domain.money import to_storage
 from stalbot.domain.nick import normalize_nick
 from stalbot.domain.progression.calculator import deal_reward
@@ -144,6 +145,38 @@ class TransactionService:
         return TransactionRegistrationResult(
             deal=deal, nick_display=request.nick, discord_bound=discord_bound
         )
+
+    async def get_deal(self, deal_id: int) -> Deal | None:
+        """Look up a deal by id — used by `/del_deal` to render a confirmation.
+
+        Args:
+            deal_id: The deal's `deals.id`.
+        """
+        return await self._deals.get_by_id(deal_id)
+
+    async def delete_deal(self, deal_id: int) -> Deal:
+        """Delete a deal and immediately recompute the affected player's progression.
+
+        Unlike `register()`, there is no idempotency concern — deleting an
+        already-deleted id simply raises `DealNotFoundError`, so a retried
+        call can't double-delete anything.
+
+        Args:
+            deal_id: The deal to remove (`/del_deal`, undoing a mis-entered `/add`).
+
+        Returns:
+            The deal as it was right before deletion, for the confirmation message.
+
+        Raises:
+            DealNotFoundError: No deal with this id exists.
+        """
+        deal = await self._deals.get_by_id(deal_id)
+        if deal is None:
+            raise DealNotFoundError(f"Сделка #{deal_id} не найдена.")
+
+        await self._deals.delete(deal_id)
+        await self._progression.recompute([deal.player_id], now=self._clock.now())
+        return deal
 
     async def _replay_if_seen(self, key: str) -> TransactionRegistrationResult | None:
         cached_id = await self._idempotency.get(key)

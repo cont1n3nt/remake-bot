@@ -15,6 +15,7 @@ from discord import app_commands
 from stalbot.domain.errors import (
     AmountParseError,
     DeadlineParseError,
+    DealNotFoundError,
     DomainError,
     DuplicateItemError,
     InvalidCategoryPriceError,
@@ -46,6 +47,7 @@ _DOMAIN_MESSAGES: dict[type[StalbotError], str] = {
     PlayerNotFoundError: "Игрок с таким ником не найден в базе.",
     ProfileAccessDeniedError: "Вы можете смотреть только свой профиль.",
     ItemNotFoundError: "Предмет не найден в базе.",
+    DealNotFoundError: "Сделка с таким ID не найдена.",
     DuplicateItemError: "Такой предмет уже есть в базе.",
     InvalidCategoryPriceError: (
         "У ресурса указывается только цена покупки, у буста — только цена продажи."

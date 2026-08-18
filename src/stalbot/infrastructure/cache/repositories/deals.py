@@ -63,6 +63,19 @@ class DealsRepository:
         row = await cursor.fetchone()
         return _row_to_deal(row) if row is not None else None
 
+    async def delete(self, deal_id: int) -> bool:
+        """Delete one deal by id (`/del_deal` — undoing a mis-entered `/add`).
+
+        Args:
+            deal_id: The deal's `deals.id`.
+
+        Returns:
+            Whether a row was actually deleted.
+        """
+        async with transaction(self._conn):
+            cursor = await self._conn.execute("DELETE FROM deals WHERE id = ?", (deal_id,))
+        return cursor.rowcount > 0
+
     async def for_player(self, player_id: int) -> Sequence[Deal]:
         """Return every deal for a player, oldest first.
 

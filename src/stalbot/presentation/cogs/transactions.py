@@ -12,6 +12,7 @@ from stalbot.application.services.progression import ProgressionService
 from stalbot.application.services.transactions import TransactionService
 from stalbot.config.settings import Settings
 from stalbot.domain.clock import format_datetime
+from stalbot.domain.entities.deal import Deal
 from stalbot.domain.enums import DealType
 from stalbot.domain.money import evaluate_amount, format_amount
 from stalbot.domain.nick import normalize_nick
@@ -136,6 +137,60 @@ class TransactionsCog(commands.Cog):
             interaction, result, deal_type, ник, discord_member, реферал_ник, warnings
         )
         await self._send_public_notice(interaction, ник)
+
+    @app_commands.command(name="del_deal", description="🛡️ [Админ] 🗑️ Удалить сделку по ID")
+    @app_commands.describe(ид="ID сделки (см. /logs)")
+    @admin_only()
+    async def del_deal(self, interaction: discord.Interaction, ид: int) -> None:
+        """Handle `/del_deal`: confirm, then delete a deal and resync progression."""
+        await interaction.response.defer(ephemeral=True)
+
+        deal = await self._transactions.get_deal(ид)
+        if deal is None:
+            embed = self._embeds.error("Ошибка", "Сделка с таким ID не найдена.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        player = await self._players.get_by_id(deal.player_id)
+        nick_display = player.nick_display if player is not None else str(deal.player_id)
+
+        confirmed = await self._confirm_delete(interaction, nick_display, deal)
+        if not confirmed:
+            embed = self._embeds.info("Отменено", "Сделка не была удалена.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        deleted = await self._transactions.delete_deal(ид)
+
+        channel = interaction.channel
+        if player is not None and isinstance(channel, discord.abc.Messageable):
+            await self._progression.sync([player.nick_norm], announce_to=channel)
+
+        lines = [
+            f"👤 Ник: {nick_display}",
+            f"📌 Тип: {_DEAL_TYPE_LABEL[deleted.deal_type]}",
+            f"💰 Сумма: {format_amount(deleted.amount)}",
+            f"🪙 Списано: {deleted.coins} Coins • ⚡ {deleted.xp} XP",
+            f"🕒 Дата сделки: {format_datetime(deleted.occurred_at)}",
+        ]
+        embed = self._embeds.success("🗑️ Сделка удалена", "\n".join(lines))
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _confirm_delete(
+        self, interaction: discord.Interaction, nick_display: str, deal: Deal
+    ) -> bool:
+        embed = self._embeds.warning(
+            "⚠️ Подтвердите удаление",
+            f"Удалить сделку #{deal.id}?\n"
+            f"👤 {nick_display} • {_DEAL_TYPE_LABEL[deal.deal_type]} • "
+            f"{format_amount(deal.amount)} • {deal.coins} Coins / {deal.xp} XP\n"
+            f"🕒 {format_datetime(deal.occurred_at)}",
+        )
+        view = ConfirmView(author_id=interaction.user.id)
+        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True, wait=True)
+        view.message = message
+        await view.wait()
+        return bool(view.confirmed)
 
     async def _confirm_rebind(
         self,

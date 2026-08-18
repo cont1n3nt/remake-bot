@@ -125,6 +125,26 @@ def _to_int_strict(value: object) -> int | None:
 #: recorded date, and this is when the backlog is known to start.
 _INTERPOLATION_START: Final = datetime(2026, 6, 26, 0, 0, tzinfo=UTC)
 _DATE_FORMAT: Final = "%d.%m.%y %H:%M"
+#: Manually typed `Дата` cells don't all follow the sheet's own `Д.М.ГГ
+#: ЧЧ:ММ` convention — some carry no time, some a 4-digit year, some
+#: seconds. Tried in order; the first one that parses wins.
+_DATE_FORMAT_FALLBACKS: Final[tuple[str, ...]] = (
+    _DATE_FORMAT,
+    "%d.%m.%y",
+    "%d.%m.%Y %H:%M:%S",
+    "%d.%m.%Y %H:%M",
+    "%d.%m.%Y",
+)
+
+
+def _parse_ticket_date(text: str) -> datetime:
+    """Parse a `Дата` cell, tolerating the hand-typed format variants above."""
+    for fmt in _DATE_FORMAT_FALLBACKS:
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    raise ValueError(f"time data {text!r} does not match any known ticket date format")
 
 #: §I.10 — opечатки исправляются at import; the bridge to убежка is by
 #: `shelter_item_id` (Э5), not by name, so renaming here doesn't break it.
@@ -218,7 +238,7 @@ def _assign_occurred_at(tickets: list[_TicketRow]) -> dict[int, tuple[datetime, 
     dated = sorted((r for r in real_rows if r.date_text), key=lambda r: r.sheet_row)
     if not dated:
         raise ValueError("no dated ticket rows found — cannot anchor the interpolation window")
-    window_end = datetime.strptime(dated[0].date_text, _DATE_FORMAT).replace(tzinfo=UTC)
+    window_end = _parse_ticket_date(dated[0].date_text)
 
     undated = sorted((r for r in real_rows if not r.date_text), key=lambda r: r.sheet_row)
     interval = (window_end - _INTERPOLATION_START) / len(undated) if undated else None
@@ -232,7 +252,7 @@ def _assign_occurred_at(tickets: list[_TicketRow]) -> dict[int, tuple[datetime, 
         )
     for row in real_rows:
         if row.date_text:
-            occurred_at = datetime.strptime(row.date_text, _DATE_FORMAT).replace(tzinfo=UTC)
+            occurred_at = _parse_ticket_date(row.date_text)
             result[row.sheet_row] = (occurred_at, OccurredAtKind.SHEET_TEXT)
     return result
 

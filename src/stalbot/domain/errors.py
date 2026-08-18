@@ -65,6 +65,10 @@ class InvalidPeriodError(DomainError):
     """A requested date/period range is invalid (e.g. end before start)."""
 
 
+class DealNotFoundError(DomainError):
+    """A lookup/delete by deal id found no matching row (`/del_deal`)."""
+
+
 class TicketSessionNotFoundError(DomainError):
     """A ticket-flow interaction fired for a channel with no tracked session.
 

@@ -192,7 +192,7 @@ def _format_log_line(entry: LogEntry) -> str:
     tag = f"<@{entry.discord_id}>" if entry.discord_id is not None else "—"
     approx = f"{_APPROXIMATE_DATE_MARKER} " if _is_approximate(deal.occurred_at_kind) else ""
     return (
-        f"#{entry.day_number} │ {approx}{format_datetime(deal.occurred_at)} │ "
+        f"#{entry.day_number} (ID: {deal.id}) │ {approx}{format_datetime(deal.occurred_at)} │ "
         f"{entry.nick_display} │ {tag} │ {_DEAL_LABELS[deal.deal_type]} │ "
         f"{format_amount(deal.amount)}"
     )
