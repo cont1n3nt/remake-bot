@@ -1,8 +1,10 @@
-"""Ad-hoc: Level A parity check against an arbitrary snapshot dir (not just
-`tests/fixtures/sheet_snapshot_2026-08-10`, which `test_sheet_parity.py`
-hardcodes). Verifies `compute_progression()` still matches the sheet's own
-K/L/M/N/O/P/R/S for every player in a fresh snapshot — same check, portable
-`--snapshot-dir`. Safe to delete after running; not part of the test suite.
+"""Ad-hoc: Level A parity check against an arbitrary snapshot dir.
+
+Not just `tests/fixtures/sheet_snapshot_2026-08-10`, which
+`test_sheet_parity.py` hardcodes. Verifies `compute_progression()` still
+matches the sheet's own K/L/M/N/O/P/R/S for every player in a fresh
+snapshot — same check, portable `--snapshot-dir`. Safe to delete after
+running; not part of the test suite.
 """
 
 from __future__ import annotations
@@ -10,11 +12,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from stalbot.domain.progression.calculator import compute_progression
 from tests.support.sheet_snapshot import build_legacy_aggregates, load_tickets, load_users
+
+from stalbot.domain.progression.calculator import compute_progression
 
 
 def main() -> None:
+    """Run the parity check against `--snapshot-dir` and print mismatches."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--snapshot-dir", type=Path, required=True)
     args = parser.parse_args()

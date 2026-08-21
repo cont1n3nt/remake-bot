@@ -53,6 +53,7 @@ _LOGO_RADIUS: Final = _px(16)
 _BLOCK_COLUMNS: Final = 1
 _BLOCK_GAP: Final = _px(20)
 
+
 @dataclass(frozen=True, slots=True)
 class _Logo:
     """Sentinel block standing in for the logo when packing rows.
@@ -206,9 +207,7 @@ class PillowRenderer:
         blocks_per_row = spec.blocks_per_row
         row_width = _cell_width_px(blocks_per_row)
 
-        block_rows = _pack_rows(
-            spec.sections, blocks_per_row, spec.logo_position, spec.logo_width
-        )
+        block_rows = _pack_rows(spec.sections, blocks_per_row, spec.logo_position, spec.logo_width)
         row_heights = [
             max(
                 (

@@ -26,6 +26,9 @@ dev = [
     "pytest-cov==7.1.0",
     "hypothesis==6.164.0",
     "pre-commit==4.6.1",
+    # scripts/extract_poster_assets.py (one-off asset extraction) only.
+    "openpyxl==3.1.5",
+    "types-openpyxl==3.1.5.20260807",
 ]
 
 [project.scripts]

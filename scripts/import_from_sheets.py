@@ -146,6 +146,7 @@ def _parse_ticket_date(text: str) -> datetime:
             continue
     raise ValueError(f"time data {text!r} does not match any known ticket date format")
 
+
 #: §I.10 — opечатки исправляются at import; the bridge to убежка is by
 #: `shelter_item_id` (Э5), not by name, so renaming here doesn't break it.
 _NAME_CORRECTIONS: Final[dict[str, str]] = {
