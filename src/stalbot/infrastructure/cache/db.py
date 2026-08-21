@@ -51,13 +51,21 @@ class CacheDb:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             connection = await aiosqlite.connect(self._path)
             connection.row_factory = aiosqlite.Row
-            # Integrity first: WAL mode itself writes to the file, and a
-            # genuinely corrupt file can fail that write before ever
-            # reaching quick_check's own result row.
-            await self._check_integrity(connection)
-            await self._configure_pragmas(connection)
+            try:
+                # Integrity first: WAL mode itself writes to the file, and a
+                # genuinely corrupt file can fail that write before ever
+                # reaching quick_check's own result row.
+                await self._check_integrity(connection)
+                await self._configure_pragmas(connection)
+                await self._migrate(connection)
+            except BaseException:
+                # aiosqlite spawns a non-daemon worker thread the moment
+                # connect() returns — leaving `connection` unclosed here
+                # would leak that thread forever, so a corrupt-file startup
+                # hangs on exit instead of failing loud (§X's whole point).
+                await connection.close()
+                raise
             self._connection = connection
-            await self._migrate(connection)
         return self._connection
 
     async def close(self) -> None:
