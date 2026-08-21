@@ -13,10 +13,10 @@ from discord.ext import commands
 
 from stalbot.application.services.catalog import CatalogService
 from stalbot.application.services.pricing import PricingService
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory
 from stalbot.domain.money import evaluate_amount, format_amount
-from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
+from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.presentation.autocomplete import item_choices
 from stalbot.presentation.checks import admin_only
@@ -37,7 +37,7 @@ class CatalogCog(commands.Cog):
         self,
         catalog: CatalogService,
         pricing: PricingService,
-        items: ItemsCacheRepository,
+        items: CatalogItemsRepository,
         emojis: EmojiResolver,
         embeds: EmbedFactory,
     ) -> None:
@@ -109,7 +109,7 @@ class CatalogCog(commands.Cog):
     @app_commands.describe(предмет="Название предмета")
     @admin_only()
     async def del_item(self, interaction: discord.Interaction, предмет: int) -> None:
-        """Handle `/del_item`: remove a catalog entry and renumber the block."""
+        """Handle `/del_item`: soft-delete a catalog entry."""
         await interaction.response.defer(ephemeral=True)
         result = await self._catalog.delete_item(предмет)
 
@@ -158,7 +158,7 @@ class CatalogCog(commands.Cog):
         file = discord.File(io.BytesIO(text.encode("utf-8-sig")), filename="price_list.txt")
         await interaction.followup.send(file=file, ephemeral=True)
 
-    def _build_price_pages(self, items: Sequence[Item]) -> list[discord.Embed]:
+    def _build_price_pages(self, items: Sequence[CatalogItem]) -> list[discord.Embed]:
         chunks = _chunk(items, _PRICE_LIST_PAGE_SIZE) or [()]
         pages: list[discord.Embed] = []
         for index, chunk in enumerate(chunks, start=1):
@@ -173,7 +173,7 @@ class CatalogCog(commands.Cog):
             pages.append(enforce_limits(embed))
         return pages
 
-    def _format_price_field(self, item: Item) -> tuple[str, str]:
+    def _format_price_field(self, item: CatalogItem) -> tuple[str, str]:
         emoji = self._emojis.resolve(item.emoji) or "•"
         lines = []
         if item.price_buy is not None:
@@ -264,7 +264,7 @@ class _PriceListView(AuthorLockedView):
         self.next_page.disabled = self._index >= page_count - 1
 
 
-def _item_summary_lines(item: Item) -> list[str]:
+def _item_summary_lines(item: CatalogItem) -> list[str]:
     buy = format_amount(item.price_buy) if item.price_buy is not None else "—"
     sell = format_amount(item.price_sell) if item.price_sell is not None else "—"
     lines = [

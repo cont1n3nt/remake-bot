@@ -1,7 +1,10 @@
 """`BoostOrderLine` — one item in an in-progress boost order draft (PLAN.md §8.1, §11.6).
 
 Has no Sheets counterpart. `item_name_norm`/`category` accompany `item_id`
-so a line survives `/del_item` renumbering the underlying catalog id (M6).
+so `CatalogService.delete_item` can prune every draft line referencing a
+removed item by name (`BoostOrderLinesRepository.delete_by_name`) without a
+join back to `catalog_items` — `item_id` itself is a stable surrogate
+(sqlite_migration.md §III.3) and never needs repointing.
 """
 
 from dataclasses import dataclass

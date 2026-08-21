@@ -1,8 +1,11 @@
 """Tests for `stalbot.presentation.cogs.pricing.PricingCog` (PLAN.md §10.6-§10.8).
 
-`PricingService`/`ItemsCacheRepository` are mocked — their own behavior is
+`PricingService`/`CatalogItemsRepository` are mocked — their own behavior is
 covered in `tests/unit/application/services/test_pricing.py`. This file is
 about whether the cog validates input, confirms imports, and reports right.
+
+sqlite_migration.md Э7: `/sync_prices` is gone along with the price sheets
+it used to push onto.
 """
 
 from datetime import UTC, datetime
@@ -16,26 +19,33 @@ from discord import app_commands
 
 from stalbot.application.dto.price_change import PriceChange
 from stalbot.application.dto.price_import import PriceImportIssue, PriceImportPlan
-from stalbot.application.dto.sync_prices_report import SyncPricesReport
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory, PriceField
+from stalbot.domain.money import Rub
 from stalbot.presentation.cogs.pricing import PricingCog
 from stalbot.presentation.embeds.factory import EmbedFactory
 
+_NOW = datetime(2026, 7, 31, 21, 45, tzinfo=UTC)
 
-def _item(**overrides: object) -> Item:
+
+def _item(**overrides: object) -> CatalogItem:
     defaults: dict[str, object] = {
         "id": 1,
         "name": "Хвост тушкана",
+        "name_norm": "хвост тушкана",
         "category": ItemCategory.RESOURCE,
-        "price_buy": Decimal(18000),
+        "section": None,
+        "price_buy": Rub(18000),
         "price_sell": None,
         "emoji": None,
+        "sort_order": 0,
+        "shelter_item_id": None,
+        "created_at": _NOW,
         "updated_at": None,
-        "row": 3,
+        "deleted_at": None,
     }
     defaults.update(overrides)
-    return Item(**defaults)  # type: ignore[arg-type]
+    return CatalogItem(**defaults)  # type: ignore[arg-type]
 
 
 def _change(**overrides: object) -> PriceChange:
@@ -54,14 +64,12 @@ def _change(**overrides: object) -> PriceChange:
 def _cog(
     *,
     set_price_result: PriceChange | None = None,
-    sync_report: SyncPricesReport | None = None,
-    all_items: list[Item] | None = None,
-    by_category: dict[ItemCategory, list[Item]] | None = None,
+    all_items: list[CatalogItem] | None = None,
+    by_category: dict[ItemCategory, list[CatalogItem]] | None = None,
     settings: MagicMock | None = None,
 ) -> tuple[PricingCog, MagicMock, MagicMock]:
     pricing = MagicMock()
     pricing.set_price = AsyncMock(return_value=set_price_result or _change())
-    pricing.sync_prices = AsyncMock(return_value=sync_report or SyncPricesReport())
     pricing.preview_import = AsyncMock(return_value=PriceImportPlan())
     pricing.apply_import = AsyncMock()
     items = MagicMock()
@@ -98,12 +106,12 @@ def _attachment(
 
 async def test_setprice_sets_buy_field_and_reports() -> None:
     cog, pricing, _items = _cog(set_price_result=_change())
-    interaction = _interaction()
+    interaction = _interaction(user_id=42)
 
     callback: Any = PricingCog.setprice.callback
     await callback(cog, interaction, 1, "19500")
 
-    pricing.set_price.assert_awaited_once_with(1, PriceField.BUY, Decimal(19500))
+    pricing.set_price.assert_awaited_once_with(1, PriceField.BUY, Decimal(19500), changed_by=42)
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "Хвост тушкана" in (embed.description or "")
 
@@ -111,12 +119,12 @@ async def test_setprice_sets_buy_field_and_reports() -> None:
 async def test_setboost_sets_sell_field_and_reports() -> None:
     change = _change(field=PriceField.SELL, category=ItemCategory.BOOST, item_name="Топот")
     cog, pricing, _items = _cog(set_price_result=change)
-    interaction = _interaction()
+    interaction = _interaction(user_id=42)
 
     callback: Any = PricingCog.setboost.callback
     await callback(cog, interaction, 2, "300000")
 
-    pricing.set_price.assert_awaited_once_with(2, PriceField.SELL, Decimal(300000))
+    pricing.set_price.assert_awaited_once_with(2, PriceField.SELL, Decimal(300000), changed_by=42)
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "Топот" in (embed.description or "")
 
@@ -141,70 +149,6 @@ async def test_setboost_autocomplete_scopes_to_boosts() -> None:
     choices = await autocomplete(interaction, "топ")
 
     assert [c.value for c in choices] == [2]
-
-
-# --- sync_prices -------------------------------------------------------
-
-
-async def test_sync_prices_reports_updated_and_unchanged_counts() -> None:
-    """UX #7: the diff itself (`render_price_change_report`) is shown, not just a count."""
-    report = SyncPricesReport(updated=(_change(),), not_found=(), unchanged_count=3)
-    cog, pricing, _items = _cog(sync_report=report)
-    interaction = _interaction()
-
-    callback: Any = PricingCog.sync_prices.callback
-    await callback(cog, interaction)
-
-    pricing.sync_prices.assert_awaited_once()
-    embed = interaction.followup.send.call_args.kwargs["embed"]
-    assert "Хвост тушкана" in (embed.description or "")
-    assert "Без изменений: 3" in (embed.description or "")
-
-
-async def test_sync_prices_reports_not_found_names_with_overflow_count() -> None:
-    not_found = tuple(f"Предмет {i}" for i in range(12))
-    report = SyncPricesReport(not_found=not_found)
-    cog, _pricing, _items = _cog(sync_report=report)
-    interaction = _interaction()
-
-    callback: Any = PricingCog.sync_prices.callback
-    await callback(cog, interaction)
-
-    embed = interaction.followup.send.call_args.kwargs["embed"]
-    assert "и ещё 2" in (embed.description or "")
-
-
-async def test_sync_prices_reports_unparseable_cells() -> None:
-    """UX #7: surfaced separately from "not found" — this is an existing item
-    whose stale price cell had unreadable content, now overwritten with the
-    catalog's price (not left alone — the sheet is the destination now)."""
-    report = SyncPricesReport(unparseable=("Топот",))
-    cog, _pricing, _items = _cog(sync_report=report)
-    interaction = _interaction()
-
-    callback: Any = PricingCog.sync_prices.callback
-    await callback(cog, interaction)
-
-    embed = interaction.followup.send.call_args.kwargs["embed"]
-    assert "Топот" in (embed.description or "")
-    assert "перезаписано" in (embed.description or "")
-
-
-async def test_sync_prices_shows_the_diff_report_when_prices_changed() -> None:
-    """UX #7: /sync_prices must show which item's price changed to what."""
-    change = _change(item_name="Хвост тушкана", old_price=Decimal(18000), new_price=Decimal(19500))
-    report = SyncPricesReport(updated=(change,), unchanged_count=0)
-    cog, _pricing, items = _cog(sync_report=report, all_items=[_item()])
-    interaction = _interaction()
-
-    callback: Any = PricingCog.sync_prices.callback
-    await callback(cog, interaction)
-
-    items.all.assert_awaited_once()
-    embed = interaction.followup.send.call_args.kwargs["embed"]
-    description = embed.description or ""
-    assert "Хвост тушкана" in description
-    assert "→" in description
 
 
 # --- new_price -----------------------------------------------------------
@@ -267,12 +211,13 @@ async def test_new_price_applies_immediately_when_confirm_disabled() -> None:
     settings = MagicMock(price_import_confirm=False)
     cog, pricing, _items = _cog(settings=settings)
     pricing.preview_import = AsyncMock(return_value=PriceImportPlan(changes=(_change(),)))
-    interaction = _interaction()
+    interaction = _interaction(user_id=42)
 
     callback: Any = PricingCog.new_price.callback
     await callback(cog, interaction, _attachment())
 
     pricing.apply_import.assert_awaited_once()
+    assert pricing.apply_import.call_args.kwargs.get("changed_by") == 42
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "Цены обновлены" in (embed.title or "")
 
@@ -300,7 +245,7 @@ async def test_new_price_waits_for_confirmation_before_applying(
     assert "view" in kwargs
 
 
-# -- SEC-5: cooldown on the two heavy admin commands ------------------------
+# -- SEC-5: cooldown on the heavy admin command ------------------------
 
 
 def _admin_interaction(user_id: int = 1) -> MagicMock:
@@ -311,12 +256,7 @@ def _admin_interaction(user_id: int = 1) -> MagicMock:
     return interaction
 
 
-@pytest.mark.parametrize(
-    "command", [PricingCog.sync_prices, PricingCog.new_price], ids=["sync_prices", "new_price"]
-)
-async def test_a_non_admins_call_does_not_consume_the_cooldown_bucket(
-    command: app_commands.Command[PricingCog, ..., None],
-) -> None:
+async def test_a_non_admins_call_does_not_consume_the_cooldown_bucket() -> None:
     """`admin_only()`'s check must run before the cooldown check in the accumulated
     `checks` list — decorator order in source has `@app_commands.checks.cooldown(...)`
     above `@admin_only()`, but `app_commands.check` appends bottom-up, so the
@@ -325,7 +265,8 @@ async def test_a_non_admins_call_does_not_consume_the_cooldown_bucket(
     cooldown token for their user id — this proves it doesn't, by reusing the exact
     same identity and moment for a follow-up admin call that must still succeed.
     """
-    user_id = 4001 if command is PricingCog.sync_prices else 4002
+    command = PricingCog.new_price
+    user_id = 4002
 
     non_admin = _admin_interaction(user_id)
     non_admin.user.guild_permissions = MagicMock(administrator=False)
@@ -335,22 +276,13 @@ async def test_a_non_admins_call_does_not_consume_the_cooldown_bucket(
     assert await command._check_can_run(admin) is True
 
 
-@pytest.mark.parametrize(
-    ("command", "user_id"), [(PricingCog.sync_prices, 1001), (PricingCog.new_price, 1002)]
-)
-async def test_heavy_command_rejects_a_second_call_within_the_cooldown_window(
-    command: app_commands.Command[PricingCog, ..., None], user_id: int
-) -> None:
+async def test_heavy_command_rejects_a_second_call_within_the_cooldown_window() -> None:
     """A second invocation at the same moment (same `interaction.created_at`) must be
     throttled — `app_commands.checks.cooldown` keys entirely off that timestamp, not
     real wall-clock time, so this is deterministic without any sleeping/mocking.
-
-    Each command/test pair gets its own `user_id` (deliberately distinct from every
-    other cooldown test in this module) — the cooldown mapping is a closure captured
-    once when the decorator runs at class-definition time, so it persists across
-    tests in the same process; reusing a `user_id` would leak state between tests.
     """
-    interaction = _admin_interaction(user_id)
+    command = PricingCog.new_price
+    interaction = _admin_interaction(1002)
 
     for check in command.checks:
         assert await discord.utils.maybe_coroutine(check, interaction) is True
@@ -360,12 +292,9 @@ async def test_heavy_command_rejects_a_second_call_within_the_cooldown_window(
             await discord.utils.maybe_coroutine(check, interaction)
 
 
-@pytest.mark.parametrize(
-    ("command", "user_id"), [(PricingCog.sync_prices, 2001), (PricingCog.new_price, 2002)]
-)
-async def test_heavy_command_allows_a_second_call_after_the_window(
-    command: app_commands.Command[PricingCog, ..., None], user_id: int
-) -> None:
+async def test_heavy_command_allows_a_second_call_after_the_window() -> None:
+    command = PricingCog.new_price
+    user_id = 2002
     first = _admin_interaction(user_id)
     for check in command.checks:
         assert await discord.utils.maybe_coroutine(check, first) is True

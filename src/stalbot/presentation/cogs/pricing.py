@@ -1,6 +1,8 @@
-"""`/setprice`, `/setboost`, `/sync_prices`, `/new_price` — price maintenance.
+"""`/setprice`, `/setboost`, `/new_price` — price maintenance.
 
-PLAN.md §10.6-§10.8.
+PLAN.md §10.6-§10.8; sqlite_migration.md Э7: `/sync_prices` is gone along
+with the price sheets it used to push onto — `/price_list` (`catalog.py`)
+is the only display surface left.
 """
 
 from collections.abc import Sequence
@@ -19,36 +21,35 @@ from stalbot.application.services.pricing import (
 from stalbot.config.settings import Settings
 from stalbot.domain.enums import ItemCategory, PriceField
 from stalbot.domain.money import evaluate_amount
-from stalbot.infrastructure.cache.repositories.items import ItemsCacheRepository
+from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
 from stalbot.presentation.autocomplete import item_choices
 from stalbot.presentation.checks import admin_only
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.views.confirm import ConfirmView
 
 _MAX_IMPORT_FILE_BYTES: Final = 1_000_000
-_NOT_FOUND_PREVIEW_LIMIT: Final = 10
 
-#: SEC-5: defense-in-depth per-admin cooldown on the two commands that scan
-#: every price sheet / parse-and-apply a bulk import — not a response to any
-#: observed abuse, just a cheap guard against an accidental double-click or
-#: a careless script hammering an already-privileged session.
+#: SEC-5: defense-in-depth per-admin cooldown on the command that
+#: parses-and-applies a bulk import — not a response to any observed abuse,
+#: just a cheap guard against an accidental double-click or a careless
+#: script hammering an already-privileged session.
 _HEAVY_COMMAND_COOLDOWN_SECONDS: Final = 15.0
 
 
 class PricingCog(commands.Cog):
-    """`/setprice`, `/setboost`, `/sync_prices`, `/new_price`."""
+    """`/setprice`, `/setboost`, `/new_price`."""
 
     def __init__(
         self,
         pricing: PricingService,
-        items: ItemsCacheRepository,
+        items: CatalogItemsRepository,
         embeds: EmbedFactory,
         settings: Settings,
     ) -> None:
         """Wire the cog to the service it delegates to.
 
         Args:
-            pricing: Reads/writes item prices and the price sheets.
+            pricing: Reads/writes item prices.
             items: Read-only lookup, for the shared report and autocomplete.
             embeds: Builds every embed this cog sends.
             settings: For `PRICE_IMPORT_CONFIRM`.
@@ -67,7 +68,9 @@ class PricingCog(commands.Cog):
         """Handle `/setprice`: set a resource's скуп (buy) price."""
         await interaction.response.defer(ephemeral=True)
         amount = evaluate_amount(цена)
-        change = await self._pricing.set_price(предмет, PriceField.BUY, amount)
+        change = await self._pricing.set_price(
+            предмет, PriceField.BUY, amount, changed_by=interaction.user.id
+        )
         await self._send_change_report(interaction, [change])
 
     @setprice.autocomplete("предмет")
@@ -83,7 +86,9 @@ class PricingCog(commands.Cog):
         """Handle `/setboost`: set a boost's продажа (sell) price."""
         await interaction.response.defer(ephemeral=True)
         amount = evaluate_amount(цена)
-        change = await self._pricing.set_price(буст, PriceField.SELL, amount)
+        change = await self._pricing.set_price(
+            буст, PriceField.SELL, amount, changed_by=interaction.user.id
+        )
         await self._send_change_report(interaction, [change])
 
     @setboost.autocomplete("буст")
@@ -91,40 +96,6 @@ class PricingCog(commands.Cog):
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[int]]:
         return item_choices(await self._items.by_category(ItemCategory.BOOST), current)
-
-    @app_commands.command(
-        name="sync_prices", description="🛡️ [Админ] 🔄 Синхронизировать цены с прайс-листов"
-    )
-    @app_commands.checks.cooldown(1, _HEAVY_COMMAND_COOLDOWN_SECONDS)
-    @admin_only()
-    async def sync_prices(self, interaction: discord.Interaction) -> None:
-        """Handle `/sync_prices`: push item-database prices onto every price sheet (UX #7)."""
-        await interaction.response.defer(ephemeral=True)
-        report = await self._pricing.sync_prices()
-
-        lines = [f"➖ Без изменений: {report.unchanged_count}"]
-        if report.not_found:
-            names = ", ".join(report.not_found[:_NOT_FOUND_PREVIEW_LIMIT])
-            extra = len(report.not_found) - _NOT_FOUND_PREVIEW_LIMIT
-            if extra > 0:
-                names += f" и ещё {extra}"
-            lines.append(f"⚠️ Не найдено в базе: {names}")
-        if report.unparseable:
-            names = ", ".join(report.unparseable[:_NOT_FOUND_PREVIEW_LIMIT])
-            extra = len(report.unparseable) - _NOT_FOUND_PREVIEW_LIMIT
-            if extra > 0:
-                names += f" и ещё {extra}"
-            lines.append(f"❌ Была нечитаемая цена в ячейке (перезаписано): {names}")
-
-        if report.updated:
-            catalog = await self._items.all()
-            diff_text = render_price_change_report(report.updated, catalog)
-            description = f"{diff_text}\n\n" + "\n".join(lines)
-        else:
-            description = "\n".join(lines)
-
-        embed = self._embeds.success("🔄 Синхронизация цен", description)
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="new_price", description="🛡️ [Админ] 📥 Импортировать цены из TXT")
     @app_commands.describe(файл="TXT-файл прайс-листа (формат — как в /give_price)")
@@ -165,7 +136,7 @@ class PricingCog(commands.Cog):
         report_text = render_price_change_report(plan.changes, catalog)
 
         if not self._settings.price_import_confirm:
-            await self._pricing.apply_import(plan)
+            await self._pricing.apply_import(plan, changed_by=interaction.user.id)
             embed = self._embeds.success("✅ Цены обновлены", report_text)
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
@@ -182,7 +153,7 @@ class PricingCog(commands.Cog):
             await interaction.followup.send(embed=cancel_embed, ephemeral=True)
             return
 
-        await self._pricing.apply_import(plan)
+        await self._pricing.apply_import(plan, changed_by=interaction.user.id)
         done_embed = self._embeds.success("✅ Цены обновлены", report_text)
         await interaction.followup.send(embed=done_embed, ephemeral=True)
 

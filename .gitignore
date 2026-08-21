@@ -7,6 +7,12 @@ credentials/
 *credentials*.json
 *service_account*.json
 
+# === Живые выгрузки Google-таблиц ===
+# Реальные данные игроков в родном формате, скачанные вручную владельцем
+# («Файл → Скачать → .xlsx») — никогда не коммитить.
+/СКУПКА.xlsx
+/убежка.xlsx
+
 # === Данные бота ===
 data/
 *.sqlite3
@@ -36,3 +42,10 @@ build/
 .vscode/
 .DS_Store
 Thumbs.db
+
+
+# unused
+done_plans/
+
+# docs 
+docs/

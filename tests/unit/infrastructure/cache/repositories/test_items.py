@@ -32,9 +32,9 @@ def test_normalize_item_name_collapses_whitespace_and_lowercases() -> None:
     assert normalize_item_name("  Хвост   Тушкана ") == "хвост тушкана"
 
 
-async def test_replace_all_then_all_round_trips(connection: aiosqlite.Connection) -> None:
+async def test_upsert_many_then_all_round_trips(connection: aiosqlite.Connection) -> None:
     repo = ItemsCacheRepository(connection)
-    await repo.replace_all([_item(1), _item(2, name="Кристалл")])
+    await repo.upsert_many([_item(1), _item(2, name="Кристалл")])
 
     items = await repo.all()
 
@@ -43,19 +43,9 @@ async def test_replace_all_then_all_round_trips(connection: aiosqlite.Connection
     assert items[0].updated_at == datetime(2026, 7, 29, 9, 10, tzinfo=UTC)
 
 
-async def test_replace_all_clears_previous_contents(connection: aiosqlite.Connection) -> None:
-    repo = ItemsCacheRepository(connection)
-    await repo.replace_all([_item(1)])
-    await repo.replace_all([_item(2, name="Кристалл")])
-
-    items = await repo.all()
-
-    assert [item.id for item in items] == [2]
-
-
 async def test_by_category_filters(connection: aiosqlite.Connection) -> None:
     repo = ItemsCacheRepository(connection)
-    await repo.replace_all(
+    await repo.upsert_many(
         [
             _item(1, category=ItemCategory.RESOURCE),
             _item(2, name="Топот", category=ItemCategory.BOOST),
@@ -71,7 +61,7 @@ async def test_find_by_name_case_and_whitespace_insensitive(
     connection: aiosqlite.Connection,
 ) -> None:
     repo = ItemsCacheRepository(connection)
-    await repo.replace_all([_item(1, name="Хвост тушкана")])
+    await repo.upsert_many([_item(1, name="Хвост тушкана")])
 
     found = await repo.find("  ХВОСТ   ТУШКАНА  ", None)
 
@@ -83,14 +73,14 @@ async def test_find_scoped_to_category_returns_none_when_absent(
     connection: aiosqlite.Connection,
 ) -> None:
     repo = ItemsCacheRepository(connection)
-    await repo.replace_all([_item(1, category=ItemCategory.RESOURCE)])
+    await repo.upsert_many([_item(1, category=ItemCategory.RESOURCE)])
 
     assert await repo.find("Хвост тушкана", ItemCategory.BOOST) is None
 
 
 async def test_upsert_many_updates_existing_row(connection: aiosqlite.Connection) -> None:
     repo = ItemsCacheRepository(connection)
-    await repo.replace_all([_item(1, price_buy=Decimal(1000))])
+    await repo.upsert_many([_item(1, price_buy=Decimal(1000))])
 
     await repo.upsert_many([_item(1, price_buy=Decimal(2000))])
 
@@ -101,7 +91,7 @@ async def test_upsert_many_updates_existing_row(connection: aiosqlite.Connection
 
 async def test_get_by_ids_returns_only_the_ids_found(connection: aiosqlite.Connection) -> None:
     repo = ItemsCacheRepository(connection)
-    await repo.replace_all([_item(1), _item(2, name="Кристалл"), _item(3, name="Хвост")])
+    await repo.upsert_many([_item(1), _item(2, name="Кристалл"), _item(3, name="Хвост")])
 
     found = await repo.get_by_ids([1, 3, 999])
 
@@ -112,14 +102,14 @@ async def test_get_by_ids_returns_only_the_ids_found(connection: aiosqlite.Conne
 
 async def test_get_by_ids_empty_input_returns_empty_dict(connection: aiosqlite.Connection) -> None:
     repo = ItemsCacheRepository(connection)
-    await repo.replace_all([_item(1)])
+    await repo.upsert_many([_item(1)])
 
     assert await repo.get_by_ids([]) == {}
 
 
 async def test_item_with_no_prices_round_trips_as_none(connection: aiosqlite.Connection) -> None:
     repo = ItemsCacheRepository(connection)
-    await repo.replace_all([_item(1, price_buy=None, price_sell=None, emoji=None, updated_at=None)])
+    await repo.upsert_many([_item(1, price_buy=None, price_sell=None, emoji=None, updated_at=None)])
 
     item = (await repo.all())[0]
 

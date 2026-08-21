@@ -13,8 +13,10 @@ invented here.
 from typing import Final
 
 # --- one-time bonuses, verified against the K3 formula's rank/role IF-chains ---
+# Published (sqlite_migration.md §V.1) for reuse by `domain.progression.calculator`
+# — previously private and unused anywhere outside this module.
 
-_RANK_ONE_TIME_COINS: Final = {
+RANK_ONE_TIME_COINS: Final = {
     "standard": 5,
     "premium": 10,
     "prestige": 40,
@@ -22,7 +24,7 @@ _RANK_ONE_TIME_COINS: Final = {
     "legend": 200,
 }
 
-_REFERRAL_ONE_TIME: Final = {
+REFERRAL_ONE_TIME: Final = {
     "scout": (1, 0),
     "promoter": (5, 10),
     "recruiter": (15, 0),
@@ -33,7 +35,7 @@ _REFERRAL_ONE_TIME: Final = {
 # --- big-deal bonus, verified against the SUMPRODUCT tail of the K3 formula ---
 # Prestige: +2 Coins per single deal >= 50,000,000 ₽. Elite and Legend: +5
 # Coins per single deal >= 100,000,000 ₽. Standard and Premium: none.
-_BIG_DEAL_BONUS: Final = {
+BIG_DEAL_BONUS: Final = {
     "prestige": (2, 50_000_000),
     "elite": (5, 100_000_000),
     "legend": (5, 100_000_000),
@@ -46,9 +48,9 @@ def rank_perks(key: str) -> tuple[str, ...]:
     Args:
         key: A `RankTier.key`.
     """
-    lines = [f"🎁 Разовый бонус: 🪙 {_RANK_ONE_TIME_COINS[key]} Coins"]
-    if key in _BIG_DEAL_BONUS:
-        coins, threshold = _BIG_DEAL_BONUS[key]
+    lines = [f"🎁 Разовый бонус: 🪙 {RANK_ONE_TIME_COINS[key]} Coins"]
+    if key in BIG_DEAL_BONUS:
+        coins, threshold = BIG_DEAL_BONUS[key]
         lines.append(
             f"🔥 Крупные сделки: 🪙 {coins} Coins за сделку свыше {threshold:,} ₽".replace(",", " ")
         )
@@ -61,7 +63,7 @@ def referral_perks(key: str) -> tuple[str, ...]:
     Args:
         key: A `ReferralTier.key`.
     """
-    coins, xp = _REFERRAL_ONE_TIME[key]
+    coins, xp = REFERRAL_ONE_TIME[key]
     if xp:
         return (f"🎁 Разовый бонус: 🪙 {coins} Coins + ⚡ {xp} XP",)
     return (f"🎁 Разовый бонус: 🪙 {coins} Coins",)
@@ -90,3 +92,35 @@ BOOSTER_ONE_TIME_TEXT: Final = "🚀 Буст сервера, разово: 🪙
 #: bonus — this triggers before Premium's 300 XP threshold, not "at" it.
 XP_BOOST_THRESHOLD: Final = 250
 XP_BOOST_PERCENT: Final = 5
+
+# --- reward tiers consumed by `domain.progression.calculator` (sqlite_migration.md §V.1) ---
+# Verified against the K3/L3 formulas' SUMIF/IF-chain terms over the
+# *referrer's* referred-players' combined turnover (`rt` in the plan's
+# pseudocode) — additive: every tier whose threshold `rt` clears adds its
+# (coins, xp) on top of the ones below it.
+#: (rt_threshold, coins, xp)
+REFEREE_TURNOVER_TIERS: Final = (
+    (1_500_000, 3, 20),
+    (5_000_000, 2, 20),
+    (50_000_000, 10, 80),
+)
+
+# Verified against the same K3/L3 terms, but over the *referred player's
+# own* M/N turnover (not `rt`) — a single highest-matching tier, not
+# additive: "пришёл по рефералке" pays out once, at whichever tier the
+# referred player's own purchase/sale turnover clears.
+#: (m_threshold, n_threshold, coins, xp)
+REFERRED_TIERS: Final = (
+    (50_000_000, 125_000_000, 15, 200),
+    (5_000_000, 12_500_000, 3, 40),
+    (1_500_000, 2_500_000, 2, 10),
+)
+
+#: Flat one-time (coins, xp) for boosting the server — same numbers as
+#: `BOOSTER_ONE_TIME_TEXT`, published as data for `calculator.py`.
+BOOSTER_FLAT: Final = (3, 30)
+
+#: A booster's per-deal surcharge fires once a single deal clears either
+#: threshold: purchase >= the first, sale >= the second (K3's
+#: `($E>=10000000)+($E>=25000000)` SUMPRODUCT term, gated on deal side).
+BOOSTER_BIG_DEAL_THRESHOLDS: Final = (10_000_000, 25_000_000)

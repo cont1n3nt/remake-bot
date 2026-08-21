@@ -1,0 +1,18 @@
+# Schedules stalbot-backup.service daily (sqlite_migration.md §X). See
+# stalbot-backup.service for install steps — both files install together.
+
+[Unit]
+Description=Daily stalbot SQLite cache backup
+
+[Timer]
+# 03:17 local time — off-peak, deliberately not on-the-hour to avoid
+# lining up with other hosts' cron/timer noise on shared infrastructure.
+OnCalendar=*-*-* 03:17:00
+# If the host was off/asleep at 03:17, run once shortly after it's back,
+# instead of silently skipping a whole day's backup.
+Persistent=true
+# Spread load if this unit is ever templated across multiple hosts.
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

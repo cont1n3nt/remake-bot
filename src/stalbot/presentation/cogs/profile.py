@@ -95,51 +95,52 @@ class ProfileCog(commands.Cog):
         pager.message = message
 
     def _build_profile_embed(self, view: ProfileView) -> discord.Embed:
-        profile = view.profile
-        rank_label = profile.rank or "—"
-        referral_label = profile.referral_role or "—"
+        rank_tier = self._rank_ladder.by_key(view.rank_key) if view.rank_key else None
+        referral_tier = (
+            self._referral_ladder.by_key(view.referral_role_key) if view.referral_role_key else None
+        )
+        rank_label = rank_tier.label if rank_tier is not None else "—"
+        referral_label = referral_tier.label if referral_tier is not None else "—"
 
         lines: list[str] = []
 
-        rank_tier = self._rank_ladder.by_label(profile.rank) if profile.rank else None
         if rank_tier is not None:
             lines.append(f"🎁 Бонусы ранга {rank_tier.label}")
             lines.extend(f" • {perk}" for perk in rank_tier.perks)
             lines.append(_SEPARATOR)
 
-        lines.extend(_progress_lines(self._rank_ladder, profile.xp, unit="XP"))
+        lines.extend(_progress_lines(self._rank_ladder, view.xp, unit="XP"))
 
         embed = self._embeds.info(
             f"👤 Профиль — {view.nick_display}", "\n".join(lines) if lines else None
         )
         embed.add_field(
-            name="🪙 Coins", value=format_amount(profile.coins, currency=False), inline=True
+            name="🪙 Coins", value=format_amount(view.coins, currency=False), inline=True
         )
-        embed.add_field(name="⚡ XP", value=format_amount(profile.xp, currency=False), inline=True)
+        embed.add_field(name="⚡ XP", value=format_amount(view.xp, currency=False), inline=True)
         embed.add_field(name="🏅 Ранг", value=rank_label, inline=True)
         embed.add_field(name="🤝 Реф-роль", value=referral_label, inline=True)
-        embed.add_field(name="👥 Приглашено", value=str(profile.referrals_count), inline=True)
+        embed.add_field(name="👥 Приглашено", value=str(view.referrals_count), inline=True)
         return enforce_limits(embed)
 
     def _build_referrals_pages(
         self, view: ProfileView, referred: Sequence[ReferredPlayer]
     ) -> list[discord.Embed]:
-        profile = view.profile
-        referral_label = profile.referral_role or "—"
+        referral_tier = (
+            self._referral_ladder.by_key(view.referral_role_key) if view.referral_role_key else None
+        )
+        referral_label = referral_tier.label if referral_tier is not None else "—"
 
         header = [f"🤝 Реф-роль {referral_label}"]
-        referral_tier = (
-            self._referral_ladder.by_label(profile.referral_role) if profile.referral_role else None
-        )
         if referral_tier is not None:
             header.extend(f" • {perk}" for perk in referral_tier.perks)
         header.append(_SEPARATOR)
 
         referral_progress = _progress_lines(
-            self._referral_ladder, profile.referrals_count, unit="реф."
+            self._referral_ladder, view.referrals_count, unit="реф."
         )
         footer = [_SEPARATOR, *referral_progress]
-        next_tier = self._referral_ladder.next(profile.referrals_count)
+        next_tier = self._referral_ladder.next(view.referrals_count)
         if next_tier is not None:
             footer.append(f"🎁 Награда: {'; '.join(next_tier.perks)}")
 

@@ -4,8 +4,8 @@ services:
     image: stalbot:latest
     container_name: stalbot
     restart: unless-stopped
+    stop_grace_period: 60s
     env_file:
       - .env
     volumes:
       - ./data:/app/data
-      - ./credentials:/app/credentials:ro

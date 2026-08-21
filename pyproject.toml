@@ -1,23 +1,21 @@
 [project]
 name = "stalbot"
 version = "0.1.0"
-description = "Discord-бот для Stalcraft (Stalzone) × Google Sheets"
+description = "Discord-бот для Stalcraft (Stalzone)"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
 dependencies = [
     "discord-py==2.7.1",
-    "gspread==6.2.1",
-    "google-auth==2.56.2",
     "aiosqlite==0.22.1",
     "pydantic-settings==2.14.2",
     "structlog==26.1.0",
+    "Pillow>=10.4",
 ]
 
 [project.optional-dependencies]
 ocr = [
     "opencv-python>=4.10",
-    "Pillow>=10.4",
     "pytesseract>=0.3",
 ]
 dev = [
@@ -28,6 +26,9 @@ dev = [
     "pytest-cov==7.1.0",
     "hypothesis==6.164.0",
     "pre-commit==4.6.1",
+    # scripts/extract_poster_assets.py (one-off asset extraction) only.
+    "openpyxl==3.1.5",
+    "types-openpyxl==3.1.5.20260807",
 ]
 
 [project.scripts]
@@ -81,23 +82,24 @@ ignore = [
 # Russian embed titles and the ℹ️ emoji glyph are the actual UI content.
 "src/stalbot/presentation/embeds/palette.py" = ["RUF001", "RUF002", "RUF003"]
 "src/stalbot/presentation/embeds/factory.py" = ["RUF001", "RUF002", "RUF003"]
+# Poster prices are rendered in Cyrillic ("р." — Comic Relief has no ₽ glyph).
+"src/stalbot/application/services/posters.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/presentation/embeds/test_factory.py" = ["RUF001", "RUF002", "RUF003"]
 # User-facing Russian error messages are the actual UI content.
 "src/stalbot/presentation/errors.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/presentation/test_errors.py" = ["RUF001", "RUF002", "RUF003"]
-# Sheet/column names and header text are literal spreadsheet content in Russian.
-"src/stalbot/infrastructure/sheets/layouts.py" = ["RUF001", "RUF002", "RUF003"]
-"tests/unit/infrastructure/sheets/test_layouts.py" = ["RUF001", "RUF002", "RUF003"]
-"tests/unit/infrastructure/sheets/test_protection.py" = ["RUF001", "RUF002", "RUF003"]
-"tests/unit/infrastructure/sheets/test_client.py" = ["RUF001", "RUF002", "RUF003"]
 # Item names, sheet cell content, ranks and referral-role labels in test
 # fixtures are literal Russian data mirroring the real spreadsheet.
 "tests/unit/infrastructure/cache/**" = ["RUF001", "RUF002", "RUF003"]
-"src/stalbot/infrastructure/cache/sync.py" = ["RUF001", "RUF002", "RUF003"]
 # Rank/referral-role labels and perk copy are literal Russian UI content;
 # the docstring quotes PLAN.md verbatim.
 "src/stalbot/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/domain/progression/**" = ["RUF001", "RUF002", "RUF003"]
+# Docstrings quote the shelter workbook's own Russian sheet/column names.
+"src/stalbot/domain/shelter/**" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/domain/shelter/**" = ["RUF001", "RUF002", "RUF003"]
+"src/stalbot/domain/entities/shelter_item.py" = ["RUF001", "RUF002", "RUF003"]
+"src/stalbot/infrastructure/cache/repositories/shelter.py" = ["RUF001", "RUF002", "RUF003"]
 # Slash-command option names/descriptions and every user-facing string here
 # are literal Russian UI content (PLAN.md §10).
 "src/stalbot/presentation/cogs/**" = ["RUF001", "RUF002", "RUF003"]
@@ -112,6 +114,25 @@ ignore = [
 # `/logs`'s "🔢 К странице" button label is literal Russian UI content
 # (PLAN.md §10.10).
 "src/stalbot/presentation/views/logs_pager.py" = ["RUF001", "RUF002", "RUF003"]
+# sqlite_migration.md Э0: docstrings/log messages quote sheet names and
+# migration-plan prose verbatim in Russian.
+"scripts/import_from_sheets.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/import_shelter.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/fix_shelter_bridge_mismatches.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/add_missing_shelter_items.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/scripts/**" = ["RUF001", "RUF002", "RUF003"]
+# CSV header text is literal spreadsheet content in Russian (§VI.1).
+"tests/support/sheet_snapshot.py" = ["RUF001", "RUF002", "RUF003"]
+# Item names in docstrings/fixtures are literal Russian catalog content.
+"tests/unit/application/services/test_catalog.py" = ["RUF001", "RUF002", "RUF003"]
+# Poster tests exercise real item names/prices in Cyrillic (Часть IX, Э11).
+"tests/unit/application/services/test_posters.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/infrastructure/posters/test_pillow_renderer.py" = ["RUF001", "RUF002", "RUF003"]
+# Э8's bulk-entry format ("Название xКоличество") and fixture item names are
+# literal Russian content the owner types by hand (sqlite_migration.md §I.9).
+"src/stalbot/application/services/boost_orders.py" = ["RUF001", "RUF002", "RUF003"]
+"src/stalbot/application/dto/bulk_entry_report.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/application/services/test_boost_orders.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -125,11 +146,11 @@ indent-style = "space"
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 plugins = []
 
 [[tool.mypy.overrides]]
-module = ["gspread.*", "aiosqlite.*", "google.oauth2.*"]
+module = ["aiosqlite.*", "PIL.*"]
 ignore_missing_imports = true
 
 # --- pytest / coverage ------------------------------------------------------

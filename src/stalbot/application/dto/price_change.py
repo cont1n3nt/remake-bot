@@ -1,15 +1,15 @@
 """`PriceChange` — one item's before/after price, shared by every pricing command.
 
-`/setprice`, `/setboost`, `/new_price` and `/sync_prices` (PLAN.md §10.6-§10.8)
-all end in the same report format — this is the one shape they build it from.
+`/setprice`, `/setboost` and `/new_price` (PLAN.md §10.6-§10.8) all end in
+the same report format — this is the one shape they build it from.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import Decimal
 
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory, PriceField
+from stalbot.domain.money import Rub
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,8 +20,8 @@ class PriceChange:
     item_name: str
     category: ItemCategory
     field: PriceField
-    old_price: Decimal | None
-    new_price: Decimal | None
+    old_price: Rub | None
+    new_price: Rub | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +38,7 @@ class GroupedPriceChanges:
 
 
 def group_price_changes(
-    changes: Sequence[PriceChange], catalog: Sequence[Item]
+    changes: Sequence[PriceChange], catalog: Sequence[CatalogItem]
 ) -> GroupedPriceChanges:
     """Split a flat list of price changes into the resource/boost/scalp report blocks.
 

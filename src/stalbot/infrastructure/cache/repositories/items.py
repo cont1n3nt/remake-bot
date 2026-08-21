@@ -8,6 +8,7 @@ import aiosqlite
 
 from stalbot.domain.entities.item import Item
 from stalbot.domain.enums import ItemCategory
+from stalbot.infrastructure.cache.db import transaction
 
 
 def normalize_item_name(name: str) -> str:
@@ -110,36 +111,6 @@ class ItemsCacheRepository:
         row = await cursor.fetchone()
         return _row_to_item(row) if row is not None else None
 
-    async def save_delete_backup(self, payload: str) -> None:
-        """Persist a pre-mutation snapshot of the catalog block before `/del_item` rewrites it.
-
-        A safety net, not automatic rollback (PLAN.md §7.5): if the
-        subsequent `batchUpdate`/read-back fails partway, this snapshot
-        lets an operator manually restore the block instead of the bot
-        silently having wiped it.
-
-        Args:
-            payload: A JSON-serialized snapshot of the block before the write.
-        """
-        await self._conn.execute(
-            """
-            INSERT INTO sync_meta (key, value) VALUES ('item_delete_backup', ?)
-            ON CONFLICT (key) DO UPDATE SET value = excluded.value
-            """,
-            (payload,),
-        )
-        await self._conn.commit()
-
-    async def replace_all(self, items: Sequence[Item]) -> None:
-        """Atomically replace the entire cached catalog (full sync).
-
-        Args:
-            items: The complete, current catalog read from Sheets.
-        """
-        await self._conn.execute("DELETE FROM items")
-        await self._upsert_many(items)
-        await self._conn.commit()
-
     async def upsert_many(self, items: Sequence[Item]) -> None:
         """Insert or update a subset of items (point refresh).
 
@@ -147,8 +118,8 @@ class ItemsCacheRepository:
             items: Items to upsert; existing rows with the same id are
                 overwritten.
         """
-        await self._upsert_many(items)
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._upsert_many(items)
 
     async def _upsert_many(self, items: Sequence[Item]) -> None:
         await self._conn.executemany(

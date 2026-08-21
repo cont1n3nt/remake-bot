@@ -1,10 +1,11 @@
 """Tests for `stalbot.presentation.cogs.catalog.CatalogCog` (PLAN.md §10.4-§10.5, §10.9).
 
-`CatalogService`/`PricingService`/`ItemsCacheRepository` are mocked — their
-own behavior is covered elsewhere; this file is about whether the cog wires
-arguments correctly and builds the right embeds/views.
+`CatalogService`/`PricingService`/`CatalogItemsRepository` are mocked —
+their own behavior is covered elsewhere; this file is about whether the cog
+wires arguments correctly and builds the right embeds/views.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -13,34 +14,42 @@ import discord
 from discord import app_commands
 
 from stalbot.application.dto.delete_item_result import DeleteItemResult
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory
+from stalbot.domain.money import Rub
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.presentation.cogs.catalog import CatalogCog, _PriceListView
 from stalbot.presentation.embeds.factory import EmbedFactory
 
+_NOW = datetime(2026, 7, 31, 21, 45, tzinfo=UTC)
 
-def _item(**overrides: object) -> Item:
+
+def _item(**overrides: object) -> CatalogItem:
     defaults: dict[str, object] = {
         "id": 1,
         "name": "Хвост тушкана",
+        "name_norm": "хвост тушкана",
         "category": ItemCategory.RESOURCE,
-        "price_buy": Decimal(18000),
+        "section": None,
+        "price_buy": Rub(18000),
         "price_sell": None,
         "emoji": None,
+        "sort_order": 0,
+        "shelter_item_id": None,
+        "created_at": _NOW,
         "updated_at": None,
-        "row": 3,
+        "deleted_at": None,
     }
     defaults.update(overrides)
-    return Item(**defaults)  # type: ignore[arg-type]
+    return CatalogItem(**defaults)  # type: ignore[arg-type]
 
 
 def _cog(
     *,
-    added_item: Item | None = None,
+    added_item: CatalogItem | None = None,
     delete_result: DeleteItemResult | None = None,
-    all_items: list[Item] | None = None,
-    by_category: dict[ItemCategory, list[Item]] | None = None,
+    all_items: list[CatalogItem] | None = None,
+    by_category: dict[ItemCategory, list[CatalogItem]] | None = None,
     export_text: str = "price list\n",
     emojis: EmojiResolver | None = None,
 ) -> tuple[CatalogCog, MagicMock, MagicMock, MagicMock]:
@@ -72,7 +81,7 @@ def _category_choice(category: ItemCategory) -> app_commands.Choice[str]:
 
 
 async def test_item_add_writes_item_and_reports_summary() -> None:
-    item = _item(id=5, name="Кристалл", price_buy=Decimal(120000), emoji="crystal")
+    item = _item(id=5, name="Кристалл", price_buy=Rub(120000), emoji="crystal")
     cog, catalog, _pricing, _items = _cog(added_item=item)
     interaction = _interaction()
 
@@ -152,7 +161,7 @@ async def test_del_item_autocomplete_delegates_to_item_choices() -> None:
 
 async def test_price_list_sends_default_resource_page() -> None:
     resources = [_item(id=1, name="Хвост", category=ItemCategory.RESOURCE)]
-    boosts = [_item(id=2, name="Топот", category=ItemCategory.BOOST, price_sell=Decimal(1))]
+    boosts = [_item(id=2, name="Топот", category=ItemCategory.BOOST, price_sell=Rub(1))]
     cog, _catalog, _pricing, _items = _cog(
         by_category={ItemCategory.RESOURCE: resources, ItemCategory.BOOST: boosts}
     )
@@ -169,7 +178,7 @@ async def test_price_list_sends_default_resource_page() -> None:
 
 
 async def test_price_list_field_omits_missing_price_instead_of_a_dash() -> None:
-    resources = [_item(id=1, name="Хвост", price_buy=Decimal(18000), price_sell=None)]
+    resources = [_item(id=1, name="Хвост", price_buy=Rub(18000), price_sell=None)]
     cog, _catalog, _pricing, _items = _cog(
         by_category={ItemCategory.RESOURCE: resources, ItemCategory.BOOST: []}
     )
@@ -186,7 +195,7 @@ async def test_price_list_field_omits_missing_price_instead_of_a_dash() -> None:
 
 
 async def test_price_list_field_shows_boost_emoji_before_name() -> None:
-    boosts = [_item(id=2, name="Топот", category=ItemCategory.BOOST, price_sell=Decimal(1))]
+    boosts = [_item(id=2, name="Топот", category=ItemCategory.BOOST, price_sell=Rub(1))]
     cog, _catalog, _pricing, _items = _cog(
         by_category={ItemCategory.RESOURCE: [], ItemCategory.BOOST: boosts},
         emojis=EmojiResolver(),

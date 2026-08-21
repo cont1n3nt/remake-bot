@@ -3,14 +3,14 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 
 
 @dataclass(frozen=True, slots=True)
 class DeleteItemResult:
     """The removed item, plus any boost-order drafts that referenced it."""
 
-    deleted: Item
+    deleted: CatalogItem
     """The item as it existed right before deletion (for the confirmation embed)."""
     affected_order_channels: Sequence[int] = field(default_factory=tuple)
     """Channel ids whose draft boost order had a line for this item removed."""

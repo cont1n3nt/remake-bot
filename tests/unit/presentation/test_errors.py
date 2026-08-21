@@ -10,11 +10,10 @@ from discord import app_commands
 from stalbot.domain.clock import GMT3
 from stalbot.domain.errors import (
     AmountParseError,
+    DatabaseError,
     DomainError,
     ItemNotFoundError,
     NoTransactionsYetError,
-    ProtectedRangeWriteError,
-    SheetStructureError,
     TicketSessionNotFoundError,
 )
 from stalbot.presentation.embeds.factory import EmbedFactory
@@ -96,25 +95,13 @@ def test_unknown_error_shows_trace_id() -> None:
 # --- PRES-1: infrastructure errors must never leak internal details ---------
 
 
-def test_sheet_structure_error_does_not_leak_internal_details() -> None:
-    wrapped = _wrap(SheetStructureError("missing sheet: 'Users'; block 'DataBase' mismatch"))
+def test_database_error_does_not_leak_internal_details() -> None:
+    wrapped = _wrap(DatabaseError("UNIQUE constraint failed: players.nick_norm"))
     message = _resolve_message(wrapped, "abc123")
-    assert "Users" not in message
-    assert "missing sheet" not in message
+    assert "players.nick_norm" not in message
+    assert "UNIQUE constraint" not in message
     assert "abc123" in message
     assert "Внутренняя ошибка" in message
-
-
-def test_protected_range_write_error_does_not_leak_internal_details() -> None:
-    wrapped = _wrap(
-        ProtectedRangeWriteError(
-            "column F on sheet 'DataBase' is formula-owned (attempted write to 'DataBase!F3')"
-        )
-    )
-    message = _resolve_message(wrapped, "abc123")
-    assert "DataBase!F3" not in message
-    assert "formula-owned" not in message
-    assert "abc123" in message
 
 
 class _FakeClock:
@@ -182,14 +169,14 @@ async def test_modal_error_does_not_leak_internal_details(factory: EmbedFactory)
 
     await on_modal_error(
         interaction,
-        SheetStructureError("missing sheet: 'Users'; block 'DataBase' mismatch"),
+        DatabaseError("UNIQUE constraint failed: players.nick_norm"),
         embeds=factory,
     )
 
     embed = interaction.response.send_message.call_args.kwargs["embed"]
     description = embed.description or ""
-    assert "Users" not in description
-    assert "missing sheet" not in description
+    assert "players.nick_norm" not in description
+    assert "UNIQUE constraint" not in description
     assert "Внутренняя ошибка" in description
 
 

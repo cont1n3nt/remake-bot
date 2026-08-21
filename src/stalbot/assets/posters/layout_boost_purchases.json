@@ -1,0 +1,144 @@
+{
+  "sections": [
+    {
+      "name": null,
+      "items": [
+        {
+          "name": "Уха",
+          "name_norm": "уха",
+          "icon": "icons/уха.png"
+        },
+        {
+          "name": "Солянка",
+          "name_norm": "солянка",
+          "icon": "icons/солянка.png"
+        },
+        {
+          "name": "Чесночный суп",
+          "name_norm": "чесночный суп",
+          "icon": "icons/чесночный суп.png"
+        },
+        {
+          "name": "Гороховый суп",
+          "name_norm": "гороховый суп",
+          "icon": "icons/гороховый суп.png"
+        }
+      ]
+    },
+    {
+      "name": null,
+      "items": [
+        {
+          "name": "Морфин",
+          "name_norm": "морфин",
+          "icon": "icons/мякоть лимонника.png"
+        },
+        {
+          "name": "Убийца боли",
+          "name_norm": "убийца боли",
+          "icon": "icons/убийца боли.png"
+        },
+        {
+          "name": "Удар",
+          "name_norm": "удар",
+          "icon": "icons/удар.png"
+        },
+        {
+          "name": "Топот",
+          "name_norm": "топот",
+          "icon": "icons/топот.png"
+        },
+        {
+          "name": "Биозаплатка",
+          "name_norm": "биозаплатка",
+          "icon": "icons/биозаплатка.png"
+        },
+        {
+          "name": "Сильная мазь от ожогов",
+          "name_norm": "сильная мазь от ожогов",
+          "icon": "icons/сильная мазь от ожогов.png"
+        }
+      ]
+    },
+    {
+      "name": null,
+      "items": [
+        {
+          "name": "Батарейка",
+          "name_norm": "батарейка",
+          "icon": "icons/батарейка.png"
+        },
+        {
+          "name": "Нейротоник",
+          "name_norm": "нейротоник",
+          "icon": "icons/нейротоник.png"
+        },
+        {
+          "name": "Силовой стимулятор",
+          "name_norm": "силовой стимулятор",
+          "icon": "icons/силовой стимулятор.png"
+        }
+      ]
+    },
+    {
+      "name": null,
+      "items": [
+        {
+          "name": "Шизоёрш",
+          "name_norm": "шизоёрш",
+          "icon": "icons/шизоёрш.png"
+        },
+        {
+          "name": "Алкобык",
+          "name_norm": "алкобык",
+          "icon": "icons/алкобык.png"
+        },
+        {
+          "name": "Незабываемый",
+          "name_norm": "незабываемый",
+          "icon": "icons/гейзер_2.png"
+        },
+        {
+          "name": "Гейзер",
+          "name_norm": "гейзер",
+          "icon": "icons/гейзер.png"
+        }
+      ]
+    },
+    {
+      "name": null,
+      "items": [
+        {
+          "name": "Подорожник",
+          "name_norm": "подорожник",
+          "icon": "icons/подорожник.png"
+        },
+        {
+          "name": "Напалм",
+          "name_norm": "напалм",
+          "icon": "icons/напалм.png"
+        },
+        {
+          "name": "Вонючка",
+          "name_norm": "вонючка",
+          "icon": "icons/вонючка.png"
+        },
+        {
+          "name": "Гром",
+          "name_norm": "гром",
+          "icon": "icons/гром.png"
+        },
+        {
+          "name": "Завеса",
+          "name_norm": "завеса",
+          "icon": "icons/завеса.png"
+        },
+        {
+          "name": "M18 Claymore",
+          "name_norm": "m18 claymore",
+          "icon": "icons/m18 claymore.png"
+        }
+      ]
+    }
+  ]
+}

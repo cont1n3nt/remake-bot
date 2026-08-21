@@ -1,4 +1,8 @@
-"""Tests for `stalbot.presentation.cogs.health.HealthCog` (PLAN.md §12, M11)."""
+"""Tests for `stalbot.presentation.cogs.health.HealthCog` (PLAN.md §12, M11).
+
+sqlite_migration.md Э6: shows the database's own state instead of
+Sheets/cache-sync counters.
+"""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -7,25 +11,18 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 
 from stalbot.application.dto.health_status import HealthStatus
-from stalbot.infrastructure.cache.sync import SyncReport
 from stalbot.presentation.cogs.health import HealthCog
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 
 def _status(**overrides: object) -> HealthStatus:
     defaults: dict[str, object] = {
-        "sheets_read_requests": 10,
-        "sheets_write_requests": 3,
-        "cache_hit_rate": 0.9,
-        "cache_age_seconds": 45.0,
-        "last_users_sync": SyncReport(
-            users_synced=237,
-            transactions_synced=64,
-            transactions_skipped=0,
-            formula_free_rows=620,
-            duration_seconds=0.84,
-        ),
-        "last_items_sync": SyncReport(items_synced=219, duration_seconds=0.31),
+        "schema_version": 7,
+        "player_count": 253,
+        "deal_count": 682,
+        "last_deal_at": datetime(2026, 8, 3, 9, 45, tzinfo=UTC),
+        "db_size_bytes": 2_097_152,
+        "integrity_ok": True,
         "audit_queue_size": 0,
         "ocr_sample_count": 12,
         "ocr_confirmed_sample_count": 3,
@@ -67,17 +64,25 @@ async def test_healthcheck_defers_ephemerally_and_replies_once() -> None:
     assert interaction.followup.send.call_args.kwargs["ephemeral"] is True
 
 
-async def test_healthcheck_shows_sheets_and_cache_counters() -> None:
-    cog = _cog(status=_status(sheets_read_requests=10, sheets_write_requests=3))
+async def test_healthcheck_shows_schema_version_and_integrity() -> None:
+    cog = _cog(status=_status(schema_version=7, integrity_ok=True))
     interaction = _interaction()
 
     await _call(cog, interaction)
 
-    embed = interaction.followup.send.call_args.kwargs["embed"]
-    description = embed.description or ""
-    assert "10 чтений" in description
-    assert "3 записей" in description
-    assert "90%" in description
+    description = interaction.followup.send.call_args.kwargs["embed"].description or ""
+    assert "v7" in description
+    assert "целостность ок" in description
+
+
+async def test_healthcheck_flags_a_failed_integrity_check() -> None:
+    cog = _cog(status=_status(integrity_ok=False))
+    interaction = _interaction()
+
+    await _call(cog, interaction)
+
+    description = interaction.followup.send.call_args.kwargs["embed"].description or ""
+    assert "ЦЕЛОСТНОСТЬ НАРУШЕНА" in description
 
 
 async def test_healthcheck_shows_uptime() -> None:
@@ -91,47 +96,35 @@ async def test_healthcheck_shows_uptime() -> None:
     assert "Uptime" in (embed.description or "")
 
 
-async def test_healthcheck_shows_sync_report_details() -> None:
-    cog = _cog(
-        status=_status(
-            last_users_sync=SyncReport(
-                users_synced=237,
-                transactions_synced=64,
-                transactions_skipped=1,
-                formula_free_rows=620,
-                duration_seconds=0.84,
-            ),
-            last_items_sync=SyncReport(items_synced=219, duration_seconds=0.31),
-        )
-    )
+async def test_healthcheck_shows_player_and_deal_counts() -> None:
+    cog = _cog(status=_status(player_count=253, deal_count=682))
     interaction = _interaction()
 
     await _call(cog, interaction)
 
     description = interaction.followup.send.call_args.kwargs["embed"].description or ""
-    assert "237 польз." in description
-    assert "64 сделок" in description
-    assert "620" in description
-    assert "219 предметов" in description
+    assert "Игроков: 253" in description
+    assert "Сделок: 682" in description
 
 
-async def test_healthcheck_handles_never_synced_state() -> None:
-    cog = _cog(
-        status=_status(
-            last_users_sync=None,
-            last_items_sync=None,
-            cache_age_seconds=None,
-            cache_hit_rate=None,
-        )
-    )
+async def test_healthcheck_shows_db_size() -> None:
+    cog = _cog(status=_status(db_size_bytes=2_097_152))
     interaction = _interaction()
 
     await _call(cog, interaction)
 
     description = interaction.followup.send.call_args.kwargs["embed"].description or ""
-    assert "ещё не выполнялся" in description
+    assert "2.0 МБ" in description
+
+
+async def test_healthcheck_handles_no_deals_yet() -> None:
+    cog = _cog(status=_status(last_deal_at=None))
+    interaction = _interaction()
+
+    await _call(cog, interaction)
+
+    description = interaction.followup.send.call_args.kwargs["embed"].description or ""
     assert "нет данных" in description
-    assert "н/д" in description
 
 
 async def test_healthcheck_shows_ocr_dataset_progress() -> None:

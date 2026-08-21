@@ -23,15 +23,34 @@ rare case a transaction is cached before its user row.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
 import aiosqlite
 
-from stalbot.application.dto.log_entry import LogEntry
 from stalbot.domain.entities.transaction import TransactionRecord
 from stalbot.domain.enums import DealType
 from stalbot.domain.nick import NormalizedNick
+from stalbot.infrastructure.cache.db import transaction
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyLogEntry:
+    """A `TransactionRecord` plus its position within its own calendar day.
+
+    sqlite_migration.md Э6: `application.dto.log_entry.LogEntry` was
+    repurposed to wrap the new `Deal` entity for `StatsCog`'s `/logs` — this
+    repository is unreachable from any live command anymore (superseded by
+    `DealsRepository.list_numbered_page`) but stays until Э9 deletes the
+    Sheets-era cache outright, so it keeps its own small DTO instead of
+    sharing one with the schema it's being replaced by.
+    """
+
+    day_number: int
+    transaction: TransactionRecord
+    discord_id: int | None
+
 
 _SELECT_WITH_DISPLAY = """
     SELECT t.*, COALESCE(u.nick_display, t.nick_norm) AS nick_display
@@ -118,7 +137,7 @@ class TransactionsCacheRepository:
         row = await cursor.fetchone()
         return int(row["n"]) if row is not None else 0
 
-    async def list_numbered_page(self, *, offset: int, limit: int) -> Sequence[LogEntry]:
+    async def list_numbered_page(self, *, offset: int, limit: int) -> Sequence[LegacyLogEntry]:
         """Return one page of `/logs`, newest first, numbered within each day.
 
         `day_number` is computed by a window function over the whole table
@@ -155,24 +174,24 @@ class TransactionsCacheRepository:
         Args:
             records: Rows read from the `Тикеты` block.
         """
-        await self._conn.executemany(
-            """
-            INSERT INTO transactions (sheet_row, occurred_at, nick_norm, deal_type,
-                                       amount, coins, xp, referrer_norm)
-            VALUES (:sheet_row, :occurred_at, :nick_norm, :deal_type,
-                    :amount, :coins, :xp, :referrer_norm)
-            ON CONFLICT (sheet_row) DO UPDATE SET
-                occurred_at = excluded.occurred_at,
-                nick_norm = excluded.nick_norm,
-                deal_type = excluded.deal_type,
-                amount = excluded.amount,
-                coins = excluded.coins,
-                xp = excluded.xp,
-                referrer_norm = excluded.referrer_norm
-            """,
-            [_record_to_params(record) for record in records],
-        )
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.executemany(
+                """
+                INSERT INTO transactions (sheet_row, occurred_at, nick_norm, deal_type,
+                                           amount, coins, xp, referrer_norm)
+                VALUES (:sheet_row, :occurred_at, :nick_norm, :deal_type,
+                        :amount, :coins, :xp, :referrer_norm)
+                ON CONFLICT (sheet_row) DO UPDATE SET
+                    occurred_at = excluded.occurred_at,
+                    nick_norm = excluded.nick_norm,
+                    deal_type = excluded.deal_type,
+                    amount = excluded.amount,
+                    coins = excluded.coins,
+                    xp = excluded.xp,
+                    referrer_norm = excluded.referrer_norm
+                """,
+                [_record_to_params(record) for record in records],
+            )
 
 
 def _record_to_params(record: TransactionRecord) -> dict[str, object]:
@@ -188,8 +207,8 @@ def _record_to_params(record: TransactionRecord) -> dict[str, object]:
     }
 
 
-def _row_to_log_entry(row: aiosqlite.Row) -> LogEntry:
-    return LogEntry(
+def _row_to_log_entry(row: aiosqlite.Row) -> LegacyLogEntry:
+    return LegacyLogEntry(
         day_number=row["day_number"], transaction=_row_to_record(row), discord_id=row["discord_id"]
     )
 

@@ -1,6 +1,7 @@
 """`/logs`, `/day`, `/week`, `/month` — deal archive and period statistics.
 
-PLAN.md §10.10, §10.11.
+PLAN.md §10.10, §10.11. sqlite_migration.md Э6: reads `deals`/`players`
+instead of the sheet-era `transactions` cache.
 """
 
 from collections.abc import Sequence
@@ -11,13 +12,13 @@ from discord import app_commands
 from discord.ext import commands
 
 from stalbot.application.dto.log_entry import LogEntry
-from stalbot.application.dto.period_report import PeriodReport, PlayerPeriodStats
+from stalbot.application.dto.period_report import PeriodDeal, PeriodReport, PlayerPeriodStats
 from stalbot.application.services.stats import StatsService
 from stalbot.domain.clock import DateRange, SystemClock, format_date, format_datetime, parse_date
-from stalbot.domain.entities.transaction import TransactionRecord
-from stalbot.domain.enums import DealType
+from stalbot.domain.enums import DealType, OccurredAtKind
 from stalbot.domain.money import format_amount
-from stalbot.infrastructure.cache.repositories.transactions import TransactionsCacheRepository
+from stalbot.infrastructure.cache.repositories.deals import DealsRepository
+from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.presentation.checks import admin_only
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.views.logs_pager import LogsPagerView
@@ -27,6 +28,13 @@ _SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━"
 _PLAYERS_PAGE_SIZE: Final = 20
 _LOGS_PAGE_SIZE: Final = 25
 _DEALS_PAGE_SIZE: Final = 20
+
+#: Marks a `deals.occurred_at_kind = 'sheet_interpolated'` row (sqlite_migration.md
+#: §I.3): 534 pre-bot deals whose date was never recorded, evenly spread
+#: between the backlog's known start and the first real sheet date. The
+#: presentation layer must not show these as if they were as precise as a
+#: real timestamp.
+_APPROXIMATE_DATE_MARKER = "≈"
 
 _MONTH_NAMES: Final[dict[int, str]] = {
     1: "Январь",
@@ -55,7 +63,8 @@ class StatsCog(commands.Cog):
     def __init__(
         self,
         stats: StatsService,
-        transactions: TransactionsCacheRepository,
+        deals: DealsRepository,
+        players: PlayersRepository,
         embeds: EmbedFactory,
         *,
         clock: SystemClock | None = None,
@@ -63,15 +72,17 @@ class StatsCog(commands.Cog):
         """Wire the cog to the services it delegates to.
 
         Args:
-            stats: Aggregates transactions into a `PeriodReport`.
-            transactions: Read directly (not through `stats`) for `/logs`'s
+            stats: Aggregates deals into a `PeriodReport`.
+            deals: Read directly (not through `stats`) for `/logs`'s
                 plain numbered-page listing.
+            players: Resolves each deal's player for `/logs`'s display.
             embeds: Builds every embed this cog sends.
             clock: Time source for `/week`'s "not in the future" check.
                 Defaults to a real `SystemClock`.
         """
         self._stats = stats
-        self._transactions = transactions
+        self._deals = deals
+        self._players = players
         self._embeds = embeds
         self._clock = clock or SystemClock()
 
@@ -142,16 +153,34 @@ class StatsCog(commands.Cog):
         pager.message = message
 
     async def _build_log_pages(self) -> list[discord.Embed]:
-        total = await self._transactions.count_all()
+        total = await self._deals.count()
         if total == 0:
             return [self._embeds.info("🧾 Архив сделок", "Сделок пока нет.")]
 
         page_count = -(-total // _LOGS_PAGE_SIZE)  # ceil division
         pages: list[discord.Embed] = []
         for page_index in range(page_count):
-            entries = await self._transactions.list_numbered_page(
+            numbered = await self._deals.list_numbered_page(
                 offset=page_index * _LOGS_PAGE_SIZE, limit=_LOGS_PAGE_SIZE
             )
+            players_by_id = await self._players.get_by_ids(deal.player_id for _n, deal in numbered)
+            entries = [
+                LogEntry(
+                    day_number=day_number,
+                    deal=deal,
+                    nick_display=(
+                        players_by_id[deal.player_id].nick_display
+                        if deal.player_id in players_by_id
+                        else str(deal.player_id)
+                    ),
+                    discord_id=(
+                        players_by_id[deal.player_id].discord_id
+                        if deal.player_id in players_by_id
+                        else None
+                    ),
+                )
+                for day_number, deal in numbered
+            ]
             lines = [_format_log_line(entry) for entry in entries]
             title = f"🧾 Архив сделок (стр. {page_index + 1}/{page_count})"
             pages.append(self._embeds.info(title, "\n".join(lines)))
@@ -159,11 +188,13 @@ class StatsCog(commands.Cog):
 
 
 def _format_log_line(entry: LogEntry) -> str:
-    tx = entry.transaction
+    deal = entry.deal
     tag = f"<@{entry.discord_id}>" if entry.discord_id is not None else "—"
+    approx = f"{_APPROXIMATE_DATE_MARKER} " if _is_approximate(deal.occurred_at_kind) else ""
     return (
-        f"#{entry.day_number} │ {format_datetime(tx.at)} │ {tx.nick_display} │ "
-        f"{tag} │ {_DEAL_LABELS[tx.deal_type]} │ {format_amount(tx.amount)}"
+        f"#{entry.day_number} (ID: {deal.id}) │ {approx}{format_datetime(deal.occurred_at)} │ "
+        f"{entry.nick_display} │ {tag} │ {_DEAL_LABELS[deal.deal_type]} │ "
+        f"{format_amount(deal.amount)}"
     )
 
 
@@ -183,7 +214,7 @@ def _render_period_pages(
 
 
 def _render_deal_pages(
-    embeds: EmbedFactory, title: str, deals: Sequence[TransactionRecord]
+    embeds: EmbedFactory, title: str, deals: Sequence[PeriodDeal]
 ) -> list[discord.Embed]:
     """Render the individual-deal listing that follows the aggregate pages (UX #11)."""
     if not deals:
@@ -191,7 +222,7 @@ def _render_deal_pages(
     chunks = _chunk(deals, _DEALS_PAGE_SIZE)
     pages: list[discord.Embed] = []
     for index, chunk in enumerate(chunks, start=1):
-        lines = [_format_deal_line(deal) for deal in chunk]
+        lines = [_format_deal_line(entry) for entry in chunk]
         page_title = f"🧾 Сделки — {title}"
         if len(chunks) > 1:
             page_title += f" (стр. {index}/{len(chunks)})"
@@ -199,9 +230,15 @@ def _render_deal_pages(
     return pages
 
 
-def _format_deal_line(deal: TransactionRecord) -> str:
+def _is_approximate(kind: OccurredAtKind) -> bool:
+    return kind is OccurredAtKind.SHEET_INTERPOLATED
+
+
+def _format_deal_line(entry: PeriodDeal) -> str:
+    deal = entry.deal
+    approx = f"{_APPROXIMATE_DATE_MARKER} " if _is_approximate(deal.occurred_at_kind) else ""
     return (
-        f"{format_datetime(deal.at)} │ {deal.nick_display} │ "
+        f"{approx}{format_datetime(deal.occurred_at)} │ {entry.nick_display} │ "
         f"{_DEAL_LABELS[deal.deal_type]} │ {format_amount(deal.amount)}"
     )
 

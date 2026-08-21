@@ -6,6 +6,7 @@ import aiosqlite
 
 from stalbot.application.dto.progression_state import ProgressionState
 from stalbot.domain.nick import NormalizedNick
+from stalbot.infrastructure.cache.db import transaction
 
 
 class ProgressionStateRepository:
@@ -37,26 +38,29 @@ class ProgressionStateRepository:
         Args:
             state: The new state to persist.
         """
-        await self._conn.execute(
-            """
-            INSERT INTO progression_state
-                (nick_norm, last_rank, last_referral_role, manual_rank_role, announced_at)
-            VALUES (:nick_norm, :last_rank, :last_referral_role, :manual_rank_role, :announced_at)
-            ON CONFLICT (nick_norm) DO UPDATE SET
-                last_rank = excluded.last_rank,
-                last_referral_role = excluded.last_referral_role,
-                manual_rank_role = excluded.manual_rank_role,
-                announced_at = excluded.announced_at
-            """,
-            {
-                "nick_norm": state.nick,
-                "last_rank": state.last_rank,
-                "last_referral_role": state.last_referral_role,
-                "manual_rank_role": int(state.manual_rank_role),
-                "announced_at": state.announced_at.isoformat() if state.announced_at else None,
-            },
-        )
-        await self._conn.commit()
+        async with transaction(self._conn):
+            await self._conn.execute(
+                """
+                INSERT INTO progression_state
+                    (nick_norm, last_rank, last_referral_role, manual_rank_role, announced_at)
+                VALUES
+                    (:nick_norm, :last_rank, :last_referral_role, :manual_rank_role, :announced_at)
+                ON CONFLICT (nick_norm) DO UPDATE SET
+                    last_rank = excluded.last_rank,
+                    last_referral_role = excluded.last_referral_role,
+                    manual_rank_role = excluded.manual_rank_role,
+                    announced_at = excluded.announced_at
+                """,
+                {
+                    "nick_norm": state.nick,
+                    "last_rank": state.last_rank,
+                    "last_referral_role": state.last_referral_role,
+                    "manual_rank_role": int(state.manual_rank_role),
+                    "announced_at": (
+                        state.announced_at.isoformat() if state.announced_at else None
+                    ),
+                },
+            )
 
 
 def _row_to_state(row: aiosqlite.Row) -> ProgressionState:

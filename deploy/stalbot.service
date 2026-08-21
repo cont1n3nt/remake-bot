@@ -14,7 +14,7 @@
 # Logs: `journalctl -u stalbot -f`
 
 [Unit]
-Description=stalbot — Discord bot for Stalcraft (Stalzone) x Google Sheets
+Description=stalbot — Discord bot for Stalcraft (Stalzone)
 After=network-online.target
 Wants=network-online.target
 
@@ -32,7 +32,8 @@ RestartSec=5s
 EnvironmentFile=-/opt/stalbot/.env
 
 # Hardening — the bot only needs to read its own directory and write to
-# data/ (SQLite cache, OCR samples) inside it.
+# data/ (SQLite cache, OCR samples) inside it. No credentials/ directory —
+# there is no external API key to load.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -42,8 +43,8 @@ ReadWritePaths=/opt/stalbot/data
 # SEC-6: further restrict what a compromised/misbehaving process could do,
 # on top of the above — none of this is a response to a known exploit path,
 # just narrowing what's available. The bot is a plain asyncio network client
-# (Discord gateway/HTTPS, Google Sheets API, local SQLite) with no need for
-# kernel/namespace/capability access of any kind.
+# (Discord gateway/HTTPS, local SQLite) with no need for kernel/namespace/
+# capability access of any kind.
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
@@ -51,7 +52,7 @@ RestrictSUIDSGID=true
 RestrictNamespaces=true
 LockPersonality=true
 CapabilityBoundingSet=
-# Outbound-only network client (Discord gateway/HTTPS, Google Sheets HTTPS) —
+# Outbound-only network client (Discord gateway/HTTPS) —
 # AF_UNIX covers local DNS-resolver/NSS paths some glibc resolvers use.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 # `@system-service` is systemd's own broad allowlist for typical daemons —

@@ -14,14 +14,14 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 import discord
 
 from stalbot.application.services.boost_orders import MAX_ORDER_LINES
-from stalbot.domain.entities.item import Item
+from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.views.base import AuthorLockedView
 
 _ButtonHandler = Callable[[discord.Interaction], Awaitable[None]]
 _SelectHandler = Callable[[discord.Interaction, int], Awaitable[None]]
 _PageChangeHandler = Callable[
-    [discord.Interaction, Sequence[Item], frozenset[int]], Awaitable[frozenset[int]]
+    [discord.Interaction, Sequence[CatalogItem], frozenset[int]], Awaitable[frozenset[int]]
 ]
 
 _PAGE_SIZE = 25
@@ -30,7 +30,7 @@ _NO_LINES_OPTION = discord.SelectOption(label="Пока ничего не выб
 _NO_BOOSTS_OPTION = discord.SelectOption(label="Нет бустов", value="none")
 
 
-def _option_label(item: Item, quantity: int | None) -> str:
+def _option_label(item: CatalogItem, quantity: int | None) -> str:
     """`"🚀 Топот"`, or `"🚀 Топот — 3 шт."` once it's in the draft (PLAN.md §11.6)."""
     label = item.name if quantity is None else f"{item.name} — {quantity} шт."
     return label[:_SELECT_LABEL_MAX]
@@ -173,7 +173,7 @@ class BoostMultiSelectView(AuthorLockedView):
 
     def __init__(
         self,
-        items: Sequence[Item],
+        items: Sequence[CatalogItem],
         selected_ids: frozenset[int],
         *,
         author_id: int,
@@ -251,14 +251,14 @@ class BoostMultiSelectView(AuthorLockedView):
         self._sync()
         await interaction.response.edit_message(embed=self.status_embed(), view=self)
 
-    def _current_page_items(self) -> Sequence[Item]:
+    def _current_page_items(self) -> Sequence[CatalogItem]:
         start = self._page * _PAGE_SIZE
         return self._items[start : start + _PAGE_SIZE]
 
     async def _handle_change(self, interaction: discord.Interaction) -> None:
         page_items = self._current_page_items()
         chosen_ids = frozenset(int(value) for value in self._select.values if value != "none")
-        page_ids = {item.id for item in page_items}
+        page_ids = {item.id for item in page_items if item.id is not None}
         self._selected_ids = (self._selected_ids - page_ids) | chosen_ids
         for item_id in page_ids - chosen_ids:
             self._quantities.pop(item_id, None)
@@ -283,14 +283,17 @@ class BoostMultiSelectView(AuthorLockedView):
 
     def _sync(self) -> None:
         page_items = self._current_page_items()
-        self._select.options = [
-            discord.SelectOption(
-                label=_option_label(item, self._quantities.get(item.id)),
-                value=str(item.id),
-                default=item.id in self._selected_ids,
+        options: list[discord.SelectOption] = []
+        for item in page_items:
+            assert item.id is not None  # noqa: S101 - a rendered catalog item always has an id
+            options.append(
+                discord.SelectOption(
+                    label=_option_label(item, self._quantities.get(item.id)),
+                    value=str(item.id),
+                    default=item.id in self._selected_ids,
+                )
             )
-            for item in page_items
-        ] or [_NO_BOOSTS_OPTION]
+        self._select.options = options or [_NO_BOOSTS_OPTION]
         self._select.max_values = max(1, len(page_items))
         self._select.min_values = 0
         self._select.disabled = not page_items

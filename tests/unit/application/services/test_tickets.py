@@ -4,41 +4,22 @@ The cache repository is real, SQLite-backed, for genuine round-trip
 confidence (same approach as `test_transaction_service.py`).
 """
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
 
 import aiosqlite
 import pytest
-import pytest_asyncio
 
 from stalbot.application.services.tickets import TicketService
 from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
 from stalbot.domain.errors import TicketSessionNotFoundError
-from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
-
-
-@pytest_asyncio.fixture
-async def connection(tmp_path: Path) -> AsyncIterator[aiosqlite.Connection]:
-    db = CacheDb(tmp_path / "cache.sqlite3")
-    conn = await db.connect()
-    yield conn
-    await db.close()
-
-
-class _FixedClock:
-    def __init__(self, now: datetime) -> None:
-        self._now = now
-
-    def now(self) -> datetime:
-        return self._now
+from tests.support.fake_clock import FakeClock
 
 
 def _service(connection: aiosqlite.Connection) -> TicketService:
     return TicketService(
         TicketSessionsRepository(connection),
-        clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
     )
 
 

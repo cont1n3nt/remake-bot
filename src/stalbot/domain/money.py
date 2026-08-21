@@ -12,9 +12,23 @@ import re
 import unicodedata
 from collections.abc import Iterator, Mapping
 from decimal import ROUND_HALF_UP, Decimal, DecimalException, InvalidOperation, localcontext
-from typing import Final
+from typing import Final, NewType
 
 from stalbot.domain.errors import AmountParseError
+
+# --- storage-boundary units (sqlite_migration.md §III.3, §IV.1) -------------
+#
+# Two units of money live in the trading schema (Э3+), and mypy --strict must
+# never let them mix: `Rub` — whole rubles, `deals.amount`/`catalog_items`
+# price columns (§III.3: "Торговые деньги — INTEGER целых рублей" — deal
+# amounts have no fractional part on the sheet, and SQL aggregates like
+# `SUM(...) FILTER (...)` need a plain INTEGER column to work at all). A
+# third unit, `Kopeks` (shelter costs, Э5 — 0.86 ₽/energy unit needs
+# sub-ruble precision `Rub` can't hold) is declared here too, ahead of its
+# first real use, so both units exist together from day one and can never
+# be confused for one another even before Kopeks has a table.
+Rub = NewType("Rub", int)
+Kopeks = NewType("Kopeks", int)
 
 # --- shared normalization tables --------------------------------------------
 
@@ -375,6 +389,30 @@ def round_for_storage(value: Decimal) -> Decimal:
         the original unrounded `value`, so the two never disagree.
     """
     return value.to_integral_value(rounding=ROUND_HALF_UP)
+
+
+def to_storage(value: Decimal) -> Rub:
+    """Round a ruble amount to the `INTEGER` form the trading schema stores (§III.3).
+
+    The one place a `Rub` value is allowed to come into existence — every
+    write to `deals.amount`/`catalog_items.price_buy`/`price_sell` must
+    go through this, not a bare `int(...)`, so rounding is always
+    `ROUND_HALF_UP` (matching `round_for_storage`/`format_amount`) rather
+    than silently truncating toward zero.
+
+    Args:
+        value: Amount to store, in whole-or-fractional rubles.
+    """
+    return Rub(int(round_for_storage(value)))
+
+
+def from_storage(value: Rub | int) -> Decimal:
+    """Convert a stored `Rub` `INTEGER` back into a `Decimal` for display/arithmetic.
+
+    Args:
+        value: A `deals.amount`/`catalog_items` price column value.
+    """
+    return Decimal(int(value))
 
 
 def format_amount(value: Decimal | int, *, currency: bool = True) -> str:

@@ -33,6 +33,7 @@ from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSess
 from stalbot.presentation.cogs.tickets.cog import TicketsCog
 from stalbot.presentation.cogs.tickets.modals import AmountModal
 from stalbot.presentation.embeds.factory import EmbedFactory
+from tests.support.fake_clock import FakeClock
 
 _CHANNEL_ID = 111
 _AUTHOR_ID = 222
@@ -43,14 +44,6 @@ _SELL_ITEMS_CATEGORY = next(
 )
 
 
-class _FixedClock:
-    def __init__(self, now: datetime) -> None:
-        self._now = now
-
-    def now(self) -> datetime:
-        return self._now
-
-
 def _build_cog(sessions: TicketSessionsRepository) -> tuple[TicketsCog, TicketService]:
     """Build a full `TicketsCog` graph around a real ticket-sessions repository.
 
@@ -59,7 +52,7 @@ def _build_cog(sessions: TicketSessionsRepository) -> tuple[TicketsCog, TicketSe
     exercised here, so they stay mocked — only the persistence path this
     test is about needs to be real.
     """
-    tickets = TicketService(sessions, clock=_FixedClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)))
+    tickets = TicketService(sessions, clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)))
     cog = TicketsCog(
         tickets,
         MagicMock(),

@@ -1,4 +1,4 @@
-"""Result DTOs for `ManualGrantService` (PLAN.md §10.12)."""
+"""Result DTOs for `ManualGrantService` (PLAN.md §10.12; sqlite_migration.md Э7)."""
 
 from dataclasses import dataclass
 
@@ -10,8 +10,6 @@ from stalbot.domain.progression.ranks import RankTier
 class SetReferralResult:
     """What `/set_referral` actually did, for the caller to build a response from."""
 
-    row: int
-    """The player's first `Тикеты` row — where `H` was written."""
     previous_referrer: NormalizedNick | None
     """Whatever referrer was on record before this call, if any."""
     player_discord_bound: bool

@@ -1,4 +1,4 @@
-"""`/add` — record a deal (PLAN.md §10.1)."""
+"""`/add` — record a deal (PLAN.md §10.1; sqlite_migration.md Э7)."""
 
 import discord
 from discord import app_commands
@@ -12,10 +12,11 @@ from stalbot.application.services.progression import ProgressionService
 from stalbot.application.services.transactions import TransactionService
 from stalbot.config.settings import Settings
 from stalbot.domain.clock import format_datetime
+from stalbot.domain.entities.deal import Deal
 from stalbot.domain.enums import DealType
 from stalbot.domain.money import evaluate_amount, format_amount
 from stalbot.domain.nick import normalize_nick
-from stalbot.infrastructure.cache.repositories.users import UsersCacheRepository
+from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.presentation.checks import admin_only
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.views.confirm import ConfirmView
@@ -33,22 +34,22 @@ class TransactionsCog(commands.Cog):
         self,
         transactions: TransactionService,
         progression: ProgressionService,
-        users: UsersCacheRepository,
+        players: PlayersRepository,
         embeds: EmbedFactory,
         settings: Settings,
     ) -> None:
         """Wire the cog to the services it delegates to.
 
         Args:
-            transactions: Writes the deal and waits for the formulas.
+            transactions: Writes the deal.
             progression: Reconciles roles and announces promotions.
-            users: Read-only lookup for the binding-conflict warning.
+            players: Read-only lookup for the binding-conflict warning.
             embeds: Builds every embed this cog sends.
             settings: For the reviews-channel reminder.
         """
         self._transactions = transactions
         self._progression = progression
-        self._users = users
+        self._players = players
         self._embeds = embeds
         self._settings = settings
 
@@ -100,7 +101,7 @@ class TransactionsCog(commands.Cog):
             )
 
         force_rebind = False
-        existing = await self._users.get_by_nick(nick_norm)
+        existing = await self._players.get_by_nick(nick_norm)
         if (
             existing is not None
             and existing.discord_id is not None
@@ -137,6 +138,60 @@ class TransactionsCog(commands.Cog):
         )
         await self._send_public_notice(interaction, ник)
 
+    @app_commands.command(name="del_deal", description="🛡️ [Админ] 🗑️ Удалить сделку по ID")
+    @app_commands.describe(ид="ID сделки (см. /logs)")
+    @admin_only()
+    async def del_deal(self, interaction: discord.Interaction, ид: int) -> None:
+        """Handle `/del_deal`: confirm, then delete a deal and resync progression."""
+        await interaction.response.defer(ephemeral=True)
+
+        deal = await self._transactions.get_deal(ид)
+        if deal is None:
+            embed = self._embeds.error("Ошибка", "Сделка с таким ID не найдена.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        player = await self._players.get_by_id(deal.player_id)
+        nick_display = player.nick_display if player is not None else str(deal.player_id)
+
+        confirmed = await self._confirm_delete(interaction, nick_display, deal)
+        if not confirmed:
+            embed = self._embeds.info("Отменено", "Сделка не была удалена.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        deleted = await self._transactions.delete_deal(ид)
+
+        channel = interaction.channel
+        if player is not None and isinstance(channel, discord.abc.Messageable):
+            await self._progression.sync([player.nick_norm], announce_to=channel)
+
+        lines = [
+            f"👤 Ник: {nick_display}",
+            f"📌 Тип: {_DEAL_TYPE_LABEL[deleted.deal_type]}",
+            f"💰 Сумма: {format_amount(deleted.amount)}",
+            f"🪙 Списано: {deleted.coins} Coins • ⚡ {deleted.xp} XP",
+            f"🕒 Дата сделки: {format_datetime(deleted.occurred_at)}",
+        ]
+        embed = self._embeds.success("🗑️ Сделка удалена", "\n".join(lines))
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _confirm_delete(
+        self, interaction: discord.Interaction, nick_display: str, deal: Deal
+    ) -> bool:
+        embed = self._embeds.warning(
+            "⚠️ Подтвердите удаление",
+            f"Удалить сделку #{deal.id}?\n"
+            f"👤 {nick_display} • {_DEAL_TYPE_LABEL[deal.deal_type]} • "
+            f"{format_amount(deal.amount)} • {deal.coins} Coins / {deal.xp} XP\n"
+            f"🕒 {format_datetime(deal.occurred_at)}",
+        )
+        view = ConfirmView(author_id=interaction.user.id)
+        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True, wait=True)
+        view.message = message
+        await view.wait()
+        return bool(view.confirmed)
+
     async def _confirm_rebind(
         self,
         interaction: discord.Interaction,
@@ -170,16 +225,12 @@ class TransactionsCog(commands.Cog):
             f"📌 Тип: {_DEAL_TYPE_LABEL[deal_type]}",
             f"👤 Ник: {nick}",
             f"💬 Discord: {member.mention}",
-            f"💰 Сумма: {format_amount(result.record.amount)}",
+            f"💰 Сумма: {format_amount(result.deal.amount)}",
+            f"🪙 Начислено: {result.deal.coins} Coins • ⚡ {result.deal.xp} XP",
         ]
-        if result.formula_pending:
-            lines.append("🪙 Начисление: ожидает пересчёта формул, проверьте таблицу позже")
-        else:
-            lines.append(f"🪙 Начислено: {result.record.coins} Coins • ⚡ {result.record.xp} XP")
         if referrer_nick:
             lines.append(f"🤝 Реферал: {referrer_nick}")
-        lines.append(f"🕒 Дата: {format_datetime(result.record.at)}")
-        lines.append(f"📄 Строка: {result.record.row}")
+        lines.append(f"🕒 Дата: {format_datetime(result.deal.occurred_at)}")
         if result.discord_bound:
             lines.append("🔗 Discord ID привязан к нику")
         lines.extend(warnings)

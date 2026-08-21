@@ -1,47 +1,43 @@
-"""Tests for `stalbot.application.services.health.HealthService` (PLAN.md §12, M11)."""
+"""Tests for `stalbot.application.services.health.HealthService` (PLAN.md §12, M11).
+
+sqlite_migration.md Э6: reports the database's own state (schema version,
+row counts, integrity, size) instead of Sheets/cache-sync counters.
+"""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from stalbot.application.services.audit import AuditService
 from stalbot.application.services.health import HealthService
+from stalbot.infrastructure.cache.db import CacheDb
+from stalbot.infrastructure.cache.repositories.deals import DealsRepository
+from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
     ScreenshotAnalysesRepository,
 )
-from stalbot.infrastructure.cache.repositories.users import UsersCacheRepository
-from stalbot.infrastructure.cache.sync import CacheSync, SyncReport
-from stalbot.infrastructure.sheets.client import SheetsClient
 
 
-class _FixedClock:
-    def __init__(self, now: datetime) -> None:
-        self._now = now
-
-    def now(self) -> datetime:
-        return self._now
-
-
-def _sheets(*, reads: int = 5, writes: int = 2) -> MagicMock:
-    client = MagicMock(spec=SheetsClient)
-    client.read_request_count = reads
-    client.write_request_count = writes
-    return client
-
-
-def _cache_sync(
-    *, hit_rate: float | None, users_report: SyncReport | None, items_report: SyncReport | None
+def _cache_db(
+    *, schema_version: int = 7, integrity_ok: bool = True, size_bytes: int = 1_048_576
 ) -> MagicMock:
-    cache_sync = MagicMock(spec=CacheSync)
-    cache_sync.cache_hit_rate = hit_rate
-    cache_sync.last_users_report = users_report
-    cache_sync.last_items_report = items_report
-    return cache_sync
+    cache_db = MagicMock(spec=CacheDb)
+    cache_db.schema_version = AsyncMock(return_value=schema_version)
+    cache_db.integrity_ok = AsyncMock(return_value=integrity_ok)
+    cache_db.size_bytes = MagicMock(return_value=size_bytes)
+    return cache_db
 
 
-def _users(*, last_synced_at: datetime | None) -> MagicMock:
-    users = MagicMock(spec=UsersCacheRepository)
-    users.last_synced_at = AsyncMock(return_value=last_synced_at)
-    return users
+def _players(*, count: int = 0) -> MagicMock:
+    players = MagicMock(spec=PlayersRepository)
+    players.count = AsyncMock(return_value=count)
+    return players
+
+
+def _deals(*, count: int = 0, last_occurred_at: datetime | None = None) -> MagicMock:
+    deals = MagicMock(spec=DealsRepository)
+    deals.count = AsyncMock(return_value=count)
+    deals.last_occurred_at = AsyncMock(return_value=last_occurred_at)
+    return deals
 
 
 def _audit(*, queue_size: int = 0) -> MagicMock:
@@ -57,81 +53,80 @@ def _screenshots(*, total: int = 0, confirmed: int = 0) -> MagicMock:
     return screenshots
 
 
-async def test_snapshot_reports_sheets_request_counts() -> None:
+async def test_snapshot_reports_schema_version_and_integrity() -> None:
     service = HealthService(
-        _sheets(reads=12, writes=3),
-        _cache_sync(hit_rate=None, users_report=None, items_report=None),
-        _users(last_synced_at=None),
+        _cache_db(schema_version=7, integrity_ok=True),
+        _players(),
+        _deals(),
         _audit(),
         _screenshots(),
-        clock=_FixedClock(datetime(2026, 8, 3, 12, 0, tzinfo=UTC)),
     )
 
     status = await service.snapshot()
 
-    assert status.sheets_read_requests == 12
-    assert status.sheets_write_requests == 3
+    assert status.schema_version == 7
+    assert status.integrity_ok is True
 
 
-async def test_snapshot_computes_cache_age_from_last_synced_at() -> None:
-    now = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
-    last_synced = datetime(2026, 8, 3, 11, 59, tzinfo=UTC)  # 60s ago
+async def test_snapshot_reports_a_failed_integrity_check() -> None:
     service = HealthService(
-        _sheets(),
-        _cache_sync(hit_rate=0.9, users_report=None, items_report=None),
-        _users(last_synced_at=last_synced),
-        _audit(),
-        _screenshots(),
-        clock=_FixedClock(now),
+        _cache_db(integrity_ok=False), _players(), _deals(), _audit(), _screenshots()
     )
 
     status = await service.snapshot()
 
-    assert status.cache_age_seconds == 60.0
-    assert status.cache_hit_rate == 0.9
+    assert status.integrity_ok is False
 
 
-async def test_snapshot_reports_no_cache_age_when_never_synced() -> None:
+async def test_snapshot_reports_player_and_deal_counts() -> None:
     service = HealthService(
-        _sheets(),
-        _cache_sync(hit_rate=None, users_report=None, items_report=None),
-        _users(last_synced_at=None),
-        _audit(),
-        _screenshots(),
-        clock=_FixedClock(datetime(2026, 8, 3, 12, 0, tzinfo=UTC)),
+        _cache_db(), _players(count=253), _deals(count=682), _audit(), _screenshots()
     )
 
     status = await service.snapshot()
 
-    assert status.cache_age_seconds is None
+    assert status.player_count == 253
+    assert status.deal_count == 682
 
 
-async def test_snapshot_passes_through_the_last_sync_reports() -> None:
-    users_report = SyncReport(users_synced=10)
-    items_report = SyncReport(items_synced=20)
+async def test_snapshot_reports_last_deal_timestamp() -> None:
+    last = datetime(2026, 8, 3, 11, 59, tzinfo=UTC)
     service = HealthService(
-        _sheets(),
-        _cache_sync(hit_rate=1.0, users_report=users_report, items_report=items_report),
-        _users(last_synced_at=None),
-        _audit(),
-        _screenshots(),
-        clock=_FixedClock(datetime(2026, 8, 3, 12, 0, tzinfo=UTC)),
+        _cache_db(), _players(), _deals(last_occurred_at=last), _audit(), _screenshots()
     )
 
     status = await service.snapshot()
 
-    assert status.last_users_sync is users_report
-    assert status.last_items_sync is items_report
+    assert status.last_deal_at == last
+
+
+async def test_snapshot_reports_no_last_deal_when_database_is_empty() -> None:
+    service = HealthService(
+        _cache_db(), _players(), _deals(last_occurred_at=None), _audit(), _screenshots()
+    )
+
+    status = await service.snapshot()
+
+    assert status.last_deal_at is None
+
+
+async def test_snapshot_reports_db_size() -> None:
+    service = HealthService(
+        _cache_db(size_bytes=2_097_152), _players(), _deals(), _audit(), _screenshots()
+    )
+
+    status = await service.snapshot()
+
+    assert status.db_size_bytes == 2_097_152
 
 
 async def test_snapshot_reports_audit_queue_size_and_ocr_counters() -> None:
     service = HealthService(
-        _sheets(),
-        _cache_sync(hit_rate=None, users_report=None, items_report=None),
-        _users(last_synced_at=None),
+        _cache_db(),
+        _players(),
+        _deals(),
         _audit(queue_size=7),
         _screenshots(total=42, confirmed=9),
-        clock=_FixedClock(datetime(2026, 8, 3, 12, 0, tzinfo=UTC)),
     )
 
     status = await service.snapshot()

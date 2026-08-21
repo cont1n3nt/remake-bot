@@ -99,7 +99,7 @@ async def test_display_nick_resolves_from_users_table(
     connection: aiosqlite.Connection, synced_at: str
 ) -> None:
     users_repo = UsersCacheRepository(connection)
-    await users_repo.replace_all(
+    await users_repo.upsert_many(
         [
             UserProfile(
                 row=3,
@@ -219,7 +219,7 @@ async def test_list_numbered_page_resolves_discord_id_from_users(
     connection: aiosqlite.Connection, synced_at: str
 ) -> None:
     users_repo = UsersCacheRepository(connection)
-    await users_repo.replace_all(
+    await users_repo.upsert_many(
         [
             UserProfile(
                 row=3,

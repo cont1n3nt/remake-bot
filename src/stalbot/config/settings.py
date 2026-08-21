@@ -31,14 +31,8 @@ class Settings(BaseSettings):
     log_channel_id: int
     reviews_channel_id: int
 
-    # --- Google Sheets ---
-    google_credentials_path: Path = Path("./credentials/service_account.json")
-    spreadsheet_id: str
-
     # --- Cache and background tasks ---
     cache_db_path: Path = Path("./data/cache.sqlite3")
-    sync_users_interval_seconds: int = Field(default=180, gt=0)
-    sync_items_interval_seconds: int = Field(default=600, gt=0)
     progression_poll_seconds: int = Field(default=300, gt=0)
 
     # --- Behavior toggles (PLAN.md §17.2) ---

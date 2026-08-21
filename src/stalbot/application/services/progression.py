@@ -1,14 +1,17 @@
 """Rank/referral-role progression: role sync + promotion announcements (PLAN.md §9.2).
 
-`ProgressionService.sync()` never computes a rank or referral role itself —
-it only reads what the sheet's own formulas already decided (`UserProfile.
-rank`/`referral_role`, decision A2) and reconciles Discord roles + announces
-genuine advancements against that.
+sqlite_migration.md Э6: `ProgressionService.sync()` reads the materialized
+`player_progression` snapshot (`rank_key`/`referral_role_key` — stable ladder
+keys, not the sheet's emoji-label text) instead of the sheet-era
+`UserProfile.rank`/`.referral_role` strings, and looks tiers up via
+`Ladder.by_key` instead of `Ladder.by_label`. `ProgressionRepository.recompute()`
+(Э3's calculator) is what decides Coins/XP/rank now — this service only
+reconciles Discord roles and announces genuine advancements against
+whatever it already computed.
 """
 
 import logging
 from collections.abc import Collection
-from dataclasses import replace
 
 import discord
 
@@ -19,40 +22,34 @@ from stalbot.application.ports.audit_gateway import AuditGateway
 from stalbot.application.ports.clock import Clock
 from stalbot.application.ports.role_gateway import RoleGateway, RoleSet
 from stalbot.application.services.audit import AuditService
-from stalbot.domain.entities.user_profile import UserProfile
+from stalbot.domain.entities.player import Player
+from stalbot.domain.entities.player_progression import PlayerProgressionRecord
 from stalbot.domain.nick import NormalizedNick
 from stalbot.domain.progression.ladder import Ladder, Tier
 from stalbot.domain.progression.ranks import RankLadder
 from stalbot.domain.progression.referrals import ReferralLadder
+from stalbot.infrastructure.cache.repositories.players import PlayersRepository
+from stalbot.infrastructure.cache.repositories.progression import ProgressionRepository
 from stalbot.infrastructure.cache.repositories.progression_state import ProgressionStateRepository
-from stalbot.infrastructure.cache.repositories.users import UsersCacheRepository
 from stalbot.infrastructure.logging.trace import current_trace_id
-from stalbot.infrastructure.sheets.a1 import a1_range
-from stalbot.infrastructure.sheets.client import SheetsClient
-from stalbot.infrastructure.sheets.layouts import DATABASE_SHEET
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 logger = logging.getLogger(__name__)
 
-#: The one raw column `ProgressionService` ever writes — the booster flag
-#: (PLAN.md §9.2: `on_member_update` -> column `Q`). `Q` is not
-#: formula-owned (PLAN.md §6.1), so this is a plain, protected write.
-_BOOSTER_COLUMN = "Q"
-
 
 class ProgressionService:
-    """Syncs Discord roles to `rank`/`referral_role` and announces promotions."""
+    """Syncs Discord roles to `rank_key`/`referral_role_key` and announces promotions."""
 
     def __init__(
         self,
-        users: UsersCacheRepository,
+        players: PlayersRepository,
+        progression: ProgressionRepository,
         progression_state: ProgressionStateRepository,
         roles: RoleGateway,
         audit_gateway: AuditGateway,
         audit_service: AuditService,
         embeds: EmbedFactory,
         *,
-        sheets: SheetsClient,
         clock: Clock,
         rank_ladder: RankLadder | None = None,
         referral_ladder: ReferralLadder | None = None,
@@ -60,25 +57,26 @@ class ProgressionService:
         """Wire the service to its collaborators.
 
         Args:
-            users: Cache repository for player profiles.
+            players: Cache repository for player identity.
+            progression: Cache repository for the materialized Coins/XP/rank
+                snapshot each player's `rank_key`/`referral_role_key` come from.
             progression_state: Tracks the last-announced rank/referral role.
             roles: Grants/revokes Discord roles.
             audit_gateway: Fallback destination for celebrations with no
                 event channel (the background poller) — the log channel.
             audit_service: Records the audit-trail entry for each promotion.
             embeds: Builds the celebration embed.
-            sheets: Writes the booster flag (`on_member_update` -> column `Q`).
             clock: Time source, tz-aware `GMT3`.
             rank_ladder: Defaults to a fresh `RankLadder()`.
             referral_ladder: Defaults to a fresh `ReferralLadder()`.
         """
-        self._users = users
+        self._players = players
+        self._progression = progression
         self._progression_state = progression_state
         self._roles = roles
         self._audit_gateway = audit_gateway
         self._audit_service = audit_service
         self._embeds = embeds
-        self._sheets = sheets
         self._clock = clock
         self._rank_ladder = rank_ladder or RankLadder()
         self._referral_ladder = referral_ladder or ReferralLadder()
@@ -93,8 +91,8 @@ class ProgressionService:
         """Reconcile roles for the given players (or everyone) and announce promotions.
 
         Args:
-            nicks: Players to sync, or `None` to sync the entire cached
-                user base (the background poller's mode).
+            nicks: Players to sync, or `None` to sync the entire player base
+                (the background poller's mode).
             announce_to: Where a public celebration is posted. `None` means
                 there is no event channel (background poller) — celebrations
                 fall back to the log channel.
@@ -103,64 +101,71 @@ class ProgressionService:
             Every promotion actually detected and announced, across all
             synced players.
         """
-        profiles = await self._load_profiles(nicks)
+        players = await self._load_players(nicks)
         promotions: list[Promotion] = []
-        for profile in profiles:
-            promotions.extend(await self._sync_one(profile, announce_to=announce_to))
+        for player in players:
+            promotions.extend(await self._sync_one(player, announce_to=announce_to))
         return promotions
 
-    async def _load_profiles(self, nicks: Collection[NormalizedNick] | None) -> list[UserProfile]:
+    async def _load_players(self, nicks: Collection[NormalizedNick] | None) -> list[Player]:
         if nicks is None:
-            return list(await self._users.all())
-        profiles: list[UserProfile] = []
+            return list(await self._players.all())
+        players: list[Player] = []
         for nick in nicks:
-            profile = await self._users.get_by_nick(nick)
-            if profile is not None:
-                profiles.append(profile)
-        return profiles
+            player = await self._players.get_by_nick(nick)
+            if player is not None:
+                players.append(player)
+        return players
 
     async def _sync_one(
-        self, profile: UserProfile, *, announce_to: discord.abc.Messageable | None
+        self, player: Player, *, announce_to: discord.abc.Messageable | None
     ) -> list[Promotion]:
-        if profile.discord_id is None:
+        if player.discord_id is None:
             return []  # nothing to grant a role to
-        discord_id = profile.discord_id
+        discord_id = player.discord_id
+        assert player.id is not None  # noqa: S101 - a fetched player always has a persisted id
 
-        previous = await self._progression_state.get(profile.nick)
+        record = await self._progression.get(player.id)
+        previous = await self._progression_state.get(player.nick_norm)
         # PLAN.md §10.12: while a rank was assigned manually via /set_rank
         # (M8), the poller leaves the rank ladder alone entirely — it is
         # excluded from both the desired set and the revocation universe.
         manual_rank = previous is not None and previous.manual_rank_role
 
+        rank_key = record.rank_key if record is not None else None
+        referral_role_key = record.referral_role_key if record is not None else None
+
         rank_tier = None
-        if not manual_rank and profile.rank:
-            rank_tier = self._rank_ladder.by_label(profile.rank)
+        if not manual_rank and rank_key:
+            rank_tier = self._rank_ladder.by_key(rank_key)
         referral_tier = (
-            self._referral_ladder.by_label(profile.referral_role) if profile.referral_role else None
+            self._referral_ladder.by_key(referral_role_key) if referral_role_key else None
         )
         desired = frozenset(tier.role_id for tier in (rank_tier, referral_tier) if tier is not None)
         universe = self._referral_ladder.role_ids if manual_rank else self._role_universe
         await self._roles.sync_roles(discord_id, RoleSet(desired=desired, universe=universe))
 
         promotions: list[Promotion] = []
-        if previous is not None:
-            if rank_tier is not None and profile.rank != previous.last_rank:
+        if previous is not None and record is not None:
+            if rank_tier is not None and rank_key != previous.last_rank:
                 if _is_advancement(self._rank_ladder, previous.last_rank, rank_tier):
-                    promotions.append(_promotion(profile, discord_id, "rank", rank_tier))
+                    promotions.append(_promotion(player, record, discord_id, "rank", rank_tier))
             if (
                 referral_tier is not None
-                and profile.referral_role != previous.last_referral_role
+                and referral_role_key != previous.last_referral_role
                 and _is_advancement(
                     self._referral_ladder, previous.last_referral_role, referral_tier
                 )
             ):
-                promotions.append(_promotion(profile, discord_id, "referral_role", referral_tier))
+                promotions.append(
+                    _promotion(player, record, discord_id, "referral_role", referral_tier)
+                )
 
         await self._progression_state.upsert(
             ProgressionState(
-                nick=profile.nick,
-                last_rank=profile.rank,
-                last_referral_role=profile.referral_role,
+                nick=player.nick_norm,
+                last_rank=rank_key,
+                last_referral_role=referral_role_key,
                 manual_rank_role=manual_rank,
                 announced_at=(
                     self._clock.now()
@@ -178,30 +183,25 @@ class ProgressionService:
     async def sync_booster_flag(self, discord_id: int, is_boosting: bool) -> None:
         """Record a server-boost transition and resync that player's progression.
 
-        Writes column `Q` (PLAN.md §6.1: raw data the bot owns, not a
-        formula), refreshes the cache, then runs a normal `sync()` for that
-        one player — a boost changes the `K`/`L` formula's bonus, which can
-        itself trigger a rank promotion.
+        Recomputes progression before resyncing that one player — a boost
+        changes the calculator's booster bonus, which can itself trigger a
+        rank promotion (sqlite_migration.md Э6: no more raw Sheets column
+        write, `players.is_booster` plus a targeted `recompute()`).
 
         Args:
             discord_id: The Discord member whose boost status changed.
             is_boosting: Whether they are boosting the server now.
         """
-        profile = await self._users.get_by_discord_id(discord_id)
-        if profile is None or profile.is_booster == is_boosting:
+        player = await self._players.get_by_discord_id(discord_id)
+        if player is None or player.is_booster == is_boosting:
             return  # not bound to a nick yet, or already correct — nothing to do
+        assert player.id is not None  # noqa: S101 - a fetched player always has a persisted id
 
-        ref = a1_range(DATABASE_SHEET, _BOOSTER_COLUMN, profile.row)
-        await self._sheets.batch_update({ref: [[is_boosting]]})
+        now = self._clock.now()
+        await self._players.set_booster(player.id, is_boosting, now=now)
+        await self._progression.recompute([player.id], now=now)
 
-        display = await self._users.get_nick_display(profile.nick) or profile.nick
-        await self._users.upsert_many(
-            [replace(profile, is_booster=is_boosting)],
-            nick_displays={profile.nick: display},
-            synced_at=self._clock.now().isoformat(),
-        )
-
-        await self.sync([profile.nick])
+        await self.sync([player.nick_norm])
 
     async def _announce(
         self, promotion: Promotion, announce_to: discord.abc.Messageable | None
@@ -234,27 +234,31 @@ class ProgressionService:
         )
 
 
-def _is_advancement[T: Tier](ladder: Ladder[T], previous_label: str | None, new_tier: T) -> bool:
+def _is_advancement[T: Tier](ladder: Ladder[T], previous_key: str | None, new_tier: T) -> bool:
     """Whether moving to `new_tier` is a genuine step up, not a drop or lateral move."""
-    if previous_label is None:
+    if previous_key is None:
         return True
-    previous_tier = ladder.by_label(previous_label)
+    previous_tier = ladder.by_key(previous_key)
     if previous_tier is None:
         return True
     return ladder.tiers.index(new_tier) > ladder.tiers.index(previous_tier)
 
 
 def _promotion[T: Tier](
-    profile: UserProfile, discord_id: int, axis: PromotionAxis, tier: T
+    player: Player,
+    record: PlayerProgressionRecord,
+    discord_id: int,
+    axis: PromotionAxis,
+    tier: T,
 ) -> Promotion:
     return Promotion(
-        nick=profile.nick,
+        nick=player.nick_norm,
         discord_id=discord_id,
         axis=axis,
         label=tier.label,
         perks=tier.perks,
-        coins=profile.coins,
-        xp=profile.xp,
+        coins=record.coins,
+        xp=record.xp,
     )
 
 
