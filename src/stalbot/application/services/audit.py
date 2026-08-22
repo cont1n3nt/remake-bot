@@ -92,7 +92,18 @@ class AuditService:
                     len(batch),
                 )
                 for event in batch:
-                    logger.info("audit event: %s", event)
+                    logger.info(
+                        "audit event — user: %s (%s), channel: %s, command: /%s, "
+                        "args: %s, result: %s, duration: %.2fs, trace: %s",
+                        event.user_id,
+                        event.user_display,
+                        event.channel_display,
+                        event.command,
+                        event.arguments or "—",
+                        event.result,
+                        event.duration_seconds,
+                        event.trace_id,
+                    )
             finally:
                 for _ in batch:
                     self._queue.task_done()

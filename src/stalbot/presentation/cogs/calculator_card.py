@@ -41,6 +41,7 @@ def render_calculator_body(
             body.append(f" {item.name} × {line.quantity} = {format_amount(subtotal)}")
     else:
         body.append("Список пока пуст — нажмите «📋 Вставить список».")
+    body.append("")
     body.append(_SEPARATOR)
     body.append(f"📦 Позиций: {len(live_lines)}")
     body.append(f"💰 Итого: {format_amount(total)}")

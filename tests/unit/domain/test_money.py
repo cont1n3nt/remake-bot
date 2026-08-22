@@ -11,6 +11,7 @@ from stalbot.domain.money import (
     evaluate_amount,
     format_amount,
     format_compact,
+    format_kopeks,
     from_storage,
     parse_amount,
     to_storage,
@@ -244,6 +245,24 @@ def test_evaluate_amount_preserves_precision_above_28_significant_digits() -> No
 )
 def test_format_amount_with_currency(value: Decimal, expected: str) -> None:
     assert format_amount(value) == expected.replace(" ", " ")
+
+
+def test_format_kopeks_keeps_the_sub_ruble_remainder() -> None:
+    assert format_kopeks(186).startswith("1,86")
+
+
+def test_format_kopeks_pads_a_single_digit_remainder() -> None:
+    assert format_kopeks(105).startswith("1,05")
+
+
+def test_format_kopeks_groups_thousands() -> None:
+    text = format_kopeks(123_456_789)
+    assert text.endswith("567,89 ₽")
+    assert "234" in text
+
+
+def test_format_kopeks_zero() -> None:
+    assert format_kopeks(0).startswith("0,00")
 
 
 def test_format_amount_without_currency() -> None:

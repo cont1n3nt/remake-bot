@@ -431,6 +431,22 @@ def format_amount(value: Decimal | int, *, currency: bool = True) -> str:
     return f"{grouped}{_NARROW_NBSP}₽" if currency else grouped
 
 
+def format_kopeks(value: Kopeks | int) -> str:
+    """Format a `Kopeks` shelter-cost value for display: 186 -> '1,86 ₽'.
+
+    Unlike `format_amount`, this keeps the sub-ruble precision `Kopeks`
+    exists for (§V.2: 0.86 ₽/energy unit) instead of rounding to a whole
+    ruble — a crafting cost that's a fraction of a ruble is still real, not
+    noise to round away.
+
+    Args:
+        value: A `shelter_items`/`shelter_cost` kopeks column value.
+    """
+    rubles, remainder = divmod(int(value), 100)
+    grouped = f"{rubles:,}".replace(",", _NARROW_NBSP)
+    return f"{grouped},{remainder:02d}{_NARROW_NBSP}₽"
+
+
 def format_compact(value: Decimal | int) -> str:
     """Format a value compactly for tight spaces: 1500000 -> '1.5 кк'.
 

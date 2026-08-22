@@ -32,7 +32,7 @@ from stalbot.domain.enums import (
 )
 from stalbot.domain.errors import AmountParseError
 from stalbot.presentation.cogs.tickets.cog import TicketsCog, _infer_author_id, _resolve_member
-from stalbot.presentation.cogs.tickets.modals import AmountModal
+from stalbot.presentation.cogs.tickets.modals import AmountModal, OrderBoostsFormModal
 from stalbot.presentation.cogs.tickets.order_views import OrderEditorView, OrderSummaryView
 from stalbot.presentation.embeds.factory import EmbedFactory
 from tests.support.fake_clock import FakeClock
@@ -89,7 +89,7 @@ def _fake_tickets(*, get_return: TicketSession | None = None) -> MagicMock:
 
 def _fake_boost_orders() -> MagicMock:
     boost_orders = MagicMock()
-    boost_orders.list_available_boosts = AsyncMock(return_value=[])
+    boost_orders.list_available_items = AsyncMock(return_value=[])
     boost_orders.list_lines = AsyncMock(return_value=[])
     boost_orders.list_lines_with_items = AsyncMock(return_value=[])
     boost_orders.apply_page_selection = AsyncMock(return_value=frozenset())
@@ -97,6 +97,7 @@ def _fake_boost_orders() -> MagicMock:
     boost_orders.adjust_quantity = AsyncMock(return_value=1)
     boost_orders.remove_line = AsyncMock()
     boost_orders.compute_total = AsyncMock(return_value=Decimal(0))
+    boost_orders.compute_order_total = AsyncMock(return_value=Decimal(0))
     boost_orders.clear = AsyncMock()
     return boost_orders
 
@@ -178,6 +179,10 @@ def _text_channel(
     channel.id = channel_id
     channel.category_id = category_id
     channel.overwrites = overwrites or {}
+    # `None` by default (like `_interaction()`'s `guild`) — role pricing
+    # resolution treats a missing guild as "no multiplier", so tests that
+    # don't care about §9.1's role-based pricing don't need to stub it.
+    channel.guild = None
     sent_message = MagicMock(spec=discord.Message)
     sent_message.id = 999
     sent_message.embeds = []
@@ -339,7 +344,8 @@ async def test_on_start_does_not_touch_the_author() -> None:
 
 
 async def test_on_delivery_selected_records_and_opens_the_form() -> None:
-    cog, tickets, *_ = _cog()
+    session = _session(kind=TicketKind.SELL_ITEMS)
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
     interaction = _interaction()
 
     await cog._on_delivery_selected(interaction, DeliveryMethod.MAIL)
@@ -348,6 +354,21 @@ async def test_on_delivery_selected_records_and_opens_the_form() -> None:
         interaction.channel_id, DeliveryMethod.MAIL
     )
     interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_on_delivery_selected_opens_the_order_form_for_order_boosts() -> None:
+    """ORDER_BOOSTS also picks a delivery method first now (PLAN.md §11.6)."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS)
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_delivery_selected(interaction, DeliveryMethod.TRADE)
+
+    tickets.record_delivery_method.assert_awaited_once_with(
+        interaction.channel_id, DeliveryMethod.TRADE
+    )
+    modal = interaction.response.send_modal.call_args.args[0]
+    assert isinstance(modal, OrderBoostsFormModal)
 
 
 async def test_on_form_submitted_posts_a_new_summary_card() -> None:
@@ -794,14 +815,17 @@ async def _call_on_start_order_boosts(cog: TicketsCog, interaction: MagicMock) -
     await cog._on_start(interaction, TicketKind.ORDER_BOOSTS)
 
 
-async def test_on_start_opens_the_order_form_modal_directly() -> None:
+async def test_on_start_shows_the_delivery_picker_for_order_boosts_too() -> None:
+    """ORDER_BOOSTS now asks for a delivery method first, same as every other kind."""
     cog, *_ = _cog(tickets=_fake_tickets(get_return=_session(kind=TicketKind.ORDER_BOOSTS)))
     interaction = _interaction()
 
     await _call_on_start_order_boosts(cog, interaction)
 
-    interaction.response.send_modal.assert_awaited_once()
-    interaction.response.send_message.assert_not_called()
+    interaction.response.send_message.assert_awaited_once()
+    kwargs = interaction.response.send_message.call_args.kwargs
+    assert kwargs["ephemeral"] is True
+    interaction.response.send_modal.assert_not_called()
 
 
 async def test_order_form_submitted_records_the_deadline_and_posts_the_summary() -> None:
@@ -1183,7 +1207,7 @@ async def test_order_complete_button_opens_the_amount_modal_prefilled_with_the_t
     session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
     boost_orders = _fake_boost_orders()
     boost_orders.list_lines = AsyncMock(return_value=[MagicMock()])
-    boost_orders.compute_total = AsyncMock(return_value=Decimal(930000))
+    boost_orders.compute_order_total = AsyncMock(return_value=Decimal(930000))
     cog, *_ = _cog(tickets=_fake_tickets(get_return=session), boost_orders=boost_orders)
     interaction = _interaction()
     interaction.user.guild_permissions.administrator = True
@@ -1191,6 +1215,8 @@ async def test_order_complete_button_opens_the_amount_modal_prefilled_with_the_t
     await cog._on_order_complete_button(interaction)
 
     interaction.response.send_modal.assert_awaited_once()
+    modal = interaction.response.send_modal.call_args.args[0]
+    assert modal.amount.default == "930000"
 
 
 async def test_amount_submitted_clears_the_draft_for_order_boosts() -> None:

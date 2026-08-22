@@ -130,7 +130,7 @@ async def _call_add(
     сумма: str = "299900",
     discord_member: MagicMock | None = None,
     реферал_ник: str | None = None,
-    реферал_discord: MagicMock | None = None,
+    реферал_аккаунт: MagicMock | None = None,
 ) -> None:
     # `.callback` is the raw unbound function (verified at runtime via
     # `inspect.signature`); discord.py's stubs type it as already bound to
@@ -146,7 +146,7 @@ async def _call_add(
         discord_member or _member(),
         сумма,
         реферал_ник,
-        реферал_discord,
+        реферал_аккаунт,
     )
 
 
@@ -187,7 +187,7 @@ async def test_add_warns_when_referrer_nick_given_without_discord() -> None:
     cog, transactions, _progression, _players = _cog()
     interaction = _interaction()
 
-    await _call_add(cog, interaction, реферал_ник="OtherNick", реферал_discord=None)
+    await _call_add(cog, interaction, реферал_ник="OtherNick", реферал_аккаунт=None)
 
     transactions.register.assert_awaited_once()
     (request,), _ = transactions.register.call_args

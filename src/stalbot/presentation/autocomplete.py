@@ -12,6 +12,7 @@ from difflib import SequenceMatcher
 from discord import app_commands
 
 from stalbot.domain.entities.catalog_item import CatalogItem
+from stalbot.domain.entities.shelter_item import ShelterItem
 from stalbot.domain.enums import ItemCategory
 from stalbot.domain.money import format_amount
 
@@ -50,6 +51,32 @@ def item_choices(
     for item in ranked[:_MAX_CHOICES]:
         assert item.id is not None  # noqa: S101 - filtered above
         choices.append(app_commands.Choice(name=_label(item)[:_CHOICE_NAME_MAX], value=item.id))
+    return choices
+
+
+def shelter_item_choices(items: Sequence[ShelterItem], query: str) -> list[app_commands.Choice[int]]:
+    """Rank shelter items by *query*, for `/cost` and `/precost` (§V.2).
+
+    Same fuzzy-match ranking as `item_choices`, but over `shelter_items` —
+    421 crafting-reference entries with no category/catalog price, so the
+    choice label is just the name.
+
+    Args:
+        items: The full cached shelter item list.
+        query: What the user has typed so far into the option.
+    """
+    candidates = [item for item in items if item.id is not None]
+    if not query:
+        ranked = candidates
+    else:
+        scored = [(item, _score(query, item.name)) for item in candidates]
+        ranked = [item for item, score in scored if score >= _MIN_SCORE]
+        ranked.sort(key=lambda item: _score(query, item.name), reverse=True)
+
+    choices: list[app_commands.Choice[int]] = []
+    for item in ranked[:_MAX_CHOICES]:
+        assert item.id is not None  # noqa: S101 - filtered above
+        choices.append(app_commands.Choice(name=item.name[:_CHOICE_NAME_MAX], value=item.id))
     return choices
 
 

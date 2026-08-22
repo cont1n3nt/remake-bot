@@ -23,7 +23,9 @@ SCREENSHOT_FILENAME = "screenshot.png"
 
 _SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━"
 
-_DELIVERY_LABELS: dict[DeliveryMethod, str] = {
+#: Shared with `order_card.py` — one delivery-method vocabulary everywhere
+#: a ticket shows how the player will send/receive things.
+DELIVERY_LABELS: dict[DeliveryMethod, str] = {
     DeliveryMethod.MAIL: "📬 Почта",
     DeliveryMethod.TRADE: "🤝 Обмен",
 }
@@ -42,16 +44,18 @@ def render_ticket_card(session: TicketSession, embeds: EmbedFactory) -> discord.
         is responsible for that attachment actually being present on the
         message it sends/edits this embed onto.
     """
-    lines = [_SEPARATOR, f"👤 Игрок: <@{session.author_id}>"]
+    details: list[str] = []
     if session.game_nick:
-        lines.append(f"🎮 Игровой ник: {session.game_nick}")
+        details.append(f"🎮 Игровой ник: {session.game_nick}")
     if session.delivery_method is not None:
-        lines.append(f"📮 Способ: {_DELIVERY_LABELS[session.delivery_method]}")
+        details.append(f"📮 Способ: {DELIVERY_LABELS[session.delivery_method]}")
     if session.referrer_nick:
         referrer = session.referrer_nick
         if session.referrer_discord_id is not None:
             referrer += f" (<@{session.referrer_discord_id}>)"
-        lines.append(f"🤝 Пригласил: {referrer}")
+        details.append(f"🤝 Пригласил: {referrer}")
+
+    lines = [_SEPARATOR, f"👤 Игрок: <@{session.author_id}>", "", *details, ""]
     lines.append(f"🕒 Создана: {format_datetime(session.created_at)}")
 
     embed = embeds.ticket(session.kind, "\n".join(lines))

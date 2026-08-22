@@ -59,7 +59,7 @@ class TransactionsCog(commands.Cog):
         ник="Игровой ник",
         сумма="Сумма сделки, например 299 900 или 250к",
         реферал_ник="Игровой ник пригласившего (опционально)",
-        реферал_discord="Discord-аккаунт пригласившего (опционально)",
+        реферал_аккаунт="Discord-аккаунт пригласившего (опционально)",
     )
     @app_commands.choices(
         тип=[
@@ -69,7 +69,7 @@ class TransactionsCog(commands.Cog):
             app_commands.Choice(name=_DEAL_TYPE_LABEL[DealType.SALE], value=DealType.SALE.value),
         ]
     )
-    @app_commands.rename(discord_member="discord")
+    @app_commands.rename(discord_member="аккаунт")
     @admin_only()
     async def add(
         self,
@@ -79,7 +79,7 @@ class TransactionsCog(commands.Cog):
         discord_member: discord.Member,
         сумма: str,
         реферал_ник: str | None = None,
-        реферал_discord: discord.Member | None = None,
+        реферал_аккаунт: discord.Member | None = None,
     ) -> None:
         """Handle `/add`: validate, write, sync progression, respond."""
         await interaction.response.defer(ephemeral=True)
@@ -95,7 +95,7 @@ class TransactionsCog(commands.Cog):
             return
 
         warnings: list[str] = []
-        if реферал_ник and реферал_discord is None:
+        if реферал_ник and реферал_аккаунт is None:
             warnings.append(
                 "⚠️ Указан ник реферала без его Discord-аккаунта — привязка не выполнена."
             )

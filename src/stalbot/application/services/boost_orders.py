@@ -97,9 +97,15 @@ class BoostOrderService:
         self._lines = lines
         self._items = items
 
-    async def list_available_boosts(self) -> Sequence[CatalogItem]:
-        """Return every catalog item in the `BOOST` category, for the "add boosts" picker."""
-        return await self._items.by_category(ItemCategory.BOOST)
+    async def list_available_items(self) -> Sequence[CatalogItem]:
+        """Return every sellable catalog item, for the "add boosts" picker.
+
+        Both categories — a boost order isn't boosts-only, the same picker
+        is how resources get ordered through this ticket too. "Sellable"
+        means `price_sell` is set; an item with no sell price can't be
+        priced into an order line at all.
+        """
+        return [item for item in await self._items.all() if item.price_sell is not None]
 
     async def list_lines(self, channel_id: int) -> Sequence[BoostOrderLine]:
         """Return every draft line for a ticket channel.
@@ -236,7 +242,10 @@ class BoostOrderService:
         """Sum every line's `quantity * price`, read fresh from the catalog.
 
         A resource only ever has `price_buy`, a boost only ever `price_sell`
-        (§I.5's `CHECK`) — so "the line's price" is unambiguous per category.
+        (§I.5's `CHECK`) — so "the line's price" is unambiguous per
+        category. This is the скупка calculator's total (Э8, "buying from
+        the player" direction) — the boost-order ticket, which sells *to*
+        the player, uses `compute_order_total` instead.
 
         Args:
             channel_id: The order-boosts ticket channel.
@@ -248,6 +257,28 @@ class BoostOrderService:
             price = item.price_sell if item.category is ItemCategory.BOOST else item.price_buy
             if price is not None:
                 total += price * line.quantity
+        return total
+
+    async def compute_order_total(self, channel_id: int) -> Decimal:
+        """Sum every line's `quantity * price_sell`, read fresh from the catalog.
+
+        Always `price_sell`, resources included — a boost-order ticket is
+        the bot *selling to* the player (opposite direction from the
+        скупка calculator's `compute_total`), the same pricing
+        `order_card.py`'s own displayed total already uses. Kept as its own
+        method rather than branching `compute_total` on the caller, since
+        the two calculators price resources in opposite directions and a
+        shared method could not serve both without a flag.
+
+        Args:
+            channel_id: The order-boosts ticket channel.
+        """
+        total = Decimal(0)
+        for line, item in await self.list_lines_with_items(channel_id):
+            if item is None:
+                continue
+            if item.price_sell is not None:
+                total += item.price_sell * line.quantity
         return total
 
     async def apply_bulk_entry(self, channel_id: int, text: str) -> BulkEntryReport:

@@ -46,7 +46,9 @@ class ManualCog(commands.Cog):
         ник_пригласившего="Игровой ник пригласившего",
         referrer_discord_member="Discord-аккаунт пригласившего",
     )
-    @app_commands.rename(discord_member="discord", referrer_discord_member="discord_пригласившего")
+    @app_commands.rename(
+        discord_member="аккаунт", referrer_discord_member="аккаунт_пригласившего"
+    )
     @admin_only()
     async def set_referral(
         self,
@@ -128,7 +130,7 @@ class ManualCog(commands.Cog):
     @app_commands.choices(
         ранг=[app_commands.Choice(name=tier.label, value=tier.key) for tier in RankLadder().tiers]
     )
-    @app_commands.rename(discord_member="discord")
+    @app_commands.rename(discord_member="аккаунт")
     @admin_only()
     async def set_rank(
         self,

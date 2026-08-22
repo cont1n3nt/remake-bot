@@ -82,14 +82,23 @@ def _resource_with_price(name: str, price_buy: Decimal) -> CatalogItem:
     return _draft(name, price_buy=price_buy, category=ItemCategory.RESOURCE)
 
 
-async def test_list_available_boosts_filters_by_category(connection: aiosqlite.Connection) -> None:
-    service, (boost_a, boost_b, _resource_item) = await _service_with_items(
-        connection, [_boost_a(), _boost_b(), _resource()]
+def _resource_for_sale(name: str, price_sell: Decimal) -> CatalogItem:
+    return _draft(name, price_sell=price_sell, category=ItemCategory.RESOURCE)
+
+
+async def test_list_available_items_includes_both_categories_with_a_sell_price(
+    connection: aiosqlite.Connection,
+) -> None:
+    """The order picker isn't boosts-only — the seller also orders resources through it."""
+    service, (boost_a, boost_b, no_sell_price, sellable_resource) = await _service_with_items(
+        connection,
+        [_boost_a(), _boost_b(), _resource(), _resource_for_sale("Аптечка", Decimal(50000))],
     )
 
-    boosts = await service.list_available_boosts()
+    available = await service.list_available_items()
 
-    assert {item.id for item in boosts} == {boost_a.id, boost_b.id}
+    assert {item.id for item in available} == {boost_a.id, boost_b.id, sellable_resource.id}
+    assert no_sell_price.id not in {item.id for item in available}
 
 
 async def test_apply_page_selection_adds_newly_checked_items(
@@ -364,6 +373,39 @@ async def test_compute_total_uses_price_buy_for_resources(
     total = await service.compute_total(111)
 
     assert total == Decimal(500) * 4
+
+
+async def test_compute_order_total_always_uses_price_sell_even_for_resources(
+    connection: aiosqlite.Connection,
+) -> None:
+    """The opposite direction from `compute_total`: a boost order sells *to* the player."""
+    resource = _resource_for_sale("Аптечка", Decimal(500))
+    boost = _boost_a()
+    service, (resource_item, boost_item) = await _service_with_items(
+        connection, [resource, boost]
+    )
+    assert resource_item.id is not None and boost_item.id is not None
+    await service.apply_page_selection(
+        111, [resource_item, boost_item], frozenset({resource_item.id, boost_item.id})
+    )
+    await service.set_quantity(111, resource_item.id, 4)
+
+    total = await service.compute_order_total(111)
+
+    assert total == Decimal(500) * 4 + Decimal(300000)
+
+
+async def test_compute_order_total_skips_a_resource_with_no_sell_price(
+    connection: aiosqlite.Connection,
+) -> None:
+    resource = _resource_with_price("Кристалл", Decimal(500))  # price_buy only
+    service, (resource_item,) = await _service_with_items(connection, [resource])
+    assert resource_item.id is not None
+    await service.apply_page_selection(111, [resource_item], frozenset({resource_item.id}))
+
+    total = await service.compute_order_total(111)
+
+    assert total == Decimal(0)
 
 
 async def test_clear_removes_every_line(connection: aiosqlite.Connection) -> None:

@@ -84,7 +84,7 @@ class _DeliveryMethodSelect(discord.ui.Select["DeliveryMethodView"]):
 
 
 class TicketSummaryView(discord.ui.View):
-    """The summary card's persistent `📸`/`✅` buttons.
+    """The summary card's persistent `📸`/`🏁` buttons.
 
     A single shared `custom_id` per button across every ticket channel —
     the handler reads `interaction.channel_id` to know which ticket it's
@@ -96,7 +96,7 @@ class TicketSummaryView(discord.ui.View):
 
         Args:
             on_screenshot: Called when `📸 Прикрепить скриншот` is clicked.
-            on_confirm: Called when `✅ Подтвердить` is clicked.
+            on_confirm: Called when `🏁 Завершить` is clicked.
         """
         super().__init__(timeout=None)
         self.add_item(_ScreenshotButton(on_screenshot))
@@ -119,7 +119,7 @@ class _ScreenshotButton(discord.ui.Button["TicketSummaryView"]):
 class _ConfirmButton(discord.ui.Button["TicketSummaryView"]):
     def __init__(self, on_confirm: _ButtonHandler) -> None:
         super().__init__(
-            label="✅ Подтвердить", style=discord.ButtonStyle.success, custom_id="ticket:confirm"
+            label="🏁 Завершить", style=discord.ButtonStyle.success, custom_id="ticket:confirm"
         )
         self._on_confirm = on_confirm
 

@@ -13,6 +13,7 @@ import io
 import logging
 import re
 from collections.abc import Sequence
+from decimal import Decimal
 
 import discord
 from discord.ext import commands
@@ -27,6 +28,7 @@ from stalbot.application.services.boost_orders import (
     BoostOrderService,
 )
 from stalbot.application.services.progression import ProgressionService
+from stalbot.application.services.role_pricing import resolve_price_multiplier
 from stalbot.application.services.screenshots import ScreenshotService
 from stalbot.application.services.tickets import TicketService
 from stalbot.application.services.transactions import TransactionService
@@ -36,8 +38,9 @@ from stalbot.domain.clock import SystemClock, parse_deadline
 from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import DealSource, DealType, DeliveryMethod, TicketKind, TicketStatus
 from stalbot.domain.errors import AmountParseError, DeadlineParseError
-from stalbot.domain.money import evaluate_amount, format_amount, parse_amount
+from stalbot.domain.money import evaluate_amount, format_amount, parse_amount, round_for_storage
 from stalbot.domain.nick import normalize_nick
+from stalbot.domain.progression.ranks import RankLadder, RankTier
 from stalbot.presentation.cogs.tickets.card import SCREENSHOT_FILENAME, render_ticket_card
 from stalbot.presentation.cogs.tickets.modals import (
     AmountModal,
@@ -93,6 +96,7 @@ class TicketsCog(commands.Cog):
         settings: Settings,
         *,
         clock: Clock | None = None,
+        rank_ladder: RankLadder | None = None,
         tool_wait_timeout_seconds: float = _TOOL_WAIT_TIMEOUT_SECONDS,
     ) -> None:
         """Wire the cog to the services it delegates to.
@@ -106,6 +110,9 @@ class TicketsCog(commands.Cog):
             embeds: Builds every embed this cog sends.
             settings: For `log_channel_id`.
             clock: Time source for `parse_deadline`. Defaults to `SystemClock()`.
+            rank_ladder: Resolves a boost-order author's rank for the
+                role-based price multiplier (§9.1, п.2). Defaults to a
+                fresh `RankLadder()`.
             tool_wait_timeout_seconds: How long to wait for Ticket Tool's
                 first message before posting the panel anyway (PLAN.md
                 §11.2). Overridable so tests don't block for 30 real seconds.
@@ -118,6 +125,7 @@ class TicketsCog(commands.Cog):
         self._embeds = embeds
         self._settings = settings
         self._clock = clock or SystemClock()
+        self._rank_ladder = rank_ladder or RankLadder()
         self._tool_wait_timeout = tool_wait_timeout_seconds
         self._tool_wait: dict[int, asyncio.Event] = {}
         # UX #15: only images sent after the "📸 Прикрепить скриншот" button was
@@ -207,14 +215,9 @@ class TicketsCog(commands.Cog):
     # -- Form flow (PLAN.md §11.3, §11.4) ------------------------------------
 
     async def _on_start(self, interaction: discord.Interaction, kind: TicketKind) -> None:
-        if kind is TicketKind.ORDER_BOOSTS:
-            # No delivery method for a boost order — straight to the form
-            # modal, same as any other button-triggered modal (PLAN.md §11.4).
-            await interaction.response.send_modal(
-                OrderBoostsFormModal(self._on_order_form_submitted, embeds=self._embeds)
-            )
-            return
-
+        # Every ticket kind, including ORDER_BOOSTS, asks for the delivery/
+        # payment method first — the order summary shows it alongside the
+        # nick (PLAN.md §11.5, §11.6).
         embed = self._embeds.info(
             "📮 Выберите способ передачи",
             "Ник: Scaryyyyy\nОтправлять предметы / деньги на этот ник при выборе «Почта».",
@@ -225,7 +228,12 @@ class TicketsCog(commands.Cog):
     async def _on_delivery_selected(
         self, interaction: discord.Interaction, method: DeliveryMethod
     ) -> None:
-        await self._tickets.record_delivery_method(interaction.channel_id or 0, method)
+        session = await self._tickets.record_delivery_method(interaction.channel_id or 0, method)
+        if session.kind is TicketKind.ORDER_BOOSTS:
+            await interaction.response.send_modal(
+                OrderBoostsFormModal(self._on_order_form_submitted, embeds=self._embeds)
+            )
+            return
         await interaction.response.send_modal(
             TicketFormModal(self._on_form_submitted, embeds=self._embeds)
         )
@@ -470,7 +478,7 @@ class TicketsCog(commands.Cog):
         session = await self._require_order_participant(interaction)
         if session is None:
             return
-        catalog = await self._boost_orders.list_available_boosts()
+        catalog = await self._boost_orders.list_available_items()
         lines = await self._boost_orders.list_lines(session.channel_id)
         selected_ids = frozenset(line.item_id for line in lines)
         quantities = {line.item_id: line.quantity for line in lines}
@@ -517,7 +525,7 @@ class TicketsCog(commands.Cog):
             embed = self._embeds.error("Ошибка", "В заказе нет ни одной позиции.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-        rendered = await self._render_order_summary(session.channel_id)
+        rendered = await self._render_order_summary(session.channel_id, interaction.guild)
         if rendered is None:
             return
         _session, embed = rendered
@@ -528,7 +536,7 @@ class TicketsCog(commands.Cog):
         session = await self._require_order_participant(interaction)
         if session is None:
             return
-        rendered = await self._render_order(session.channel_id)
+        rendered = await self._render_order(session.channel_id, interaction.guild)
         if rendered is None:
             return
         _session, embed, view = rendered
@@ -549,14 +557,16 @@ class TicketsCog(commands.Cog):
             embed = self._embeds.error("Ошибка", "В заказе нет ни одной позиции.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-        total = await self._boost_orders.compute_total(session.channel_id)
+        raw_total = await self._boost_orders.compute_order_total(session.channel_id)
+        _tier, multiplier = await self._resolve_order_pricing(interaction.guild, session.author_id)
+        total = round_for_storage(raw_total * multiplier)
         await interaction.response.send_modal(
             AmountModal(self._on_amount_submitted, embeds=self._embeds, default=str(int(total)))
         )
 
     async def _refresh_order_editor_inline(self, interaction: discord.Interaction) -> None:
         """Re-render in response to a component click on the editor message itself."""
-        rendered = await self._render_order(interaction.channel_id or 0)
+        rendered = await self._render_order(interaction.channel_id or 0, interaction.guild)
         if rendered is None:
             return
         _session, embed, view = rendered
@@ -566,7 +576,7 @@ class TicketsCog(commands.Cog):
         self, channel: discord.TextChannel, session: TicketSession
     ) -> None:
         """Post the editor for the first time, or edit it after a modal/ephemeral-select change."""
-        rendered = await self._render_order(channel.id)
+        rendered = await self._render_order(channel.id, channel.guild)
         if rendered is None:
             return
         _session, embed, view = rendered
@@ -582,7 +592,7 @@ class TicketsCog(commands.Cog):
         self, channel: discord.TextChannel, session: TicketSession
     ) -> None:
         """Post the read-only summary for the first time, or edit it in place (UX #1)."""
-        rendered = await self._render_order_summary(channel.id)
+        rendered = await self._render_order_summary(channel.id, channel.guild)
         if rendered is None:
             return
         _session, embed = rendered
@@ -595,25 +605,50 @@ class TicketsCog(commands.Cog):
         message = await channel.send(embed=embed, view=view)
         await self._tickets.record_summary_message(channel.id, message.id)
 
+    async def _resolve_order_pricing(
+        self, guild: discord.Guild | None, author_id: int
+    ) -> tuple[RankTier | None, Decimal]:
+        """The order author's current rank tier and price multiplier (§9.1, п.2).
+
+        `(None, 1.00)` whenever the member/guild can't be resolved (DM-only
+        interaction, member left) — never blocks rendering the order itself.
+        """
+        if guild is None:
+            return None, Decimal("1.00")
+        member = guild.get_member(author_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(author_id)
+            except discord.HTTPException:
+                return None, Decimal("1.00")
+        role_ids = frozenset(role.id for role in member.roles)
+        return resolve_price_multiplier(role_ids, self._rank_ladder)
+
     async def _render_order(
-        self, channel_id: int
+        self, channel_id: int, guild: discord.Guild | None = None
     ) -> tuple[TicketSession, discord.Embed, OrderEditorView] | None:
         session = await self._tickets.get(channel_id)
         if session is None:
             return None
         lines_with_items = await self._boost_orders.list_lines_with_items(channel_id)
-        embed = render_order_editor(session, lines_with_items, self._embeds)
+        tier, multiplier = await self._resolve_order_pricing(guild, session.author_id)
+        embed = render_order_editor(
+            session, lines_with_items, self._embeds, rank_tier=tier, price_multiplier=multiplier
+        )
         view = self._build_order_editor_view(session.active_order_item_id, lines_with_items)
         return session, embed, view
 
     async def _render_order_summary(
-        self, channel_id: int
+        self, channel_id: int, guild: discord.Guild | None = None
     ) -> tuple[TicketSession, discord.Embed] | None:
         session = await self._tickets.get(channel_id)
         if session is None:
             return None
         lines_with_items = await self._boost_orders.list_lines_with_items(channel_id)
-        embed = render_order_summary(session, lines_with_items, self._embeds)
+        tier, multiplier = await self._resolve_order_pricing(guild, session.author_id)
+        embed = render_order_summary(
+            session, lines_with_items, self._embeds, rank_tier=tier, price_multiplier=multiplier
+        )
         return session, embed
 
     def _build_order_summary_view(self) -> OrderSummaryView:

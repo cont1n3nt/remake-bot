@@ -20,6 +20,7 @@ from stalbot.application.services.pricing import PricingService
 from stalbot.application.services.profile import ProfileService
 from stalbot.application.services.progression import ProgressionService
 from stalbot.application.services.screenshots import ScreenshotService
+from stalbot.application.services.shelter_cost import ShelterCostService
 from stalbot.application.services.stats import StatsService
 from stalbot.application.services.tickets import TicketService
 from stalbot.application.services.transactions import TransactionService
@@ -39,6 +40,7 @@ from stalbot.infrastructure.cache.repositories.progression_state import Progress
 from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
     ScreenshotAnalysesRepository,
 )
+from stalbot.infrastructure.cache.repositories.shelter import ShelterRepository
 from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
 from stalbot.infrastructure.discord.audit_channel import AuditChannelGateway
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
@@ -53,6 +55,7 @@ from stalbot.presentation.cogs.posters import PostersCog
 from stalbot.presentation.cogs.pricing import PricingCog
 from stalbot.presentation.cogs.profile import ProfileCog
 from stalbot.presentation.cogs.purchase_calculator import PurchaseCalculatorCog
+from stalbot.presentation.cogs.shelter_cost import ShelterCostCog
 from stalbot.presentation.cogs.stats import StatsCog
 from stalbot.presentation.cogs.tag import TagCog
 from stalbot.presentation.cogs.tickets.cog import TicketsCog
@@ -196,6 +199,10 @@ class StalbotBot(commands.Bot):
             PricingCog(pricing_service, catalog_items_repo, self.embed_factory, self.settings)
         )
         await self.add_cog(PostersCog(PosterService(catalog_items_repo), PillowRenderer()))
+
+        shelter_repo = ShelterRepository(connection)
+        shelter_cost_service = ShelterCostService(shelter_repo)
+        await self.add_cog(ShelterCostCog(shelter_cost_service, shelter_repo, self.embed_factory))
 
         stats_service = StatsService(deals_repo, players_repo)
         await self.add_cog(StatsCog(stats_service, deals_repo, players_repo, self.embed_factory))
