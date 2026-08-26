@@ -14,6 +14,9 @@ from discord import app_commands
 
 from stalbot.domain.errors import (
     AmountParseError,
+    CouponAlreadyRedeemedError,
+    CouponInactiveError,
+    CouponNotFoundError,
     DeadlineParseError,
     DealNotFoundError,
     DomainError,
@@ -56,6 +59,9 @@ _DOMAIN_MESSAGES: dict[type[StalbotError], str] = {
     TicketSessionNotFoundError: (
         "Тикет не найден или ещё не инициализирован. Обратитесь к администратору."
     ),
+    CouponNotFoundError: "Купон с таким кодом не найден.",
+    CouponInactiveError: "Купон отключён, просрочен или исчерпан.",
+    CouponAlreadyRedeemedError: "Вы уже использовали этот купон раньше — повторно нельзя.",
 }
 
 _PERMISSION_DENIED_MESSAGE = "Недостаточно прав для этого действия."

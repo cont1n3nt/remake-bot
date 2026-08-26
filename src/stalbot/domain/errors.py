@@ -79,6 +79,18 @@ class TicketSessionNotFoundError(DomainError):
     """
 
 
+class CouponNotFoundError(DomainError):
+    """No coupon exists with the typed code."""
+
+
+class CouponInactiveError(DomainError):
+    """The coupon exists but was disabled, expired, or has hit its use limit."""
+
+
+class CouponAlreadyRedeemedError(DomainError):
+    """This Discord account has already redeemed this coupon once (заявка 26.08.2026)."""
+
+
 class InfrastructureError(StalbotError):
     """Failure talking to an external system (cache, Discord)."""
 

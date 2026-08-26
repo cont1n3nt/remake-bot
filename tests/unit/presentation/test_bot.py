@@ -9,8 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
+from stalbot.application.dto.price_change import PriceChange
 from stalbot.application.services.audit import AuditService
 from stalbot.config.settings import Settings
+from stalbot.domain.enums import ItemCategory, PriceField
 from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.logging.trace import current_trace_id
 from stalbot.presentation.bot import StalbotBot, _channel_display, _format_arguments
@@ -186,13 +188,17 @@ async def test_setup_cache_wires_progression_service_and_starts_loops(
 
     assert bot.progression_service is not None
     assert bot.health_service is not None
+    assert bot.temp_price_service is not None
     assert bot._progression_loop is not None
     assert bot._progression_loop.is_running()
     assert bot._metrics_loop is not None
     assert bot._metrics_loop.is_running()
+    assert bot._temp_price_loop is not None
+    assert bot._temp_price_loop.is_running()
 
     bot._progression_loop.cancel()
     bot._metrics_loop.cancel()
+    bot._temp_price_loop.cancel()
     await bot.cache_db.close()
 
 
@@ -263,6 +269,54 @@ async def test_run_metrics_log_gets_a_fresh_trace_id_each_tick(
     second = current_trace_id()
 
     assert first != second
+
+
+async def test_run_temp_price_revert_is_a_no_op_before_service_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+
+    await bot._run_temp_price_revert()  # must not raise
+
+
+async def test_run_temp_price_revert_is_a_no_op_when_nothing_is_due(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    temp_price_service = MagicMock()
+    temp_price_service.revert_due = AsyncMock(return_value=[])
+    bot.temp_price_service = temp_price_service
+
+    await bot._run_temp_price_revert()  # must not raise, must not touch get_channel
+
+
+async def test_run_temp_price_revert_logs_and_announces_reverted_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch)
+    bot = _bot(settings)
+    change = PriceChange(
+        item_id=1,
+        item_name="Аптечка",
+        category=ItemCategory.RESOURCE,
+        field=PriceField.BUY,
+        old_price=300_000,
+        new_price=250_000,
+    )
+    temp_price_service = MagicMock()
+    temp_price_service.revert_due = AsyncMock(return_value=[change])
+    bot.temp_price_service = temp_price_service
+    log_channel = MagicMock(spec=discord.TextChannel)
+    log_channel.send = AsyncMock()
+    monkeypatch.setattr(bot, "get_channel", MagicMock(return_value=log_channel))
+
+    await bot._run_temp_price_revert()
+
+    log_channel.send.assert_awaited_once()
+    embed = log_channel.send.call_args.kwargs["embed"]
+    assert "Аптечка" in (embed.description or "")
 
 
 async def test_on_member_update_syncs_booster_flag_on_transition(

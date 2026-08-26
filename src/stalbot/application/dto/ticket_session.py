@@ -8,6 +8,7 @@ currently act on (PLAN.md §11.6).
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
 from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
 
@@ -40,3 +41,8 @@ class TicketSession:
     created_at: datetime
     updated_at: datetime
     active_order_item_id: int | None = None
+    coupon_code: str | None = None
+    coupon_discount_percent: Decimal | None = None
+    """Locked in at redemption time (заявка 26.08.2026) — a later
+    `/coupon_disable` or edit never retroactively changes an already-applied
+    discount."""

@@ -67,10 +67,22 @@ def _order_body(
     body.append("")
     body.append(_SEPARATOR)
 
-    total = raw_total * price_multiplier
-    if price_multiplier != _NO_MARKUP and rank_tier is not None:
+    coupon_multiplier = _NO_MARKUP
+    if session.coupon_discount_percent is not None:
+        coupon_multiplier = (Decimal(100) - session.coupon_discount_percent) / Decimal(100)
+
+    total = raw_total * price_multiplier * coupon_multiplier
+    show_breakdown = (
+        price_multiplier != _NO_MARKUP and rank_tier is not None
+    ) or coupon_multiplier != _NO_MARKUP
+    if show_breakdown:
         body.append(f"💰 Сумма: {format_amount(raw_total)}")
-        body.append(f"🏷️ Наценка/скидка по рангу «{rank_tier.label}»: ×{price_multiplier}")
+        if price_multiplier != _NO_MARKUP and rank_tier is not None:
+            body.append(f"🏷️ Наценка/скидка по рангу «{rank_tier.label}»: ×{price_multiplier}")
+        if coupon_multiplier != _NO_MARKUP:
+            body.append(
+                f"🎟️ Промокод «{session.coupon_code}»: -{session.coupon_discount_percent}%"
+            )
     body.append(f"💰 Итого: {format_amount(total)}")
     if session.deadline is not None:
         body.append(f"⏳ Срок: {format_datetime(session.deadline)}")

@@ -21,7 +21,7 @@ from typing import Final
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.bulk_entry_report import BulkEntryReport
-from stalbot.domain.entities.catalog_item import CatalogItem
+from stalbot.domain.entities.catalog_item import CATALOG_SECTION_ORDER, CatalogItem
 from stalbot.domain.enums import ItemCategory
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
@@ -83,6 +83,15 @@ def _parse_bulk_entry_lines(text: str) -> tuple[list[_ParsedBulkLine], list[str]
     return parsed, not_parsed
 
 
+def _section_sort_key(item: CatalogItem) -> tuple[int, str]:
+    """`(section's position in CATALOG_SECTION_ORDER, name)` — unknown/`None` sorts last."""
+    if item.section in CATALOG_SECTION_ORDER:
+        index = CATALOG_SECTION_ORDER.index(item.section)
+    else:
+        index = len(CATALOG_SECTION_ORDER)
+    return index, item.name
+
+
 class BoostOrderService:
     """Backs the boost-order editor: draft lines, quantities, live pricing."""
 
@@ -104,8 +113,14 @@ class BoostOrderService:
         is how resources get ordered through this ticket too. "Sellable"
         means `price_sell` is set; an item with no sell price can't be
         priced into an order line at all.
+
+        Grouped by `CATALOG_SECTION_ORDER` (заявка 21.08.2026 п.2) — same
+        section order the boost posters use — then by name, instead of raw
+        insertion order, so the picker doesn't mix супы/алкоголь/гранаты
+        together.
         """
-        return [item for item in await self._items.all() if item.price_sell is not None]
+        items = [item for item in await self._items.all() if item.price_sell is not None]
+        return sorted(items, key=_section_sort_key)
 
     async def list_lines(self, channel_id: int) -> Sequence[BoostOrderLine]:
         """Return every draft line for a ticket channel.

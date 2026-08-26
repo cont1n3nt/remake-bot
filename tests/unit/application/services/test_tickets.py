@@ -5,6 +5,7 @@ confidence (same approach as `test_transaction_service.py`).
 """
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import aiosqlite
 import pytest
@@ -106,6 +107,23 @@ async def test_record_form_stores_the_deadline_for_order_boosts(
     )
 
     assert updated.deadline == deadline
+
+
+async def test_record_coupon_stores_the_code_and_percent(
+    connection: aiosqlite.Connection,
+) -> None:
+    service = _service(connection)
+    await service.open_ticket(111, TicketKind.SELL_ITEMS, 222)
+
+    updated = await service.record_coupon(111, "KLONDIKE10", Decimal("1.5"))
+
+    assert updated.coupon_code == "KLONDIKE10"
+    assert updated.coupon_discount_percent == Decimal("1.5")
+
+    reloaded = await service.get(111)
+    assert reloaded is not None
+    assert reloaded.coupon_code == "KLONDIKE10"
+    assert reloaded.coupon_discount_percent == Decimal("1.5")
 
 
 async def test_set_active_order_item_stores_the_item_id(connection: aiosqlite.Connection) -> None:

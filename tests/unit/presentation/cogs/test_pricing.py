@@ -67,6 +67,7 @@ def _cog(
     all_items: list[CatalogItem] | None = None,
     by_category: dict[ItemCategory, list[CatalogItem]] | None = None,
     settings: MagicMock | None = None,
+    temp_prices: MagicMock | None = None,
 ) -> tuple[PricingCog, MagicMock, MagicMock]:
     pricing = MagicMock()
     pricing.set_price = AsyncMock(return_value=set_price_result or _change())
@@ -74,11 +75,19 @@ def _cog(
     pricing.apply_import = AsyncMock()
     items = MagicMock()
     items.all = AsyncMock(return_value=all_items or [_item()])
+    items.get_by_id = AsyncMock(return_value=next(iter(all_items or [_item()]), None))
     by_category = by_category or {}
     items.by_category = AsyncMock(side_effect=lambda category: by_category.get(category, []))
     settings = settings or MagicMock(price_import_confirm=True)
-    cog = PricingCog(pricing, items, EmbedFactory(), settings)
+    temp_prices = temp_prices or _fake_temp_prices()
+    cog = PricingCog(pricing, items, EmbedFactory(), settings, temp_prices)
     return cog, pricing, items
+
+
+def _fake_temp_prices(*, result: PriceChange | None = None) -> MagicMock:
+    temp_prices = MagicMock()
+    temp_prices.set_temp_price = AsyncMock(return_value=result or _change())
+    return temp_prices
 
 
 def _interaction(*, user_id: int = 1) -> MagicMock:
@@ -149,6 +158,69 @@ async def test_setboost_autocomplete_scopes_to_boosts() -> None:
     choices = await autocomplete(interaction, "топ")
 
     assert [c.value for c in choices] == [2]
+
+
+# --- temp_price ------------------------------------------------------------
+
+
+async def test_temp_price_applies_the_override_and_reports() -> None:
+    item = _item(id=1, category=ItemCategory.RESOURCE)
+    change = _change(field=PriceField.BUY)
+    temp_prices = _fake_temp_prices(result=change)
+    cog, _pricing, _items = _cog(all_items=[item], temp_prices=temp_prices)
+    interaction = _interaction(user_id=42)
+
+    callback: Any = PricingCog.temp_price.callback
+    await callback(cog, interaction, 1, "19500", "через 3 часа")
+
+    temp_prices.set_temp_price.assert_awaited_once()
+    args, kwargs = temp_prices.set_temp_price.call_args
+    assert args[0] == 1
+    assert args[1] is PriceField.BUY
+    assert args[2] == Decimal(19500)
+    assert kwargs["changed_by"] == 42
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Хвост тушкана" in (embed.description or "")
+
+
+async def test_temp_price_picks_the_sell_field_for_a_boost() -> None:
+    item = _item(id=2, category=ItemCategory.BOOST, price_buy=None, price_sell=Rub(300000))
+    temp_prices = _fake_temp_prices()
+    cog, _pricing, _items = _cog(all_items=[item], temp_prices=temp_prices)
+    interaction = _interaction(user_id=42)
+
+    callback: Any = PricingCog.temp_price.callback
+    await callback(cog, interaction, 2, "350000", "через 3 часа")
+
+    args, _kwargs = temp_prices.set_temp_price.call_args
+    assert args[1] is PriceField.SELL
+
+
+async def test_temp_price_rejects_an_unparsable_deadline() -> None:
+    cog, _pricing, _items = _cog()
+    interaction = _interaction()
+
+    callback: Any = PricingCog.temp_price.callback
+    await callback(cog, interaction, 1, "19500", "not a date")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "дату" in (embed.description or "")
+
+
+async def test_temp_price_rejects_an_unknown_item() -> None:
+    items_mock = MagicMock()
+    items_mock.get_by_id = AsyncMock(return_value=None)
+    items_mock.all = AsyncMock(return_value=[])
+    cog = PricingCog(
+        MagicMock(), items_mock, EmbedFactory(), MagicMock(), _fake_temp_prices()
+    )
+    interaction = _interaction()
+
+    callback: Any = PricingCog.temp_price.callback
+    await callback(cog, interaction, 999, "19500", "через 3 часа")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "не найден" in (embed.description or "")
 
 
 # --- new_price -----------------------------------------------------------

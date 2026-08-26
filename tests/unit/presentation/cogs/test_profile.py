@@ -14,6 +14,7 @@ import discord
 from stalbot.application.dto.profile_view import ProfileView, ReferredPlayer
 from stalbot.domain.entities.player import Player
 from stalbot.domain.entities.player_progression import PlayerProgressionRecord
+from stalbot.domain.money import format_amount
 from stalbot.domain.nick import NormalizedNick
 from stalbot.presentation.cogs.profile import ProfileCog
 from stalbot.presentation.embeds.factory import EmbedFactory
@@ -156,6 +157,69 @@ async def test_profile_omits_rank_bonuses_when_no_rank_yet() -> None:
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "🎁 Бонусы ранга" not in (embed.description or "")
     assert "📈 До 🔹 Standard" in (embed.description or "")
+
+
+async def test_profile_omits_referral_role_field_when_unset() -> None:
+    view = _view(progression=_progression(referral_role_key=None))
+    cog, _service = _cog(profile_view=view)
+    interaction = _interaction()
+
+    await _call_profile(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "🤝 Реф-роль" not in {field.name for field in embed.fields}
+
+
+async def test_profile_omits_discord_field_when_unbound() -> None:
+    view = _view(player=_player(discord_id=None))
+    cog, _service = _cog(profile_view=view)
+    interaction = _interaction()
+
+    await _call_profile(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "💬 Discord" not in {field.name for field in embed.fields}
+
+
+async def test_profile_shows_discord_field_when_bound() -> None:
+    view = _view(player=_player(discord_id=777))
+    cog, _service = _cog(profile_view=view)
+    interaction = _interaction()
+
+    await _call_profile(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    field_values = {field.name: field.value for field in embed.fields}
+    assert field_values["💬 Discord"] == "<@777>"
+
+
+async def test_profile_omits_turnover_fields_when_all_zero() -> None:
+    cog, _service = _cog()  # default progression has every turnover at 0
+    interaction = _interaction()
+
+    await _call_profile(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    field_names = {field.name for field in embed.fields}
+    assert "📤 Оборот продаж" not in field_names
+    assert "📥 Оборот покупок" not in field_names
+    assert "💹 Общий оборот" not in field_names
+
+
+async def test_profile_shows_nonzero_turnover_fields_only() -> None:
+    view = _view(
+        progression=_progression(purchase_turnover=500_000, sale_turnover=0, total_turnover=500_000)
+    )
+    cog, _service = _cog(profile_view=view)
+    interaction = _interaction()
+
+    await _call_profile(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    field_values = {field.name: field.value for field in embed.fields}
+    assert field_values["📤 Оборот продаж"] == format_amount(500_000)
+    assert "📥 Оборот покупок" not in field_values
+    assert field_values["💹 Общий оборот"] == format_amount(500_000)
 
 
 async def test_referrals_single_page_sends_without_pager_view() -> None:

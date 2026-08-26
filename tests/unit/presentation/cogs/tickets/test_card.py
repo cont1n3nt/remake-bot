@@ -1,6 +1,7 @@
 """Tests for `stalbot.presentation.cogs.tickets.card.render_ticket_card` (PLAN.md §11.5)."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
@@ -66,6 +67,22 @@ def test_filled_fields_are_shown() -> None:
     assert "Scaryyyyy" in description
     assert "📬 Почта" in description
     assert "OtherNick (<@999>)" in description
+
+
+def test_coupon_is_shown_when_applied() -> None:
+    embed = render_ticket_card(
+        _session(coupon_code="KLONDIKE10", coupon_discount_percent=Decimal("1.5")), EmbedFactory()
+    )
+
+    description = embed.description or ""
+    assert "KLONDIKE10" in description
+    assert "1.5" in description
+
+
+def test_coupon_is_omitted_when_unset() -> None:
+    embed = render_ticket_card(_session(), EmbedFactory())
+
+    assert "Промокод" not in (embed.description or "")
 
 
 def test_referrer_without_resolved_discord_id_shows_only_the_nick() -> None:

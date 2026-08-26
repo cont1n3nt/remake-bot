@@ -45,6 +45,21 @@ class ProfileView:
         """Current referral-role tier key, or `None` if none/`progression` is `None`."""
         return self.progression.referral_role_key if self.progression is not None else None
 
+    @property
+    def purchase_turnover(self) -> int:
+        """How much this player has sold *to* the platform, or `0` if `progression` is `None`."""
+        return self.progression.purchase_turnover if self.progression is not None else 0
+
+    @property
+    def sale_turnover(self) -> int:
+        """How much this player has bought *from* the platform, `0` if `progression` is `None`."""
+        return self.progression.sale_turnover if self.progression is not None else 0
+
+    @property
+    def total_turnover(self) -> int:
+        """`purchase_turnover + sale_turnover`, or `0` if `progression` is `None`."""
+        return self.progression.total_turnover if self.progression is not None else 0
+
 
 @dataclass(frozen=True, slots=True)
 class ReferredPlayer:

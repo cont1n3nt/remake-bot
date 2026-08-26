@@ -100,7 +100,6 @@ class ProfileCog(commands.Cog):
             self._referral_ladder.by_key(view.referral_role_key) if view.referral_role_key else None
         )
         rank_label = rank_tier.label if rank_tier is not None else "—"
-        referral_label = referral_tier.label if referral_tier is not None else "—"
 
         lines: list[str] = []
 
@@ -119,8 +118,29 @@ class ProfileCog(commands.Cog):
         )
         embed.add_field(name="⚡ XP", value=format_amount(view.xp, currency=False), inline=True)
         embed.add_field(name="🏅 Ранг", value=rank_label, inline=True)
-        embed.add_field(name="🤝 Реф-роль", value=referral_label, inline=True)
+        # заявка 21.08.2026 п.10: an empty field is omitted entirely, not
+        # shown as "—" — реферальная роль, Discord и обороты все follow this.
+        if referral_tier is not None:
+            embed.add_field(name="🤝 Реф-роль", value=referral_tier.label, inline=True)
         embed.add_field(name="👥 Приглашено", value=str(view.referrals_count), inline=True)
+        if view.player.discord_id is not None:
+            embed.add_field(
+                name="💬 Discord", value=f"<@{view.player.discord_id}>", inline=True
+            )
+        if view.purchase_turnover:
+            embed.add_field(
+                name="📤 Оборот продаж",
+                value=format_amount(view.purchase_turnover),
+                inline=True,
+            )
+        if view.sale_turnover:
+            embed.add_field(
+                name="📥 Оборот покупок", value=format_amount(view.sale_turnover), inline=True
+            )
+        if view.total_turnover:
+            embed.add_field(
+                name="💹 Общий оборот", value=format_amount(view.total_turnover), inline=True
+            )
         return enforce_limits(embed)
 
     def _build_referrals_pages(

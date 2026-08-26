@@ -1,6 +1,7 @@
 """SQLite-backed `ticket_sessions` (PLAN.md §8.1, §11.7) — cache-only, no Sheets counterpart."""
 
 from datetime import datetime
+from decimal import Decimal
 
 import aiosqlite
 
@@ -46,13 +47,13 @@ class TicketSessionsRepository:
                     referrer_nick, referrer_discord_id, deadline, screenshot_url,
                     screenshot_message_id, summary_message_id, panel_message_id,
                     ocr_status, ocr_analysis_id, idempotency_key, created_at, updated_at,
-                    active_order_item_id
+                    active_order_item_id, coupon_code, coupon_discount_percent
                 ) VALUES (
                     :channel_id, :kind, :author_id, :status, :delivery_method, :game_nick,
                     :referrer_nick, :referrer_discord_id, :deadline, :screenshot_url,
                     :screenshot_message_id, :summary_message_id, :panel_message_id,
                     :ocr_status, :ocr_analysis_id, :idempotency_key, :created_at, :updated_at,
-                    :active_order_item_id
+                    :active_order_item_id, :coupon_code, :coupon_discount_percent
                 )
                 ON CONFLICT (channel_id) DO UPDATE SET
                     kind = excluded.kind,
@@ -71,7 +72,9 @@ class TicketSessionsRepository:
                     ocr_analysis_id = excluded.ocr_analysis_id,
                     idempotency_key = excluded.idempotency_key,
                     updated_at = excluded.updated_at,
-                    active_order_item_id = excluded.active_order_item_id
+                    active_order_item_id = excluded.active_order_item_id,
+                    coupon_code = excluded.coupon_code,
+                    coupon_discount_percent = excluded.coupon_discount_percent
                 """,
                 _session_to_params(session),
             )
@@ -114,6 +117,12 @@ def _session_to_params(session: TicketSession) -> dict[str, object]:
         "created_at": session.created_at.isoformat(),
         "updated_at": session.updated_at.isoformat(),
         "active_order_item_id": session.active_order_item_id,
+        "coupon_code": session.coupon_code,
+        "coupon_discount_percent": (
+            str(session.coupon_discount_percent)
+            if session.coupon_discount_percent is not None
+            else None
+        ),
     }
 
 
@@ -138,4 +147,10 @@ def _row_to_session(row: aiosqlite.Row) -> TicketSession:
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
         active_order_item_id=row["active_order_item_id"],
+        coupon_code=row["coupon_code"],
+        coupon_discount_percent=(
+            Decimal(row["coupon_discount_percent"])
+            if row["coupon_discount_percent"] is not None
+            else None
+        ),
     )

@@ -24,29 +24,57 @@ _AMOUNT_MAX_LENGTH = 64
 _DEADLINE_MAX_LENGTH = 50
 _DEADLINE_LABEL = "До какой даты и времени нужно сделать"
 _DEADLINE_PLACEHOLDER = "31.07.2026 21:00 (по МСК)"
+_REFERRER_OPTIONAL_HINT = "Необязательно — можно оставить пустым"
 
 
 class TicketFormModal(ErrorReportingModal):
     """Ник + optional referrer fields, shared by `SELL_ITEMS` and `SELL_BOOSTS` (PLAN.md §11.4)."""
 
-    def __init__(self, on_submit: _FormSubmitHandler, *, embeds: EmbedFactory) -> None:
+    def __init__(
+        self,
+        on_submit: _FormSubmitHandler,
+        *,
+        embeds: EmbedFactory,
+        nick: str = "",
+        referrer_nick: str = "",
+        referrer_discord_text: str = "",
+        error_hint: str | None = None,
+    ) -> None:
         """Build the modal.
 
         Args:
             on_submit: Called with the interaction, the typed nick, and the
                 two optional referrer fields (each `None` if left blank).
             embeds: Factory used to build the error embed on an `on_submit` failure.
+            nick: Pre-filled nick, when reopening after a validation error.
+            referrer_nick: Pre-filled referrer nick, same case.
+            referrer_discord_text: Pre-filled referrer Discord text, same case.
+            error_hint: If set (both referrer fields filled in but only one
+                of the pair — §11.4, заявка 21.08.2026 п.7), replaces both
+                referrer fields' placeholder with this message and — same
+                TICK-4 reasoning as `OrderBoostsFormModal`'s deadline field
+                — leaves them empty rather than carrying the invalid pair
+                over, so the placeholder is actually visible.
         """
         super().__init__(title="📝 Заявка", embeds=embeds)
         self._on_submit_cb = on_submit
         self.nick: discord.ui.TextInput[TicketFormModal] = discord.ui.TextInput(
-            label="Ваш игровой ник", max_length=_NICK_MAX_LENGTH
+            label="Ваш игровой ник", default=nick or None, max_length=_NICK_MAX_LENGTH
         )
+        referrer_placeholder = (error_hint or _REFERRER_OPTIONAL_HINT)[:_NICK_MAX_LENGTH]
         self.referrer_nick: discord.ui.TextInput[TicketFormModal] = discord.ui.TextInput(
-            label="Кто пригласил (в игре)", required=False, max_length=_NICK_MAX_LENGTH
+            label="Кто пригласил (в игре)",
+            required=False,
+            placeholder=referrer_placeholder,
+            default=None if error_hint else (referrer_nick or None),
+            max_length=_NICK_MAX_LENGTH,
         )
         self.referrer_discord: discord.ui.TextInput[TicketFormModal] = discord.ui.TextInput(
-            label="Кто пригласил (Discord)", required=False, max_length=_NICK_MAX_LENGTH
+            label="Кто пригласил (Discord)",
+            required=False,
+            placeholder=referrer_placeholder,
+            default=None if error_hint else (referrer_discord_text or None),
+            max_length=_NICK_MAX_LENGTH,
         )
         self.add_item(self.nick)
         self.add_item(self.referrer_nick)
@@ -117,6 +145,7 @@ class OrderBoostsFormModal(ErrorReportingModal):
         referrer_nick: str = "",
         referrer_discord_text: str = "",
         error_hint: str | None = None,
+        referrer_error_hint: str | None = None,
     ) -> None:
         """Build the modal.
 
@@ -131,6 +160,10 @@ class OrderBoostsFormModal(ErrorReportingModal):
             referrer_discord_text: Pre-filled referrer Discord text, same case.
             error_hint: If set, replaces the deadline field's placeholder
                 with this message instead of the usual format example.
+            referrer_error_hint: If set (only one of the referrer pair was
+                filled in — заявка 21.08.2026 п.7), replaces both referrer
+                fields' placeholder with this message and leaves them empty
+                (same TICK-4 reasoning as `error_hint` above).
         """
         super().__init__(title="📝 Заявка на заказ бустов", embeds=embeds)
         self._on_submit_cb = on_submit
@@ -148,16 +181,19 @@ class OrderBoostsFormModal(ErrorReportingModal):
             default=None if error_hint else (deadline_text or None),
             max_length=_DEADLINE_MAX_LENGTH,
         )
+        referrer_placeholder = (referrer_error_hint or _REFERRER_OPTIONAL_HINT)[:_NICK_MAX_LENGTH]
         self.referrer_nick: discord.ui.TextInput[OrderBoostsFormModal] = discord.ui.TextInput(
             label="Кто пригласил (в игре)",
             required=False,
-            default=referrer_nick or None,
+            placeholder=referrer_placeholder,
+            default=None if referrer_error_hint else (referrer_nick or None),
             max_length=_NICK_MAX_LENGTH,
         )
         self.referrer_discord: discord.ui.TextInput[OrderBoostsFormModal] = discord.ui.TextInput(
             label="Кто пригласил (Discord)",
             required=False,
-            default=referrer_discord_text or None,
+            placeholder=referrer_placeholder,
+            default=None if referrer_error_hint else (referrer_discord_text or None),
             max_length=_NICK_MAX_LENGTH,
         )
         self.add_item(self.nick)
@@ -197,3 +233,26 @@ class QuantityModal(ErrorReportingModal):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Forward the typed quantity to the injected handler."""
         await self._on_submit_cb(interaction, str(self.quantity.value))
+
+
+class CouponModal(ErrorReportingModal):
+    """The one `🎟️ Промокод` field, shared by every ticket kind (заявка 26.08.2026)."""
+
+    def __init__(self, on_submit: _AmountSubmitHandler, *, embeds: EmbedFactory) -> None:
+        """Build the modal.
+
+        Args:
+            on_submit: Called with the interaction and the raw typed code
+                (validated/redeemed by the caller via `CouponService`).
+            embeds: Factory used to build the error embed on an `on_submit` failure.
+        """
+        super().__init__(title="🎟️ Промокод", embeds=embeds)
+        self._on_submit_cb = on_submit
+        self.code: discord.ui.TextInput[CouponModal] = discord.ui.TextInput(
+            label="Код купона", placeholder="KLONDIKE10", max_length=32
+        )
+        self.add_item(self.code)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """Forward the typed code to the injected handler."""
+        await self._on_submit_cb(interaction, str(self.code.value))

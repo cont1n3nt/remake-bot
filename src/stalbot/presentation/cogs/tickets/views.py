@@ -84,22 +84,29 @@ class _DeliveryMethodSelect(discord.ui.Select["DeliveryMethodView"]):
 
 
 class TicketSummaryView(discord.ui.View):
-    """The summary card's persistent `📸`/`🏁` buttons.
+    """The summary card's persistent `📸`/`🎟️`/`🏁` buttons.
 
     A single shared `custom_id` per button across every ticket channel —
     the handler reads `interaction.channel_id` to know which ticket it's
     acting on, so one registered instance covers every card.
     """
 
-    def __init__(self, on_screenshot: _ButtonHandler, on_confirm: _ButtonHandler) -> None:
+    def __init__(
+        self,
+        on_screenshot: _ButtonHandler,
+        on_confirm: _ButtonHandler,
+        on_coupon: _ButtonHandler,
+    ) -> None:
         """Build the view.
 
         Args:
             on_screenshot: Called when `📸 Прикрепить скриншот` is clicked.
             on_confirm: Called when `🏁 Завершить` is clicked.
+            on_coupon: Called when `🎟️ Промокод` is clicked (заявка 26.08.2026).
         """
         super().__init__(timeout=None)
         self.add_item(_ScreenshotButton(on_screenshot))
+        self.add_item(_CouponButton(on_coupon))
         self.add_item(_ConfirmButton(on_confirm))
 
 
@@ -114,6 +121,17 @@ class _ScreenshotButton(discord.ui.Button["TicketSummaryView"]):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await self._on_screenshot(interaction)
+
+
+class _CouponButton(discord.ui.Button["TicketSummaryView"]):
+    def __init__(self, on_coupon: _ButtonHandler) -> None:
+        super().__init__(
+            label="🎟️ Промокод", style=discord.ButtonStyle.secondary, custom_id="ticket:coupon"
+        )
+        self._on_coupon = on_coupon
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_coupon(interaction)
 
 
 class _ConfirmButton(discord.ui.Button["TicketSummaryView"]):

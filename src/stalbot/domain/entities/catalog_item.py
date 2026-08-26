@@ -8,9 +8,23 @@ serving the live bot until Э6/Э7. The two coexist on purpose (§X: "снос
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Final
 
 from stalbot.domain.enums import ItemCategory
 from stalbot.domain.money import Rub
+
+#: Canonical section order (заявка 21.08.2026 п.2) — matches the boost
+#: poster's own section order (`layout_boosts.json`, Часть IX) so the
+#: order-boosts picker groups items the same way the posters do. A section
+#: not in this tuple (or `None`) sorts after every known one.
+CATALOG_SECTION_ORDER: Final[tuple[str, ...]] = (
+    "Кулинария",
+    "Самогоноварение",
+    "Медицина",
+    "Пиротехника",
+    "Боеприпасы",
+    "Прочее",
+)
 
 
 @dataclass(frozen=True, slots=True)

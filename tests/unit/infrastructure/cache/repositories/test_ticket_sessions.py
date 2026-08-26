@@ -1,6 +1,7 @@
 """Tests for `TicketSessionsRepository` against a real (temp-file) SQLite connection."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import aiosqlite
 
@@ -48,6 +49,18 @@ async def test_upsert_then_get_round_trips(connection: aiosqlite.Connection) -> 
     result = await repo.get(111)
 
     assert result == session
+
+
+async def test_coupon_fields_round_trip(connection: aiosqlite.Connection) -> None:
+    repo = TicketSessionsRepository(connection)
+    session = _session(coupon_code="KLONDIKE10", coupon_discount_percent=Decimal("1.5"))
+
+    await repo.upsert(session)
+    result = await repo.get(111)
+
+    assert result is not None
+    assert result.coupon_code == "KLONDIKE10"
+    assert result.coupon_discount_percent == Decimal("1.5")
 
 
 async def test_upsert_overwrites_existing_session(connection: aiosqlite.Connection) -> None:

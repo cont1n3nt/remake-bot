@@ -104,6 +104,7 @@ class OrderSummaryView(discord.ui.View):
         *,
         on_edit: _ButtonHandler,
         on_complete: _ButtonHandler,
+        on_coupon: _ButtonHandler,
     ) -> None:
         """Build the view.
 
@@ -114,9 +115,11 @@ class OrderSummaryView(discord.ui.View):
                 handler, not the view) — registers the deal, same
                 `AmountModal` flow the editor's confirm used to trigger
                 directly.
+            on_coupon: `🎟️ Промокод` (заявка 26.08.2026) — any participant.
         """
         super().__init__(timeout=None)
         self.add_item(_Button("✏️ Редактировать", "order:edit", on_edit, row=0))
+        self.add_item(_Button("🎟️ Промокод", "order:coupon", on_coupon, row=0))
         self.add_item(
             _Button(
                 "🏁 Завершить заказ",

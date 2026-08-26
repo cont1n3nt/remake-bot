@@ -19,7 +19,9 @@ from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.application.dto.transaction_request import TransactionRegistrationResult
 from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
+from stalbot.domain.entities.coupon import Coupon
 from stalbot.domain.entities.deal import Deal
+from stalbot.domain.entities.player import Player
 from stalbot.domain.entities.screenshot import OcrResult
 from stalbot.domain.enums import (
     DealSource,
@@ -31,8 +33,14 @@ from stalbot.domain.enums import (
     TicketStatus,
 )
 from stalbot.domain.errors import AmountParseError
+from stalbot.domain.progression.ranks import RankLadder
 from stalbot.presentation.cogs.tickets.cog import TicketsCog, _infer_author_id, _resolve_member
-from stalbot.presentation.cogs.tickets.modals import AmountModal, OrderBoostsFormModal
+from stalbot.presentation.cogs.tickets.modals import (
+    AmountModal,
+    CouponModal,
+    OrderBoostsFormModal,
+    TicketFormModal,
+)
 from stalbot.presentation.cogs.tickets.order_views import OrderEditorView, OrderSummaryView
 from stalbot.presentation.embeds.factory import EmbedFactory
 from tests.support.fake_clock import FakeClock
@@ -72,6 +80,39 @@ def _session(**overrides: object) -> TicketSession:
     return TicketSession(**defaults)  # type: ignore[arg-type]
 
 
+def _player(**overrides: object) -> Player:
+    now = datetime(2026, 7, 31, 21, 45, tzinfo=UTC)
+    defaults: dict[str, object] = {
+        "id": 1,
+        "nick_norm": "scaryyyyy",
+        "nick_display": "Scaryyyyy",
+        "discord_id": None,
+        "referrer_player_id": None,
+        "is_booster": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+    defaults.update(overrides)
+    return Player(**defaults)  # type: ignore[arg-type]
+
+
+def _coupon(**overrides: object) -> Coupon:
+    now = datetime(2026, 8, 26, tzinfo=UTC)
+    defaults: dict[str, object] = {
+        "id": 1,
+        "code": "KLONDIKE10",
+        "discount_percent": Decimal("1.5"),
+        "max_uses": None,
+        "used_count": 0,
+        "active": True,
+        "created_by": 1,
+        "created_at": now,
+        "expires_at": None,
+    }
+    defaults.update(overrides)
+    return Coupon(**defaults)  # type: ignore[arg-type]
+
+
 def _fake_tickets(*, get_return: TicketSession | None = None) -> MagicMock:
     tickets = MagicMock()
     tickets.open_ticket = AsyncMock(return_value=get_return or _session())
@@ -84,6 +125,7 @@ def _fake_tickets(*, get_return: TicketSession | None = None) -> MagicMock:
     tickets.record_screenshot = AsyncMock(return_value=get_return or _session())
     tickets.record_confirmed = AsyncMock(return_value=get_return)
     tickets.set_active_order_item = AsyncMock(return_value=get_return)
+    tickets.record_coupon = AsyncMock(return_value=get_return)
     return tickets
 
 
@@ -142,6 +184,21 @@ def _fake_progression() -> MagicMock:
     return progression
 
 
+def _fake_players() -> MagicMock:
+    players = MagicMock()
+    # No existing player by default — `_lock_referrer` is a no-op unless a
+    # test opts in with `get_by_nick`/`get_by_id` return values of its own.
+    players.get_by_nick = AsyncMock(return_value=None)
+    players.get_by_id = AsyncMock(return_value=None)
+    return players
+
+
+def _fake_coupons() -> MagicMock:
+    coupons = MagicMock()
+    coupons.redeem = AsyncMock()
+    return coupons
+
+
 def _cog(
     *,
     tickets: MagicMock | None = None,
@@ -149,6 +206,8 @@ def _cog(
     boost_orders: MagicMock | None = None,
     transactions: MagicMock | None = None,
     progression: MagicMock | None = None,
+    players: MagicMock | None = None,
+    coupons: MagicMock | None = None,
     embeds: EmbedFactory | None = None,
     tool_wait_timeout: float = 0.05,
     log_channel_id: int = 555,
@@ -158,6 +217,8 @@ def _cog(
     boost_orders = boost_orders or _fake_boost_orders()
     transactions = transactions or _fake_transactions()
     progression = progression or _fake_progression()
+    players = players or _fake_players()
+    coupons = coupons or _fake_coupons()
     settings = MagicMock(log_channel_id=log_channel_id)
     cog = TicketsCog(
         tickets,
@@ -165,6 +226,8 @@ def _cog(
         boost_orders,
         transactions,
         progression,
+        players,
+        coupons,
         embeds or EmbedFactory(),
         settings,
         tool_wait_timeout_seconds=tool_wait_timeout,
@@ -421,6 +484,53 @@ async def test_on_form_submitted_drops_a_case_insensitive_self_referral() -> Non
     assert kwargs["referrer_discord_id"] is None
 
 
+async def test_on_form_submitted_reopens_the_modal_when_only_one_referrer_field_is_filled() -> None:
+    """заявка 21.08.2026 п.7: both referrer fields or neither."""
+    cog, tickets, *_ = _cog()
+    interaction = _interaction()
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", "OtherNick", None)
+
+    interaction.response.send_modal.assert_awaited_once()
+    modal = interaction.response.send_modal.call_args.args[0]
+    assert isinstance(modal, TicketFormModal)
+    tickets.record_form.assert_not_called()
+
+
+async def test_on_form_submitted_locks_an_existing_referrer() -> None:
+    """заявка 21.08.2026 п.8: a player can only set their referrer once."""
+    existing_referrer = _player(id=5, nick_display="FirstReferrer")
+    player = _player(id=1, nick_norm="scaryyyyy", referrer_player_id=5)
+    players = _fake_players()
+    players.get_by_nick = AsyncMock(return_value=player)
+    players.get_by_id = AsyncMock(return_value=existing_referrer)
+    cog, tickets, *_ = _cog(players=players)
+    interaction = _interaction()
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", "SomeoneElse", "<@888>")
+
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["referrer_nick"] is None
+    assert kwargs["referrer_discord_id"] is None
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "FirstReferrer" in (embed.description or "")
+
+
+async def test_on_form_submitted_allows_retyping_the_same_locked_referrer() -> None:
+    existing_referrer = _player(id=5, nick_norm="firstreferrer", nick_display="FirstReferrer")
+    player = _player(id=1, nick_norm="scaryyyyy", referrer_player_id=5)
+    players = _fake_players()
+    players.get_by_nick = AsyncMock(return_value=player)
+    players.get_by_id = AsyncMock(return_value=existing_referrer)
+    cog, tickets, *_ = _cog(players=players)
+    interaction = _interaction()
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", "FirstReferrer", "<@888>")
+
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["referrer_nick"] == "FirstReferrer"
+
+
 # -- Confirmation -----------------------------------------------------------
 
 
@@ -591,6 +701,88 @@ async def test_amount_submitted_registers_the_deal_and_confirms() -> None:
     progression.sync.assert_awaited_once()
     interaction.followup.send.assert_awaited_once()
     channel.send.assert_awaited_once()
+
+
+async def test_amount_submitted_tags_the_author_and_asks_for_a_review() -> None:
+    """заявка 21.08.2026 п.4: the public confirmation tags the author and points at reviews."""
+    session = _session(game_nick="Scaryyyyy", author_id=42)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    channel = _text_channel()
+    interaction = _interaction(channel=channel)
+
+    await cog._on_amount_submitted(interaction, "100 000")
+
+    kwargs = channel.send.call_args.kwargs
+    assert kwargs["content"] == "<@42>"
+    assert "отзыв" in (kwargs["embed"].description or "")
+
+
+async def test_amount_submitted_applies_the_coupon_discount_to_the_registered_amount() -> None:
+    """заявка 26.08.2026: a redeemed coupon discounts the actual recorded deal amount."""
+    session = _session(
+        game_nick="Scaryyyyy", coupon_code="KLONDIKE10", coupon_discount_percent=Decimal("10")
+    )
+    cog, _tickets, _screenshots, _boost_orders, transactions, _progression = _cog(
+        tickets=_fake_tickets(get_return=session)
+    )
+    interaction = _interaction()
+
+    await cog._on_amount_submitted(interaction, "100000")
+
+    (request,), _kwargs = transactions.register.call_args
+    assert request.amount == Decimal(90000)
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "KLONDIKE10" in (embed.description or "")
+
+
+# -- Coupons (заявка 26.08.2026) ------------------------------------------
+
+
+async def test_coupon_button_opens_the_code_modal() -> None:
+    cog, *_ = _cog()
+    interaction = _interaction()
+
+    await cog._on_coupon_button(interaction)
+
+    interaction.response.send_modal.assert_awaited_once()
+    modal = interaction.response.send_modal.call_args.args[0]
+    assert isinstance(modal, CouponModal)
+
+
+async def test_coupon_submitted_redeems_records_and_reports() -> None:
+    session = _session(kind=TicketKind.SELL_ITEMS)
+    coupons = _fake_coupons()
+    coupons.redeem = AsyncMock(
+        return_value=_coupon(code="KLONDIKE10", discount_percent=Decimal("1.5"))
+    )
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session), coupons=coupons)
+    channel = _text_channel()
+    interaction = _interaction(channel=channel, user_id=777)
+
+    await cog._on_coupon_submitted(interaction, "klondike10")
+
+    coupons.redeem.assert_awaited_once_with(
+        "klondike10", channel_id=interaction.channel_id, discord_id=777
+    )
+    tickets.record_coupon.assert_awaited_once_with(
+        interaction.channel_id, "KLONDIKE10", Decimal("1.5")
+    )
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "KLONDIKE10" in (embed.description or "")
+    channel.send.assert_awaited_once()  # re-posts the ticket card with the coupon line on it
+
+
+async def test_coupon_submitted_rejects_an_already_confirmed_ticket() -> None:
+    session = _session(status=TicketStatus.CONFIRMED)
+    coupons = _fake_coupons()
+    cog, _tickets, *_ = _cog(tickets=_fake_tickets(get_return=session), coupons=coupons)
+    interaction = _interaction()
+
+    await cog._on_coupon_submitted(interaction, "KLONDIKE10")
+
+    coupons.redeem.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "уже была подтверждена" in (embed.description or "")
 
 
 # -- Screenshot ---------------------------------------------------------
@@ -875,6 +1067,39 @@ async def test_order_form_submitted_drops_a_case_insensitive_self_referral() -> 
 
     await cog._on_order_form_submitted(
         interaction, "Scaryyyyy", "через 3 часа", "  scaryyyyy ", "<@888>"
+    )
+
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["referrer_nick"] is None
+    assert kwargs["referrer_discord_id"] is None
+
+
+async def test_order_form_submitted_reopens_the_modal_for_a_half_filled_referrer() -> None:
+    """заявка 21.08.2026 п.7, same as `_on_form_submitted`."""
+    cog, tickets, *_ = _cog()
+    interaction = _interaction()
+
+    await cog._on_order_form_submitted(interaction, "Scaryyyyy", "через 3 часа", None, "<@888>")
+
+    interaction.response.send_modal.assert_awaited_once()
+    modal = interaction.response.send_modal.call_args.args[0]
+    assert isinstance(modal, OrderBoostsFormModal)
+    tickets.record_form.assert_not_called()
+
+
+async def test_order_form_submitted_locks_an_existing_referrer() -> None:
+    """заявка 21.08.2026 п.8, same as `_on_form_submitted`."""
+    existing_referrer = _player(id=5, nick_display="FirstReferrer")
+    player = _player(id=1, nick_norm="scaryyyyy", referrer_player_id=5)
+    players = _fake_players()
+    players.get_by_nick = AsyncMock(return_value=player)
+    players.get_by_id = AsyncMock(return_value=existing_referrer)
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session), players=players)
+    interaction = _interaction()
+
+    await cog._on_order_form_submitted(
+        interaction, "Scaryyyyy", "через 3 часа", "SomeoneElse", "<@888>"
     )
 
     _args, kwargs = tickets.record_form.call_args
@@ -1237,6 +1462,25 @@ async def test_amount_submitted_does_not_clear_a_draft_for_sell_tickets() -> Non
     await cog._on_amount_submitted(interaction, "100000")
 
     boost_orders.clear.assert_not_called()
+
+
+async def test_amount_submitted_notes_the_rank_markup_for_order_boosts() -> None:
+    """§9.1, п.2: the confirmed-sum embed shows the applied rank discount/markup."""
+    premium = RankLadder().by_key("premium")
+    assert premium is not None
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    member = MagicMock(spec=discord.Member)
+    member.roles = [MagicMock(id=premium.role_id)]
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_member = MagicMock(return_value=member)
+    interaction = _interaction(guild=guild)
+
+    await cog._on_amount_submitted(interaction, "930000")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "«Premium»" in (embed.description or "") or premium.label in (embed.description or "")
+    assert "×0.995" in (embed.description or "")
 
 
 # -- Module-level helpers -------------------------------------------------

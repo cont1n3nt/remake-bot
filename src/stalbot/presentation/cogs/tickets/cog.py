@@ -27,6 +27,7 @@ from stalbot.application.services.boost_orders import (
     MIN_QUANTITY,
     BoostOrderService,
 )
+from stalbot.application.services.coupons import CouponService
 from stalbot.application.services.progression import ProgressionService
 from stalbot.application.services.role_pricing import resolve_price_multiplier
 from stalbot.application.services.screenshots import ScreenshotService
@@ -41,9 +42,11 @@ from stalbot.domain.errors import AmountParseError, DeadlineParseError
 from stalbot.domain.money import evaluate_amount, format_amount, parse_amount, round_for_storage
 from stalbot.domain.nick import normalize_nick
 from stalbot.domain.progression.ranks import RankLadder, RankTier
+from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.presentation.cogs.tickets.card import SCREENSHOT_FILENAME, render_ticket_card
 from stalbot.presentation.cogs.tickets.modals import (
     AmountModal,
+    CouponModal,
     OrderBoostsFormModal,
     QuantityModal,
     TicketFormModal,
@@ -92,6 +95,8 @@ class TicketsCog(commands.Cog):
         boost_orders: BoostOrderService,
         transactions: TransactionService,
         progression: ProgressionService,
+        players: PlayersRepository,
+        coupons: CouponService,
         embeds: EmbedFactory,
         settings: Settings,
         *,
@@ -107,6 +112,9 @@ class TicketsCog(commands.Cog):
             boost_orders: Draft-line CRUD and live pricing for `ORDER_BOOSTS`.
             transactions: Shared with `/add` — records the confirmed deal.
             progression: Reconciles roles and announces promotions afterwards.
+            players: Read-only lookup, to check whether the ticket's author
+                already has a locked-in referrer (заявка 21.08.2026 п.8).
+            coupons: Validates/redeems the `🎟️ Промокод` button (заявка 26.08.2026).
             embeds: Builds every embed this cog sends.
             settings: For `log_channel_id`.
             clock: Time source for `parse_deadline`. Defaults to `SystemClock()`.
@@ -122,6 +130,8 @@ class TicketsCog(commands.Cog):
         self._boost_orders = boost_orders
         self._transactions = transactions
         self._progression = progression
+        self._players = players
+        self._coupons = coupons
         self._embeds = embeds
         self._settings = settings
         self._clock = clock or SystemClock()
@@ -141,7 +151,9 @@ class TicketsCog(commands.Cog):
             TicketPanelView(TicketKind.SELL_ITEMS, self._on_start),
             TicketPanelView(TicketKind.SELL_BOOSTS, self._on_start),
             TicketPanelView(TicketKind.ORDER_BOOSTS, self._on_start),
-            TicketSummaryView(self._on_screenshot_button, self._on_confirm_button),
+            TicketSummaryView(
+                self._on_screenshot_button, self._on_confirm_button, self._on_coupon_button
+            ),
             self._build_order_editor_view(None, ()),
             self._build_order_summary_view(),
         )
@@ -245,7 +257,25 @@ class TicketsCog(commands.Cog):
         referrer_nick: str | None,
         referrer_discord_text: str | None,
     ) -> None:
+        if _referrer_pair_incomplete(referrer_nick, referrer_discord_text):
+            # заявка 21.08.2026 п.7: both referrer fields or neither — reopen
+            # the modal instead of silently accepting a half-filled referral.
+            await interaction.response.send_modal(
+                TicketFormModal(
+                    self._on_form_submitted,
+                    embeds=self._embeds,
+                    nick=nick,
+                    referrer_nick=referrer_nick or "",
+                    referrer_discord_text=referrer_discord_text or "",
+                    error_hint=_REFERRER_PAIR_ERROR,
+                )
+            )
+            return
+
         referrer_nick, referrer_discord_text = _drop_self_referral(
+            nick, referrer_nick, referrer_discord_text
+        )
+        referrer_nick, referrer_discord_text, locked_note = await self._lock_referrer(
             nick, referrer_nick, referrer_discord_text
         )
         referrer_member = (
@@ -274,7 +304,8 @@ class TicketsCog(commands.Cog):
             await self._post_or_update_summary(channel, session)
 
         embed = self._embeds.success(
-            "✅ Заявка заполнена", "Спасибо! Ваша заявка передана администрации."
+            "✅ Заявка заполнена",
+            f"Спасибо! Ваша заявка передана администрации.{locked_note}",
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -304,7 +335,25 @@ class TicketsCog(commands.Cog):
             )
             return
 
+        if _referrer_pair_incomplete(referrer_nick, referrer_discord_text):
+            # заявка 21.08.2026 п.7: both referrer fields or neither.
+            await interaction.response.send_modal(
+                OrderBoostsFormModal(
+                    self._on_order_form_submitted,
+                    embeds=self._embeds,
+                    nick=nick,
+                    deadline_text=deadline_text,
+                    referrer_nick=referrer_nick or "",
+                    referrer_discord_text=referrer_discord_text or "",
+                    referrer_error_hint=_REFERRER_PAIR_ERROR,
+                )
+            )
+            return
+
         referrer_nick, referrer_discord_text = _drop_self_referral(
+            nick, referrer_nick, referrer_discord_text
+        )
+        referrer_nick, referrer_discord_text, locked_note = await self._lock_referrer(
             nick, referrer_nick, referrer_discord_text
         )
         referrer_member = (
@@ -330,7 +379,8 @@ class TicketsCog(commands.Cog):
             await self._post_or_update_order_summary(channel, session)
 
         embed = self._embeds.success(
-            "✅ Заявка заполнена", "Спасибо! Ваша заявка передана администрации."
+            "✅ Заявка заполнена",
+            f"Спасибо! Ваша заявка передана администрации.{locked_note}",
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -338,7 +388,9 @@ class TicketsCog(commands.Cog):
         self, channel: discord.TextChannel, session: TicketSession
     ) -> None:
         embed = render_ticket_card(session, self._embeds)
-        view = TicketSummaryView(self._on_screenshot_button, self._on_confirm_button)
+        view = TicketSummaryView(
+            self._on_screenshot_button, self._on_confirm_button, self._on_coupon_button
+        )
         if session.summary_message_id is not None:
             message = await _try_fetch(channel, session.summary_message_id)
             if message is not None:
@@ -605,6 +657,50 @@ class TicketsCog(commands.Cog):
         message = await channel.send(embed=embed, view=view)
         await self._tickets.record_summary_message(channel.id, message.id)
 
+    async def _lock_referrer(
+        self, nick: str, referrer_nick: str | None, referrer_discord_text: str | None
+    ) -> tuple[str | None, str | None, str]:
+        """Refuse a referrer change once the player already has one on file (заявка 21.08.2026 п.8).
+
+        A player may type their referrer once, in any ticket form; after
+        that it's locked — only an admin via `/set_referral` can change it.
+        This only checks/warns at form-submit time; the actual write is
+        still guarded independently by `TransactionService.register()`
+        (only ever writes on the player's first deal with no referrer set
+        yet), so a race between two tickets can't double-write either.
+
+        Args:
+            nick: The ticket filler's own typed nick (the player being
+                checked, not the referrer).
+            referrer_nick: Newly typed referrer nick, or `None`.
+            referrer_discord_text: Newly typed referrer Discord text, or `None`.
+
+        Returns:
+            `(referrer_nick, referrer_discord_text, note)` — the pair
+            unchanged if there's nothing to lock, or `(None, None, note)`
+            with `note` explaining why it was dropped. `note` is always a
+            ready-to-append string (`""` when there's nothing to say).
+        """
+        if referrer_nick is None:
+            return referrer_nick, referrer_discord_text, ""
+
+        player = await self._players.get_by_nick(normalize_nick(nick))
+        if player is None or player.referrer_player_id is None:
+            return referrer_nick, referrer_discord_text, ""
+
+        existing = await self._players.get_by_id(player.referrer_player_id)
+        existing_display = existing.nick_display if existing is not None else "неизвестный игрок"
+        if existing is not None and normalize_nick(referrer_nick) == existing.nick_norm:
+            # Re-typing the same referrer that's already on file — nothing
+            # to warn about, and nothing to drop.
+            return referrer_nick, referrer_discord_text, ""
+
+        note = (
+            f"\n-# ℹ️ У вас уже указан реферал — **{existing_display}**. "
+            "Новый реферал не сохранён: изменить может только администратор через /set_referral."
+        )
+        return None, None, note
+
     async def _resolve_order_pricing(
         self, guild: discord.Guild | None, author_id: int
     ) -> tuple[RankTier | None, Decimal]:
@@ -655,6 +751,7 @@ class TicketsCog(commands.Cog):
         return OrderSummaryView(
             on_edit=self._on_order_edit_button,
             on_complete=self._on_order_complete_button,
+            on_coupon=self._on_coupon_button,
         )
 
     def _build_order_editor_view(
@@ -737,7 +834,9 @@ class TicketsCog(commands.Cog):
             if summary_message is not None:
                 card_file = discord.File(io.BytesIO(cover_data), filename=SCREENSHOT_FILENAME)
                 embed = render_ticket_card(updated, self._embeds)
-                view = TicketSummaryView(self._on_screenshot_button, self._on_confirm_button)
+                view = TicketSummaryView(
+                    self._on_screenshot_button, self._on_confirm_button, self._on_coupon_button
+                )
                 await summary_message.edit(embed=embed, view=view, attachments=[card_file])
 
         self._awaiting_screenshot.discard(session.channel_id)
@@ -859,7 +958,26 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
-        amount = evaluate_amount(amount_text)
+        typed_amount = evaluate_amount(amount_text)
+        markup_note = ""
+        if session.kind is TicketKind.ORDER_BOOSTS:
+            tier, multiplier = await self._resolve_order_pricing(
+                interaction.guild, session.author_id
+            )
+            if tier is not None and multiplier != Decimal("1.00"):
+                markup_note = (
+                    f"\n-# 🏷️ Применена скидка/наценка от ранга «{tier.label}»: ×{multiplier}"
+                )
+
+        amount = typed_amount
+        if session.coupon_discount_percent is not None:
+            coupon_multiplier = (Decimal(100) - session.coupon_discount_percent) / Decimal(100)
+            amount = round_for_storage(typed_amount * coupon_multiplier)
+            markup_note += (
+                f"\n-# 🎟️ Применён промокод «{session.coupon_code}»: "
+                f"-{session.coupon_discount_percent}%"
+            )
+
         request = AddTransactionRequest(
             nick=session.game_nick,
             deal_type=_DEAL_TYPE_OF[session.kind],
@@ -870,6 +988,7 @@ class TicketsCog(commands.Cog):
             force_rebind=False,
             source=DealSource.TICKET,
         )
+
         result = await self._transactions.register(request)
         if result.replayed:
             # `TransactionService`'s lock (CLUSTER-1) guarantees only one concurrent
@@ -882,7 +1001,7 @@ class TicketsCog(commands.Cog):
             await self._tickets.record_confirmed(session.channel_id)
             embed = self._embeds.success(
                 "✅ Сделка уже зафиксирована",
-                f"Сумма: {format_amount(result.deal.amount)}.",
+                f"Сумма: {format_amount(result.deal.amount)}.{markup_note}",
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
@@ -901,16 +1020,61 @@ class TicketsCog(commands.Cog):
 
         embed = self._embeds.success(
             "✅ Сделка зафиксирована",
-            f"Сумма: {format_amount(result.deal.amount)}.",
+            f"Сумма: {format_amount(result.deal.amount)}.{markup_note}",
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
         if isinstance(channel, discord.abc.Messageable):
             await channel.send(
+                content=f"<@{session.author_id}>",
                 embed=self._embeds.success(
                     "🧾 Заявка подтверждена",
-                    f"Сделка зафиксирована администратором {interaction.user.mention}.",
-                )
+                    f"Сделка зафиксирована администратором {interaction.user.mention}.\n"
+                    f"Будем благодарны за отзыв в <#{self._settings.reviews_channel_id}>! ⭐",
+                ),
             )
+
+    # -- Coupons (заявка 26.08.2026) ------------------------------------------
+
+    async def _on_coupon_button(self, interaction: discord.Interaction) -> None:
+        """`🎟️ Промокод` — any ticket kind, any participant; opens the code modal."""
+        await interaction.response.send_modal(
+            CouponModal(self._on_coupon_submitted, embeds=self._embeds)
+        )
+
+    async def _on_coupon_submitted(self, interaction: discord.Interaction, code: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel_id = interaction.channel_id or 0
+        session = await self._tickets.get(channel_id)
+        if session is None:
+            embed = self._embeds.error("Ошибка", "Тикет не найден.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        if session.status is TicketStatus.CONFIRMED:
+            embed = self._embeds.warning("⚠️ Уже подтверждено", "Эта заявка уже была подтверждена.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        coupon = await self._coupons.redeem(
+            code, channel_id=channel_id, discord_id=interaction.user.id
+        )
+        session = await self._tickets.record_coupon(
+            channel_id, coupon.code, coupon.discount_percent
+        )
+
+        embed = self._embeds.success(
+            "🎟️ Промокод применён",
+            f"«{coupon.code}»: скидка {coupon.discount_percent}% "
+            "будет учтена при завершении заявки.",
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            return
+        if session.kind is TicketKind.ORDER_BOOSTS:
+            await self._post_or_update_order_summary(channel, session)
+        else:
+            await self._post_or_update_summary(channel, session)
 
 
 def _is_admin(user: discord.User | discord.Member) -> bool:
@@ -930,6 +1094,14 @@ def _infer_author_id(channel: discord.TextChannel) -> int:
         if isinstance(target, discord.Member) and not target.bot:
             return target.id
     return 0
+
+
+_REFERRER_PAIR_ERROR = "Укажите оба поля — и ник, и Discord пригласившего — либо оставьте оба пустыми."
+
+
+def _referrer_pair_incomplete(referrer_nick: str | None, referrer_discord_text: str | None) -> bool:
+    """`True` when exactly one of the referrer pair was typed (заявка 21.08.2026 п.7)."""
+    return (referrer_nick is None) != (referrer_discord_text is None)
 
 
 def _resolve_member(guild: discord.Guild | None, text: str) -> discord.Member | None:

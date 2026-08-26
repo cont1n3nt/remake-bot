@@ -8,6 +8,7 @@ back here (invariant: the card is never assembled ad hoc in a handler).
 
 from dataclasses import replace
 from datetime import datetime
+from decimal import Decimal
 
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.application.ports.clock import Clock
@@ -172,6 +173,20 @@ class TicketService:
             channel_id: The ticket channel.
         """
         return await self._update(channel_id, status=TicketStatus.CONFIRMED)
+
+    async def record_coupon(
+        self, channel_id: int, code: str, discount_percent: Decimal
+    ) -> TicketSession:
+        """Lock a redeemed coupon's discount onto the session (заявка 26.08.2026).
+
+        Args:
+            channel_id: The ticket channel.
+            code: The coupon's code, as stored (upper-cased).
+            discount_percent: The `Decimal` percent to apply at confirm time.
+        """
+        return await self._update(
+            channel_id, coupon_code=code, coupon_discount_percent=discount_percent
+        )
 
     async def set_active_order_item(self, channel_id: int, item_id: int | None) -> TicketSession:
         """Record which boost-order line the editor's controls act on (PLAN.md §11.6).

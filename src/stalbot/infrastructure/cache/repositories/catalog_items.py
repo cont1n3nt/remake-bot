@@ -175,6 +175,20 @@ class CatalogItemsRepository:
                 (price_buy, price_sell, now.isoformat(), item_id),
             )
 
+    async def set_section(self, item_id: int, section: str | None, *, now: datetime) -> None:
+        """Set (or clear) an item's crafting-profession section (заявка 21.08.2026 п.2, п.6).
+
+        Args:
+            item_id: The catalog item to update.
+            section: The section name (e.g. "Кулинария"), or `None`.
+            now: Timestamp for `updated_at`.
+        """
+        async with transaction(self._conn):
+            await self._conn.execute(
+                "UPDATE catalog_items SET section = ?, updated_at = ? WHERE id = ?",
+                (section, now.isoformat(), item_id),
+            )
+
     async def set_shelter_item_id(
         self, item_id: int, shelter_item_id: int | None, *, now: datetime
     ) -> None:

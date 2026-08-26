@@ -168,6 +168,36 @@ def test_markup_note_shown_when_multiplier_differs_from_one() -> None:
     assert f"Итого: {format_amount(Decimal(900000) * Decimal('0.90'))}" in description
 
 
+def test_coupon_discount_is_shown_and_applied_to_the_total() -> None:
+    session = _session(coupon_code="KLONDIKE10", coupon_discount_percent=Decimal("10"))
+    lines_with_items = [(_line(1, 3), _item(1, "Топот", Decimal(300000)))]
+
+    embed = render_order_editor(session, lines_with_items, EmbedFactory())
+
+    description = embed.description or ""
+    assert "KLONDIKE10" in description
+    assert f"Итого: {format_amount(Decimal(900000) * Decimal('0.90'))}" in description
+
+
+def test_coupon_and_rank_multiplier_stack() -> None:
+    tier = RankLadder().by_key("elite")
+    assert tier is not None
+    session = _session(coupon_code="KLONDIKE10", coupon_discount_percent=Decimal("10"))
+    lines_with_items = [(_line(1, 3), _item(1, "Топот", Decimal(300000)))]
+
+    embed = render_order_editor(
+        session,
+        lines_with_items,
+        EmbedFactory(),
+        rank_tier=tier,
+        price_multiplier=Decimal("0.90"),
+    )
+
+    description = embed.description or ""
+    expected_total = Decimal(900000) * Decimal("0.90") * Decimal("0.90")
+    assert f"Итого: {format_amount(expected_total)}" in description
+
+
 def test_summary_shares_the_same_body_as_the_editor() -> None:
     lines_with_items = [(_line(1, 3), _item(1, "Топот", Decimal(300000)))]
 

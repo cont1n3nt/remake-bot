@@ -110,3 +110,18 @@ async def test_set_price_updates_and_stamps_updated_at(connection: aiosqlite.Con
     assert updated is not None
     assert updated.price_buy == 150
     assert updated.updated_at == later
+
+
+async def test_set_section_updates_and_stamps_updated_at(connection: aiosqlite.Connection) -> None:
+    repo = CatalogItemsRepository(connection)
+    await repo.insert_many([_item("Топот", ItemCategory.BOOST, price_sell=Rub(300000))])
+    item = await repo.find("топот", ItemCategory.BOOST)
+    assert item is not None and item.id is not None
+
+    later = datetime(2026, 8, 26, tzinfo=UTC)
+    await repo.set_section(item.id, "Кулинария", now=later)
+
+    updated = await repo.get_by_id(item.id)
+    assert updated is not None
+    assert updated.section == "Кулинария"
+    assert updated.updated_at == later

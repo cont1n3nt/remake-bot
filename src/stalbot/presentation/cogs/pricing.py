@@ -13,13 +13,17 @@ from discord import app_commands
 from discord.ext import commands
 
 from stalbot.application.dto.price_change import PriceChange
+from stalbot.application.ports.clock import Clock
 from stalbot.application.services.pricing import (
     PricingService,
     decode_price_list_bytes,
     render_price_change_report,
 )
+from stalbot.application.services.temp_prices import TempPriceService
 from stalbot.config.settings import Settings
+from stalbot.domain.clock import SystemClock, format_datetime, parse_deadline
 from stalbot.domain.enums import ItemCategory, PriceField
+from stalbot.domain.errors import DeadlineParseError
 from stalbot.domain.money import evaluate_amount
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
 from stalbot.presentation.autocomplete import item_choices
@@ -45,6 +49,9 @@ class PricingCog(commands.Cog):
         items: CatalogItemsRepository,
         embeds: EmbedFactory,
         settings: Settings,
+        temp_prices: TempPriceService,
+        *,
+        clock: Clock | None = None,
     ) -> None:
         """Wire the cog to the service it delegates to.
 
@@ -53,11 +60,15 @@ class PricingCog(commands.Cog):
             items: Read-only lookup, for the shared report and autocomplete.
             embeds: Builds every embed this cog sends.
             settings: For `PRICE_IMPORT_CONFIRM`.
+            temp_prices: Applies/reverts `/temp_price` overrides.
+            clock: Time source for `parse_deadline`. Defaults to `SystemClock()`.
         """
         self._pricing = pricing
         self._items = items
         self._embeds = embeds
         self._settings = settings
+        self._temp_prices = temp_prices
+        self._clock = clock or SystemClock()
 
     @app_commands.command(
         name="setprice", description="🛡️ [Админ] 💲 Установить цену скупки ресурса"
@@ -96,6 +107,50 @@ class PricingCog(commands.Cog):
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[int]]:
         return item_choices(await self._items.by_category(ItemCategory.BOOST), current)
+
+    @app_commands.command(
+        name="temp_price", description="🛡️ [Админ] ⏳ Временная цена предмета до срока"
+    )
+    @app_commands.describe(
+        предмет="Название ресурса или буста",
+        цена="Временная цена, например 250000 или 250к",
+        до="До какой даты и времени действует, затем цена вернётся к прежней",
+    )
+    @admin_only()
+    async def temp_price(
+        self, interaction: discord.Interaction, предмет: int, цена: str, до: str
+    ) -> None:
+        """Handle `/temp_price`: set a price that reverts to its current value after `до`."""
+        await interaction.response.defer(ephemeral=True)
+        try:
+            until = parse_deadline(до, now=self._clock.now())
+        except DeadlineParseError:
+            await self._send_error(interaction, "Не удалось распознать дату.")
+            return
+
+        item = await self._items.get_by_id(предмет)
+        if item is None:
+            await self._send_error(interaction, "Предмет не найден в базе.")
+            return
+        field = PriceField.BUY if item.category is ItemCategory.RESOURCE else PriceField.SELL
+
+        amount = evaluate_amount(цена)
+        change = await self._temp_prices.set_temp_price(
+            предмет, field, amount, until, changed_by=interaction.user.id
+        )
+        catalog = await self._items.all()
+        report_text = render_price_change_report([change], catalog)
+        embed = self._embeds.success(
+            "⏳ Временная цена установлена",
+            f"{report_text}\n\nВернётся к прежней цене: {format_datetime(until)}.",
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @temp_price.autocomplete("предмет")
+    async def _temp_price_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[int]]:
+        return item_choices(await self._items.all(), current)
 
     @app_commands.command(name="new_price", description="🛡️ [Админ] 📥 Импортировать цены из TXT")
     @app_commands.describe(файл="TXT-файл прайс-листа (формат — как в /give_price)")

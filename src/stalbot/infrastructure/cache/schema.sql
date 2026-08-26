@@ -86,7 +86,9 @@ CREATE TABLE IF NOT EXISTS ticket_sessions (
     idempotency_key TEXT UNIQUE,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    active_order_item_id INTEGER
+    active_order_item_id INTEGER,
+    coupon_code TEXT,
+    coupon_discount_percent TEXT
 );
 
 -- Boost-order draft lines (M10). item_name_norm + category let a line
@@ -251,7 +253,7 @@ CREATE TABLE IF NOT EXISTS item_price_history (
     old_price INTEGER,
     new_price INTEGER,
     changed_by INTEGER,
-    source TEXT NOT NULL CHECK (source IN ('setprice','import','catalog','migration')),
+    source TEXT NOT NULL CHECK (source IN ('setprice','import','catalog','migration','temp_price')),
     changed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_price_history_item ON item_price_history(item_id, changed_at);
@@ -305,4 +307,40 @@ CREATE TABLE IF NOT EXISTS shelter_cost (
     note               TEXT,
     calculator_version INTEGER NOT NULL,
     computed_at        TEXT NOT NULL
+);
+
+-- --- `/temp_price` (заявка 21.08.2026 п.9, migration 0008) ---
+
+CREATE TABLE IF NOT EXISTS temp_prices (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES catalog_items(id) ON DELETE CASCADE,
+    field TEXT NOT NULL CHECK (field IN ('buy','sell')),
+    original_price INTEGER,
+    expires_at TEXT NOT NULL,
+    created_by INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_temp_prices_expires ON temp_prices(expires_at);
+
+-- --- Coupons (заявка 26.08.2026, migration 0009) ---
+
+CREATE TABLE IF NOT EXISTS coupons (
+    id INTEGER PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    discount_percent TEXT NOT NULL,
+    max_uses INTEGER,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by INTEGER,
+    created_at TEXT NOT NULL,
+    expires_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS coupon_redemptions (
+    id INTEGER PRIMARY KEY,
+    coupon_id INTEGER NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+    channel_id INTEGER NOT NULL,
+    discord_id INTEGER NOT NULL,
+    redeemed_at TEXT NOT NULL,
+    UNIQUE (coupon_id, discord_id)
 );

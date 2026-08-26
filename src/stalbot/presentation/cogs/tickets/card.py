@@ -54,6 +54,8 @@ def render_ticket_card(session: TicketSession, embeds: EmbedFactory) -> discord.
         if session.referrer_discord_id is not None:
             referrer += f" (<@{session.referrer_discord_id}>)"
         details.append(f"🤝 Пригласил: {referrer}")
+    if session.coupon_code is not None:
+        details.append(f"🎟️ Промокод «{session.coupon_code}»: -{session.coupon_discount_percent}%")
 
     lines = [_SEPARATOR, f"👤 Игрок: <@{session.author_id}>", "", *details, ""]
     lines.append(f"🕒 Создана: {format_datetime(session.created_at)}")

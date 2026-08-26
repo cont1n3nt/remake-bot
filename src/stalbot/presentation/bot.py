@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Any, Final
 
 import discord
@@ -13,6 +14,7 @@ from stalbot.application.dto.audit_event import AuditEvent
 from stalbot.application.services.audit import AuditService
 from stalbot.application.services.boost_orders import BoostOrderService
 from stalbot.application.services.catalog import CatalogService
+from stalbot.application.services.coupons import CouponService
 from stalbot.application.services.health import HealthService
 from stalbot.application.services.manual_grants import ManualGrantService
 from stalbot.application.services.posters import PosterService
@@ -22,13 +24,16 @@ from stalbot.application.services.progression import ProgressionService
 from stalbot.application.services.screenshots import ScreenshotService
 from stalbot.application.services.shelter_cost import ShelterCostService
 from stalbot.application.services.stats import StatsService
+from stalbot.application.services.temp_prices import TempPriceService
 from stalbot.application.services.tickets import TicketService
 from stalbot.application.services.transactions import TransactionService
 from stalbot.config.settings import Settings
 from stalbot.domain.clock import SystemClock
+from stalbot.domain.money import format_amount
 from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
+from stalbot.infrastructure.cache.repositories.coupons import CouponsRepository
 from stalbot.infrastructure.cache.repositories.deals import DealsRepository
 from stalbot.infrastructure.cache.repositories.idempotency import IdempotencyRepository
 from stalbot.infrastructure.cache.repositories.item_price_history import (
@@ -41,6 +46,7 @@ from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
     ScreenshotAnalysesRepository,
 )
 from stalbot.infrastructure.cache.repositories.shelter import ShelterRepository
+from stalbot.infrastructure.cache.repositories.temp_prices import TempPricesRepository
 from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
 from stalbot.infrastructure.discord.audit_channel import AuditChannelGateway
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
@@ -49,12 +55,15 @@ from stalbot.infrastructure.logging.trace import current_trace_id, new_trace_id,
 from stalbot.infrastructure.ocr.null import NullOcrGateway
 from stalbot.infrastructure.posters.pillow_renderer import PillowRenderer
 from stalbot.presentation.cogs.catalog import CatalogCog
+from stalbot.presentation.cogs.coupons import CouponsCog
+from stalbot.presentation.cogs.database import DatabaseCog
 from stalbot.presentation.cogs.health import HealthCog
 from stalbot.presentation.cogs.manual import ManualCog
 from stalbot.presentation.cogs.posters import PostersCog
 from stalbot.presentation.cogs.pricing import PricingCog
 from stalbot.presentation.cogs.profile import ProfileCog
 from stalbot.presentation.cogs.purchase_calculator import PurchaseCalculatorCog
+from stalbot.presentation.cogs.role_audit import RoleAuditCog
 from stalbot.presentation.cogs.shelter_cost import ShelterCostCog
 from stalbot.presentation.cogs.stats import StatsCog
 from stalbot.presentation.cogs.tag import TagCog
@@ -67,6 +76,11 @@ logger = logging.getLogger(__name__)
 
 #: PLAN.md §12: metrics logged once a minute.
 _METRICS_LOG_INTERVAL_SECONDS: Final = 60
+
+#: `/temp_price` (заявка 21.08.2026 п.9): how often to check for overrides
+#: whose `expires_at` has passed. A minute's slop on the revert time is
+#: fine for a manually-set price window; this isn't a billing deadline.
+_TEMP_PRICE_POLL_INTERVAL_SECONDS: Final = 60
 
 #: Ceiling on how long `close()` waits for a cancelled background loop to
 #: actually unwind (PRES-9). Generous enough to cover a legitimate
@@ -128,8 +142,11 @@ class StalbotBot(commands.Bot):
         self.emoji_resolver = EmojiResolver()
         self._progression_loop: tasks.Loop[Any] | None = None
         self._metrics_loop: tasks.Loop[Any] | None = None
+        self._temp_price_loop: tasks.Loop[Any] | None = None
         #: Built by `_setup_cache` — `/healthcheck`'s uptime clock (PLAN.md §12, M11).
         self.health_service: HealthService | None = None
+        #: Built by `_setup_cache` — `/temp_price`'s auto-revert poll (заявка 21.08.2026 п.9).
+        self.temp_price_service: TempPriceService | None = None
 
     async def setup_hook(self) -> None:
         """Open the cache, then register commands."""
@@ -176,6 +193,8 @@ class StalbotBot(commands.Bot):
 
         profile_service = ProfileService(players_repo, progression_repo)
         await self.add_cog(ProfileCog(profile_service, self.embed_factory, self.settings))
+        await self.add_cog(DatabaseCog(players_repo, progression_repo, self.embed_factory))
+        await self.add_cog(RoleAuditCog(players_repo, self.embed_factory))
 
         catalog_items_repo = CatalogItemsRepository(connection)
         catalog_service = CatalogService(
@@ -183,9 +202,17 @@ class StalbotBot(commands.Bot):
             BoostOrderLinesRepository(connection),
             clock=SystemClock(),
         )
+        item_price_history_repo = ItemPriceHistoryRepository(connection)
         pricing_service = PricingService(
-            catalog_items_repo, ItemPriceHistoryRepository(connection), clock=SystemClock()
+            catalog_items_repo, item_price_history_repo, clock=SystemClock()
         )
+        temp_price_service = TempPriceService(
+            TempPricesRepository(connection),
+            catalog_items_repo,
+            item_price_history_repo,
+            clock=SystemClock(),
+        )
+        self.temp_price_service = temp_price_service
         await self.add_cog(
             CatalogCog(
                 catalog_service,
@@ -196,7 +223,13 @@ class StalbotBot(commands.Bot):
             )
         )
         await self.add_cog(
-            PricingCog(pricing_service, catalog_items_repo, self.embed_factory, self.settings)
+            PricingCog(
+                pricing_service,
+                catalog_items_repo,
+                self.embed_factory,
+                self.settings,
+                temp_price_service,
+            )
         )
         await self.add_cog(PostersCog(PosterService(catalog_items_repo), PillowRenderer()))
 
@@ -227,12 +260,17 @@ class StalbotBot(commands.Bot):
         boost_order_service = BoostOrderService(
             BoostOrderLinesRepository(connection), catalog_items_repo
         )
+        coupon_service = CouponService(CouponsRepository(connection), clock=SystemClock())
+        await self.add_cog(CouponsCog(coupon_service, self.embed_factory))
+
         tickets_cog = TicketsCog(
             ticket_service,
             screenshot_service,
             boost_order_service,
             transaction_service,
             self.progression_service,
+            players_repo,
+            coupon_service,
             self.embed_factory,
             self.settings,
             clock=SystemClock(),
@@ -266,8 +304,12 @@ class StalbotBot(commands.Bot):
         self._metrics_loop = tasks.loop(seconds=_METRICS_LOG_INTERVAL_SECONDS)(
             self._run_metrics_log
         )
+        self._temp_price_loop = tasks.loop(seconds=_TEMP_PRICE_POLL_INTERVAL_SECONDS)(
+            self._run_temp_price_revert
+        )
         self._metrics_loop.start()
         self._progression_loop.start()
+        self._temp_price_loop.start()
 
     async def _run_progression_poll(self) -> None:
         """Background poll over the whole player base (PLAN.md §9.2), no event channel."""
@@ -299,6 +341,35 @@ class StalbotBot(commands.Bot):
             status.ocr_sample_count,
             status.ocr_confirmed_sample_count,
         )
+
+    async def _run_temp_price_revert(self) -> None:
+        """Revert every `/temp_price` override whose window has passed (заявка 21.08.2026 п.9)."""
+        set_trace_id(new_trace_id())  # INFRA2-3, see `_run_progression_poll`
+        if self.temp_price_service is None:
+            return
+        reverted = await self.temp_price_service.revert_due()
+        if not reverted:
+            return
+        for change in reverted:
+            logger.info(
+                "temp price reverted: item %d (%s) %s -> %s",
+                change.item_id,
+                change.item_name,
+                change.old_price,
+                change.new_price,
+            )
+        log_channel = self.get_channel(self.settings.log_channel_id)
+        if isinstance(log_channel, discord.abc.Messageable):
+            lines = [
+                f"⏳ {change.item_name}: {_format_or_dash(change.old_price)} → "
+                f"{_format_or_dash(change.new_price)}"
+                for change in reverted
+            ]
+            await log_channel.send(
+                embed=self.embed_factory.info(
+                    "⏳ Временные цены сброшены", "\n".join(lines)
+                )
+            )
 
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
         """Detect a server-boost transition and record it in column `Q` (PLAN.md §9.2)."""
@@ -360,6 +431,7 @@ class StalbotBot(commands.Bot):
         loops = (
             self._progression_loop,
             self._metrics_loop,
+            self._temp_price_loop,
         )
         running_tasks = []
         for loop in loops:
@@ -400,3 +472,7 @@ def _channel_display(interaction: discord.Interaction) -> str:
 def _format_arguments(interaction: discord.Interaction) -> str:
     values = vars(interaction.namespace)
     return " • ".join(f"{key}={value}" for key, value in values.items())
+
+
+def _format_or_dash(price: int | None) -> str:
+    return format_amount(Decimal(price)) if price is not None else "—"

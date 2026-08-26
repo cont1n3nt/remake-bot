@@ -140,14 +140,14 @@ async def test_order_editor_buttons_delegate_to_their_handlers() -> None:
 
 
 def _order_summary_handlers() -> dict[str, AsyncMock]:
-    return {"on_edit": AsyncMock(), "on_complete": AsyncMock()}
+    return {"on_edit": AsyncMock(), "on_complete": AsyncMock(), "on_coupon": AsyncMock()}
 
 
 def test_order_summary_view_has_deterministic_custom_ids() -> None:
     view = OrderSummaryView(**_order_summary_handlers())
 
     custom_ids = {_custom_id(item) for item in view.children}
-    assert custom_ids == {"order:edit", "order:complete"}
+    assert custom_ids == {"order:edit", "order:complete", "order:coupon"}
 
 
 async def test_order_summary_buttons_delegate_to_their_handlers() -> None:
@@ -158,6 +158,7 @@ async def test_order_summary_buttons_delegate_to_their_handlers() -> None:
     for custom_id, handler in (
         ("order:edit", handlers["on_edit"]),
         ("order:complete", handlers["on_complete"]),
+        ("order:coupon", handlers["on_coupon"]),
     ):
         button = next(item for item in view.children if _custom_id(item) == custom_id)
         assert isinstance(button, discord.ui.Button)

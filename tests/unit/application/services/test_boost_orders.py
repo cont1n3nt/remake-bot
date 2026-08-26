@@ -36,13 +36,14 @@ def _draft(
     price_sell: Decimal | None = None,
     price_buy: Decimal | None = None,
     category: ItemCategory,
+    section: str | None = None,
 ) -> CatalogItem:
     return CatalogItem(
         id=None,
         name=name,
         name_norm=name.lower(),
         category=category,
-        section=None,
+        section=section,
         price_buy=Rub(int(price_buy)) if price_buy is not None else None,
         price_sell=Rub(int(price_sell)) if price_sell is not None else None,
         emoji=None,
@@ -99,6 +100,29 @@ async def test_list_available_items_includes_both_categories_with_a_sell_price(
 
     assert {item.id for item in available} == {boost_a.id, boost_b.id, sellable_resource.id}
     assert no_sell_price.id not in {item.id for item in available}
+
+
+async def test_list_available_items_groups_by_the_canonical_section_order(
+    connection: aiosqlite.Connection,
+) -> None:
+    """заявка 21.08.2026 п.2: grouped like the boost posters, not insertion order."""
+    grenade = _draft(
+        "Граната", price_sell=Decimal(1), category=ItemCategory.BOOST, section="Пиротехника"
+    )
+    soup = _draft(
+        "Суп", price_sell=Decimal(1), category=ItemCategory.BOOST, section="Кулинария"
+    )
+    unmapped = _draft("Неизвестное", price_sell=Decimal(1), category=ItemCategory.BOOST)
+    booze = _draft(
+        "Самогон", price_sell=Decimal(1), category=ItemCategory.BOOST, section="Самогоноварение"
+    )
+    service, _persisted = await _service_with_items(
+        connection, [grenade, soup, unmapped, booze]
+    )
+
+    available = await service.list_available_items()
+
+    assert [item.name for item in available] == ["Суп", "Самогон", "Граната", "Неизвестное"]
 
 
 async def test_apply_page_selection_adds_newly_checked_items(

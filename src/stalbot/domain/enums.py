@@ -123,3 +123,6 @@ class PriceChangeSource(StrEnum):
 
     MIGRATION = "migration"
     """A one-time importer (Э4's `scripts/import_from_sheets.py`)."""
+
+    TEMP_PRICE = "temp_price"
+    """`/temp_price` — both the temporary override and its automatic revert."""
