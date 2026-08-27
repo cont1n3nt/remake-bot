@@ -341,3 +341,82 @@ async def test_multiselect_on_timeout_disables_controls() -> None:
 
     assert view._select.disabled is True
     message.edit.assert_awaited_once_with(view=view)
+
+
+# -- search (заявка 27.08.2026 п.5) ----------------------------------------
+
+
+async def test_search_button_opens_a_modal() -> None:
+    view = _multiselect([_item(1, "Топот")], frozenset())
+    interaction = _interaction()
+    interaction.response.send_modal = AsyncMock()
+
+    await view.search.callback(interaction)
+
+    interaction.response.send_modal.assert_awaited_once()
+
+
+async def test_search_filters_items_by_name() -> None:
+    items = [_item(1, "Топот"), _item(2, "Ускорение")]
+    view = _multiselect(items, frozenset())
+    interaction = _interaction()
+    interaction.response.defer = AsyncMock()
+    message = MagicMock(spec=discord.Message)
+    message.edit = AsyncMock()
+    view.message = message
+
+    await view._on_search_submitted(interaction, "топ")
+
+    assert [opt.value for opt in view._select.options] == ["1"]
+    message.edit.assert_awaited_once()
+
+
+async def test_search_is_case_insensitive_and_matches_a_substring() -> None:
+    items = [_item(1, "Ускорение восстановления")]
+    view = _multiselect(items, frozenset())
+    interaction = _interaction()
+    interaction.response.defer = AsyncMock()
+    view.message = MagicMock(spec=discord.Message, edit=AsyncMock())
+
+    await view._on_search_submitted(interaction, "ВОССТАН")
+
+    assert [opt.value for opt in view._select.options] == ["1"]
+
+
+async def test_search_resets_to_the_full_catalog_when_query_is_empty() -> None:
+    items = [_item(1, "Топот"), _item(2, "Ускорение")]
+    view = _multiselect(items, frozenset())
+    interaction = _interaction()
+    interaction.response.defer = AsyncMock()
+    view.message = MagicMock(spec=discord.Message, edit=AsyncMock())
+    await view._on_search_submitted(interaction, "топ")
+
+    await view._on_search_submitted(interaction, "")
+
+    assert {opt.value for opt in view._select.options} == {"1", "2"}
+
+
+async def test_search_with_no_matches_shows_the_empty_placeholder() -> None:
+    items = [_item(1, "Топот")]
+    view = _multiselect(items, frozenset())
+    interaction = _interaction()
+    interaction.response.defer = AsyncMock()
+    view.message = MagicMock(spec=discord.Message, edit=AsyncMock())
+
+    await view._on_search_submitted(interaction, "нетнигденичего")
+
+    assert view._select.options[0].value == "none"
+    assert view._select.disabled is True
+
+
+async def test_search_resets_to_the_first_page() -> None:
+    items = [_item(i, f"Boost {i}") for i in range(30)]
+    view = _multiselect(items, frozenset())
+    view._page = 1
+    interaction = _interaction()
+    interaction.response.defer = AsyncMock()
+    view.message = MagicMock(spec=discord.Message, edit=AsyncMock())
+
+    await view._on_search_submitted(interaction, "")
+
+    assert view._page == 0

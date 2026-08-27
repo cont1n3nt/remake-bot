@@ -10,6 +10,7 @@ memory.
 """
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from difflib import SequenceMatcher
 
 import discord
 
@@ -17,6 +18,7 @@ from stalbot.application.services.boost_orders import MAX_ORDER_LINES
 from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.views.base import AuthorLockedView
+from stalbot.presentation.views.error_modal import ErrorReportingModal
 
 _ButtonHandler = Callable[[discord.Interaction], Awaitable[None]]
 _SelectHandler = Callable[[discord.Interaction, int], Awaitable[None]]
@@ -26,8 +28,47 @@ _PageChangeHandler = Callable[
 
 _PAGE_SIZE = 25
 _SELECT_LABEL_MAX = 100
+_MIN_SEARCH_SCORE = 0.3
 _NO_LINES_OPTION = discord.SelectOption(label="Пока ничего не выбрано", value="none")
 _NO_BOOSTS_OPTION = discord.SelectOption(label="Нет бустов", value="none")
+
+
+def _search_score(query: str, name: str) -> float:
+    """Rank *name* against *query*: an exact substring beats a fuzzy match, like autocomplete."""
+    if query in name:
+        return 1.0
+    return SequenceMatcher(None, query, name).ratio()
+
+
+def _filter_items(items: Sequence[CatalogItem], query: str) -> Sequence[CatalogItem]:
+    """Rank *items* by name against *query* (заявка 27.08.2026 п.5: search in the boost picker)."""
+    query_norm = query.strip().casefold()
+    if not query_norm:
+        return items
+    scored = [(item, _search_score(query_norm, item.name.casefold())) for item in items]
+    ranked = [item for item, score in scored if score >= _MIN_SEARCH_SCORE]
+    ranked.sort(key=lambda item: _search_score(query_norm, item.name.casefold()), reverse=True)
+    return ranked
+
+
+class _SearchModal(ErrorReportingModal):
+    """Prompts for a name query, then re-filters the picker (`BoostMultiSelectView`'s 🔍 button)."""
+
+    def __init__(
+        self,
+        on_submit: Callable[[discord.Interaction, str], Awaitable[None]],
+        *,
+        embeds: EmbedFactory,
+    ) -> None:
+        super().__init__(title="🔍 Поиск бустов", embeds=embeds)
+        self._on_submit_cb = on_submit
+        self.query: discord.ui.TextInput[_SearchModal] = discord.ui.TextInput(
+            label="Название (часть слова, пусто — сброс)", required=False, max_length=100
+        )
+        self.add_item(self.query)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._on_submit_cb(interaction, str(self.query.value))
 
 
 def _option_label(item: CatalogItem, quantity: int | None) -> str:
@@ -201,6 +242,7 @@ class BoostMultiSelectView(AuthorLockedView):
             timeout: Seconds before the view disables itself.
         """
         super().__init__(author_id=author_id, timeout=timeout)
+        self._all_items = items
         self._items = items
         self._selected_ids = set(selected_ids)
         self._embeds = embeds
@@ -253,6 +295,23 @@ class BoostMultiSelectView(AuthorLockedView):
         self._page = min(self.page_count - 1, self._page + 1)
         self._sync()
         await interaction.response.edit_message(embed=self.status_embed(), view=self)
+
+    @discord.ui.button(label="🔍 Поиск", style=discord.ButtonStyle.secondary, row=1)
+    async def search(
+        self, interaction: discord.Interaction, button: discord.ui.Button["BoostMultiSelectView"]
+    ) -> None:
+        """Open a modal to filter the picker by name (заявка 27.08.2026 п.5)."""
+        await interaction.response.send_modal(
+            _SearchModal(self._on_search_submitted, embeds=self._embeds)
+        )
+
+    async def _on_search_submitted(self, interaction: discord.Interaction, query: str) -> None:
+        self._items = _filter_items(self._all_items, query)
+        self._page = 0
+        self._sync()
+        await interaction.response.defer()
+        if self.message is not None:
+            await self.message.edit(embed=self.status_embed(), view=self)
 
     def _current_page_items(self) -> Sequence[CatalogItem]:
         start = self._page * _PAGE_SIZE

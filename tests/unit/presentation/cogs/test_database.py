@@ -73,9 +73,11 @@ def _interaction() -> MagicMock:
     return interaction
 
 
-async def _call_database(cog: DatabaseCog, interaction: MagicMock) -> None:
+async def _call_database(
+    cog: DatabaseCog, interaction: MagicMock, поиск: str | None = None
+) -> None:
     callback: Any = DatabaseCog.database.callback
-    await callback(cog, interaction)
+    await callback(cog, interaction, поиск)
 
 
 async def test_database_shows_every_player_field() -> None:
@@ -137,3 +139,83 @@ async def test_database_single_page_sends_without_pager() -> None:
 
     kwargs = interaction.followup.send.call_args.kwargs
     assert "view" not in kwargs
+
+
+# -- поиск (заявка 27.08.2026 п.6) -----------------------------------------
+
+
+async def test_database_search_filters_by_nick_substring() -> None:
+    players = [
+        _player(id=1, nick_norm=NormalizedNick("scaryyyyy"), nick_display="Scaryyyyy"),
+        _player(id=2, nick_norm=NormalizedNick("othernick"), nick_display="OtherNick"),
+    ]
+    cog, *_ = _cog(players=players)
+    interaction = _interaction()
+
+    await _call_database(cog, interaction, "scary")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert [field.name for field in embed.fields] == ["Scaryyyyy"]
+
+
+async def test_database_search_is_case_insensitive() -> None:
+    players = [_player(id=1, nick_norm=NormalizedNick("scaryyyyy"), nick_display="Scaryyyyy")]
+    cog, *_ = _cog(players=players)
+    interaction = _interaction()
+
+    await _call_database(cog, interaction, "SCARY")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert [field.name for field in embed.fields] == ["Scaryyyyy"]
+
+
+async def test_database_search_matches_a_discord_mention() -> None:
+    players = [
+        _player(id=1, discord_id=111, nick_display="Scaryyyyy"),
+        _player(id=2, discord_id=222, nick_display="OtherNick"),
+    ]
+    cog, *_ = _cog(players=players)
+    interaction = _interaction()
+
+    await _call_database(cog, interaction, "<@111>")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert [field.name for field in embed.fields] == ["Scaryyyyy"]
+
+
+async def test_database_search_matches_a_raw_discord_id() -> None:
+    players = [
+        _player(id=1, discord_id=111, nick_display="Scaryyyyy"),
+        _player(id=2, discord_id=222, nick_display="OtherNick"),
+    ]
+    cog, *_ = _cog(players=players)
+    interaction = _interaction()
+
+    await _call_database(cog, interaction, "111")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert [field.name for field in embed.fields] == ["Scaryyyyy"]
+
+
+async def test_database_search_with_no_matches_reports_nothing_found() -> None:
+    cog, *_ = _cog(players=[_player()])
+    interaction = _interaction()
+
+    await _call_database(cog, interaction, "нетнигденичего")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Ничего не найдено" in (embed.description or "")
+
+
+async def test_database_no_search_shows_every_player() -> None:
+    players = [
+        _player(id=1, nick_display="Scaryyyyy"),
+        _player(id=2, nick_display="OtherNick"),
+    ]
+    cog, *_ = _cog(players=players)
+    interaction = _interaction()
+
+    await _call_database(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert {field.name for field in embed.fields} == {"Scaryyyyy", "OtherNick"}

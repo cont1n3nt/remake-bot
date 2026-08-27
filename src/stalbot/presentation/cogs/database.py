@@ -5,6 +5,7 @@ Read-only: `PlayersRepository.all()` + `ProgressionRepository.all()`, no
 new state of its own.
 """
 
+import re
 from collections.abc import Sequence
 from typing import Final
 
@@ -25,6 +26,7 @@ from stalbot.presentation.embeds.factory import EmbedFactory, enforce_limits
 from stalbot.presentation.views.paginated_embed import PaginatedEmbedView
 
 _PAGE_SIZE: Final = 8
+_MENTION_RE = re.compile(r"^<@!?(\d+)>$")
 
 
 class DatabaseCog(commands.Cog):
@@ -55,14 +57,22 @@ class DatabaseCog(commands.Cog):
         self._referral_ladder = referral_ladder or ReferralLadder()
 
     @app_commands.command(name="database", description="🛡️ [Админ] 🗄️ Полная база игроков")
+    @app_commands.describe(
+        поиск="Фильтр по нику (часть) или Discord (@упоминание/ID) — необязательно"
+    )
     @admin_only()
-    async def database(self, interaction: discord.Interaction) -> None:
-        """Handle `/database`: page through every player with every field."""
+    async def database(
+        self, interaction: discord.Interaction, поиск: str | None = None
+    ) -> None:
+        """Handle `/database`: page through every player, optionally filtered by nick/Discord."""
         await interaction.response.defer(ephemeral=True)
         players = await self._players.all()
+        if поиск:
+            players = _filter_players(players, поиск)
         progressions = {record.player_id: record for record in await self._progression.all()}
 
-        pages = self._build_pages(players, progressions)
+        empty_message = "Ничего не найдено." if поиск else "Пока нет игроков."
+        pages = self._build_pages(players, progressions, empty_message)
         if len(pages) == 1:
             await interaction.followup.send(embed=pages[0], ephemeral=True)
             return
@@ -73,7 +83,10 @@ class DatabaseCog(commands.Cog):
         pager.message = message
 
     def _build_pages(
-        self, players: Sequence[Player], progressions: dict[int, PlayerProgressionRecord]
+        self,
+        players: Sequence[Player],
+        progressions: dict[int, PlayerProgressionRecord],
+        empty_message: str = "Пока нет игроков.",
     ) -> list[discord.Embed]:
         chunks = _chunk(players, _PAGE_SIZE) or [()]
         pages: list[discord.Embed] = []
@@ -84,7 +97,7 @@ class DatabaseCog(commands.Cog):
                 else f"🗄️ База игроков (стр. {index}/{len(chunks)})"
             )
             if not chunk:
-                pages.append(self._embeds.info(title, "Пока нет игроков."))
+                pages.append(self._embeds.info(title, empty_message))
                 continue
             embed = self._embeds.info(title)
             for player in chunk:
@@ -130,6 +143,31 @@ class DatabaseCog(commands.Cog):
                 lines.append(f"💹 Общий оборот: {format_amount(progression.total_turnover)}")
         lines.append(f"🕒 Зарегистрирован: {format_datetime(player.created_at)}")
         return "\n".join(lines)
+
+
+def _filter_players(players: Sequence[Player], query: str) -> Sequence[Player]:
+    """Filter by nick substring, or by Discord id/mention (заявка 27.08.2026 п.6).
+
+    Args:
+        players: The full roster to filter.
+        query: Free text — part of a nick, a raw Discord id, or a `<@id>` mention.
+    """
+    query_norm = query.strip()
+    mention = _MENTION_RE.match(query_norm)
+    if mention:
+        discord_id: int | None = int(mention.group(1))
+    elif query_norm.isdigit():
+        discord_id = int(query_norm)
+    else:
+        discord_id = None
+    query_casefold = query_norm.casefold()
+    return [
+        player
+        for player in players
+        if (discord_id is not None and player.discord_id == discord_id)
+        or query_casefold in player.nick_display.casefold()
+        or query_casefold in player.nick_norm.casefold()
+    ]
 
 
 def _chunk[T](items: Sequence[T], size: int) -> list[Sequence[T]]:
