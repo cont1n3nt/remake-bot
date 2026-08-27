@@ -91,6 +91,15 @@ class CouponAlreadyRedeemedError(DomainError):
     """This Discord account has already redeemed this coupon once (заявка 26.08.2026)."""
 
 
+class CouponWrongKindError(DomainError):
+    """A discount coupon was applied outside заказ бустов, or a markup one outside скупка.
+
+    заявка 27.08.2026 п.10: `DISCOUNT` only makes sense on `ORDER_BOOSTS`
+    (the shop selling to the player), `MARKUP` only on `SELL_ITEMS`/
+    `SELL_BOOSTS` (скупка — the shop buying from the player).
+    """
+
+
 class InfrastructureError(StalbotError):
     """Failure talking to an external system (cache, Discord)."""
 

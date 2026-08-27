@@ -24,6 +24,7 @@ from stalbot.domain.entities.deal import Deal
 from stalbot.domain.entities.player import Player
 from stalbot.domain.entities.screenshot import OcrResult
 from stalbot.domain.enums import (
+    CouponKind,
     DealSource,
     DealType,
     DeliveryMethod,
@@ -101,6 +102,7 @@ def _coupon(**overrides: object) -> Coupon:
     defaults: dict[str, object] = {
         "id": 1,
         "code": "KLONDIKE10",
+        "kind": CouponKind.DISCOUNT,
         "discount_percent": Decimal("1.5"),
         "max_uses": None,
         "used_count": 0,
@@ -692,7 +694,7 @@ async def test_amount_submitted_registers_the_deal_and_confirms() -> None:
     transactions.register.assert_awaited_once()
     (request,), _ = transactions.register.call_args
     assert request.nick == "Scaryyyyy"
-    assert request.deal_type is DealType.SALE
+    assert request.deal_type is DealType.PURCHASE
     assert request.discord_id == session.author_id
     tickets.record_confirmed.assert_awaited_once_with(session.channel_id)
     screenshots.record_confirmed_amount.assert_awaited_once_with(
@@ -720,7 +722,10 @@ async def test_amount_submitted_tags_the_author_and_asks_for_a_review() -> None:
 async def test_amount_submitted_applies_the_coupon_discount_to_the_registered_amount() -> None:
     """заявка 26.08.2026: a redeemed coupon discounts the actual recorded deal amount."""
     session = _session(
-        game_nick="Scaryyyyy", coupon_code="KLONDIKE10", coupon_discount_percent=Decimal("10")
+        game_nick="Scaryyyyy",
+        coupon_code="KLONDIKE10",
+        coupon_kind=CouponKind.DISCOUNT,
+        coupon_discount_percent=Decimal("10"),
     )
     cog, _tickets, _screenshots, _boost_orders, transactions, _progression = _cog(
         tickets=_fake_tickets(get_return=session)
@@ -753,7 +758,9 @@ async def test_coupon_submitted_redeems_records_and_reports() -> None:
     session = _session(kind=TicketKind.SELL_ITEMS)
     coupons = _fake_coupons()
     coupons.redeem = AsyncMock(
-        return_value=_coupon(code="KLONDIKE10", discount_percent=Decimal("1.5"))
+        return_value=_coupon(
+            code="KLONDIKE10", kind=CouponKind.MARKUP, discount_percent=Decimal("1.5")
+        )
     )
     cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session), coupons=coupons)
     channel = _text_channel()
@@ -762,10 +769,13 @@ async def test_coupon_submitted_redeems_records_and_reports() -> None:
     await cog._on_coupon_submitted(interaction, "klondike10")
 
     coupons.redeem.assert_awaited_once_with(
-        "klondike10", channel_id=interaction.channel_id, discord_id=777
+        "klondike10",
+        channel_id=interaction.channel_id,
+        discord_id=777,
+        ticket_kind=TicketKind.SELL_ITEMS,
     )
     tickets.record_coupon.assert_awaited_once_with(
-        interaction.channel_id, "KLONDIKE10", Decimal("1.5")
+        interaction.channel_id, "KLONDIKE10", CouponKind.MARKUP, Decimal("1.5")
     )
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "KLONDIKE10" in (embed.description or "")
@@ -1479,8 +1489,9 @@ async def test_amount_submitted_notes_the_rank_markup_for_order_boosts() -> None
     await cog._on_amount_submitted(interaction, "930000")
 
     embed = interaction.followup.send.call_args.kwargs["embed"]
-    assert "«Premium»" in (embed.description or "") or premium.label in (embed.description or "")
-    assert "×0.995" in (embed.description or "")
+    description = embed.description or ""
+    assert f"<@&{premium.role_id}>" in description
+    assert "-0.5%" in description
 
 
 # -- Module-level helpers -------------------------------------------------

@@ -76,6 +76,11 @@ class TempPricesRepository:
             assert row_id is not None  # noqa: S101 - lastrowid set right after INSERT
             return row_id
 
+    async def all(self) -> Sequence[TempPrice]:
+        """Return every active temp override, soonest-expiring first."""
+        cursor = await self._conn.execute("SELECT * FROM temp_prices ORDER BY expires_at")
+        return [_row_to_temp_price(row) async for row in cursor]
+
     async def list_due(self, now: datetime) -> Sequence[TempPrice]:
         """Return every temp override whose `expires_at` has passed.
 

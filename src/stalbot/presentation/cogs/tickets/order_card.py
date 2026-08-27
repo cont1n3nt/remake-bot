@@ -17,7 +17,11 @@ from stalbot.domain.clock import format_datetime
 from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.money import format_amount
 from stalbot.domain.progression.ranks import RankTier
-from stalbot.presentation.cogs.tickets.card import DELIVERY_LABELS
+from stalbot.presentation.cogs.tickets.card import (
+    DELIVERY_LABELS,
+    format_coupon_line,
+    format_role_markup,
+)
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 _EDITOR_TITLE = "🧾 Редактор заказа"
@@ -78,10 +82,18 @@ def _order_body(
     if show_breakdown:
         body.append(f"💰 Сумма: {format_amount(raw_total)}")
         if price_multiplier != _NO_MARKUP and rank_tier is not None:
-            body.append(f"🏷️ Наценка/скидка по рангу «{rank_tier.label}»: ×{price_multiplier}")
+            body.append(format_role_markup(rank_tier, price_multiplier))
         if coupon_multiplier != _NO_MARKUP:
+            assert session.coupon_code is not None  # noqa: S101 - set together
+            assert session.coupon_kind is not None  # noqa: S101 - set together
+            assert session.coupon_discount_percent is not None  # noqa: S101 - set together
             body.append(
-                f"🎟️ Промокод «{session.coupon_code}»: -{session.coupon_discount_percent}%"
+                format_coupon_line(
+                    session.coupon_code,
+                    session.coupon_kind,
+                    session.coupon_discount_percent,
+                    verb="Промокод",
+                )
             )
     body.append(f"💰 Итого: {format_amount(total)}")
     if session.deadline is not None:

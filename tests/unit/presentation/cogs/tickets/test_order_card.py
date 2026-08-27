@@ -6,7 +6,7 @@ from decimal import Decimal
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.domain.entities.catalog_item import CatalogItem
-from stalbot.domain.enums import DeliveryMethod, ItemCategory, TicketKind, TicketStatus
+from stalbot.domain.enums import CouponKind, DeliveryMethod, ItemCategory, TicketKind, TicketStatus
 from stalbot.domain.money import Rub, format_amount
 from stalbot.domain.progression.ranks import RankLadder
 from stalbot.presentation.cogs.tickets.order_card import render_order_editor, render_order_summary
@@ -163,13 +163,17 @@ def test_markup_note_shown_when_multiplier_differs_from_one() -> None:
     )
 
     description = embed.description or ""
-    assert f"«{tier.label}»" in description
-    assert "×0.90" in description
+    assert f"<@&{tier.role_id}>" in description
+    assert "-10%" in description
     assert f"Итого: {format_amount(Decimal(900000) * Decimal('0.90'))}" in description
 
 
 def test_coupon_discount_is_shown_and_applied_to_the_total() -> None:
-    session = _session(coupon_code="KLONDIKE10", coupon_discount_percent=Decimal("10"))
+    session = _session(
+        coupon_code="KLONDIKE10",
+        coupon_kind=CouponKind.DISCOUNT,
+        coupon_discount_percent=Decimal("10"),
+    )
     lines_with_items = [(_line(1, 3), _item(1, "Топот", Decimal(300000)))]
 
     embed = render_order_editor(session, lines_with_items, EmbedFactory())
@@ -182,7 +186,11 @@ def test_coupon_discount_is_shown_and_applied_to_the_total() -> None:
 def test_coupon_and_rank_multiplier_stack() -> None:
     tier = RankLadder().by_key("elite")
     assert tier is not None
-    session = _session(coupon_code="KLONDIKE10", coupon_discount_percent=Decimal("10"))
+    session = _session(
+        coupon_code="KLONDIKE10",
+        coupon_kind=CouponKind.DISCOUNT,
+        coupon_discount_percent=Decimal("10"),
+    )
     lines_with_items = [(_line(1, 3), _item(1, "Топот", Decimal(300000)))]
 
     embed = render_order_editor(

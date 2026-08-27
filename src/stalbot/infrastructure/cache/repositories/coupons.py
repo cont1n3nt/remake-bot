@@ -1,11 +1,13 @@
-"""SQLite-backed `coupons`/`coupon_redemptions` (заявка 26.08.2026, migration 0009)."""
+"""SQLite-backed `coupons`/`coupon_redemptions` (заявка 26.08+27.08.2026, migrations 0009-0010)."""
 
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
 import aiosqlite
 
 from stalbot.domain.entities.coupon import Coupon
+from stalbot.domain.enums import CouponKind
 from stalbot.infrastructure.cache.db import transaction
 
 
@@ -20,6 +22,16 @@ class CouponsRepository:
         """
         self._conn = connection
 
+    async def get_by_id(self, coupon_id: int) -> Coupon | None:
+        """Look up a coupon by its surrogate id.
+
+        Args:
+            coupon_id: The coupon's id.
+        """
+        cursor = await self._conn.execute("SELECT * FROM coupons WHERE id = ?", (coupon_id,))
+        row = await cursor.fetchone()
+        return _row_to_coupon(row) if row is not None else None
+
     async def get_by_code(self, code: str) -> Coupon | None:
         """Look up a coupon by its code (case-insensitive — stored upper-cased).
 
@@ -32,9 +44,17 @@ class CouponsRepository:
         row = await cursor.fetchone()
         return _row_to_coupon(row) if row is not None else None
 
+    async def all_active(self) -> Sequence[Coupon]:
+        """Return every currently-active coupon, newest first (`/coupons`)."""
+        cursor = await self._conn.execute(
+            "SELECT * FROM coupons WHERE active = 1 ORDER BY id DESC"
+        )
+        return [_row_to_coupon(row) async for row in cursor]
+
     async def create(
         self,
         code: str,
+        kind: CouponKind,
         discount_percent: Decimal,
         *,
         max_uses: int | None,
@@ -46,22 +66,24 @@ class CouponsRepository:
 
         Args:
             code: The code players will type — normalized to upper-case.
-            discount_percent: E.g. `Decimal("1.5")` for 1.5% off.
+            kind: `DISCOUNT` (заказ бустов) or `MARKUP` (скупка).
+            discount_percent: E.g. `Decimal("1.5")` for 1.5%.
             max_uses: Total redemption cap across every player, or `None`.
             expires_at: When the coupon stops working, or `None`.
             created_by: Discord id of the admin who created it.
             now: Timestamp for `created_at`.
         """
         async with transaction(self._conn):
-            cursor = await self._conn.execute(
+            await self._conn.execute(
                 """
                 INSERT INTO coupons
-                    (code, discount_percent, max_uses, used_count, active,
+                    (code, kind, discount_percent, max_uses, used_count, active,
                      created_by, created_at, expires_at)
-                VALUES (?, ?, ?, 0, 1, ?, ?, ?)
+                VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
                 """,
                 (
                     code.strip().upper(),
+                    kind.value,
                     str(discount_percent),
                     max_uses,
                     created_by,
@@ -69,11 +91,40 @@ class CouponsRepository:
                     expires_at.isoformat() if expires_at is not None else None,
                 ),
             )
-            row_id = cursor.lastrowid
-            assert row_id is not None  # noqa: S101 - lastrowid set right after INSERT
         coupon = await self.get_by_code(code)
         assert coupon is not None  # noqa: S101 - just inserted (or lost the race to one that did)
         return coupon
+
+    async def update(
+        self,
+        coupon_id: int,
+        *,
+        discount_percent: Decimal,
+        max_uses: int | None,
+        expires_at: datetime | None,
+    ) -> None:
+        """Change an existing coupon's terms (`/coupons`' edit flow).
+
+        Does not touch `code`, `kind`, `used_count`, or `active` — editing
+        those is a different, more deliberate action (recreate, or
+        `/coupon_disable`).
+
+        Args:
+            coupon_id: The coupon to update.
+            discount_percent: New percent.
+            max_uses: New cap, or `None` for unlimited.
+            expires_at: New expiry, or `None` for none.
+        """
+        async with transaction(self._conn):
+            await self._conn.execute(
+                "UPDATE coupons SET discount_percent = ?, max_uses = ?, expires_at = ? WHERE id = ?",
+                (
+                    str(discount_percent),
+                    max_uses,
+                    expires_at.isoformat() if expires_at is not None else None,
+                    coupon_id,
+                ),
+            )
 
     async def set_active(self, coupon_id: int, active: bool) -> None:
         """Enable or disable a coupon without deleting its history.
@@ -86,6 +137,15 @@ class CouponsRepository:
             await self._conn.execute(
                 "UPDATE coupons SET active = ? WHERE id = ?", (int(active), coupon_id)
             )
+
+    async def delete(self, coupon_id: int) -> None:
+        """Permanently remove a coupon and its redemption history.
+
+        Args:
+            coupon_id: The coupon to delete. `coupon_redemptions` cascades.
+        """
+        async with transaction(self._conn):
+            await self._conn.execute("DELETE FROM coupons WHERE id = ?", (coupon_id,))
 
     async def has_redeemed(self, coupon_id: int, discord_id: int) -> bool:
         """Whether *discord_id* has already redeemed this coupon.
@@ -140,6 +200,7 @@ def _row_to_coupon(row: aiosqlite.Row) -> Coupon:
     return Coupon(
         id=row["id"],
         code=row["code"],
+        kind=CouponKind(row["kind"]),
         discount_percent=Decimal(row["discount_percent"]),
         max_uses=row["max_uses"],
         used_count=row["used_count"],

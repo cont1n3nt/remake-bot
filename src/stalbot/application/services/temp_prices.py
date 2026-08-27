@@ -12,6 +12,7 @@ from decimal import Decimal
 from stalbot.application.dto.price_change import PriceChange
 from stalbot.application.ports.clock import Clock
 from stalbot.domain.entities.item_price_history import ItemPriceHistoryEntry
+from stalbot.domain.entities.temp_price import TempPrice
 from stalbot.domain.enums import PriceChangeSource, PriceField
 from stalbot.domain.errors import ItemNotFoundError
 from stalbot.domain.money import to_storage
@@ -88,6 +89,13 @@ class TempPriceService:
             item_id, field, original_price, until, created_by=changed_by, now=now
         )
         return change
+
+    async def list_active(self) -> list[TempPrice]:
+        """Return every temp override currently in effect, soonest-expiring first.
+
+        заявка 27.08.2026 п.8.
+        """
+        return list(await self._temp_prices.all())
 
     async def revert_due(self) -> list[PriceChange]:
         """Revert every temp override whose `expires_at` has passed, logging each one."""

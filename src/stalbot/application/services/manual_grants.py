@@ -69,6 +69,35 @@ class ManualGrantService:
         referrer = await self._players.get_by_id(player.referrer_player_id)
         return referrer.nick_norm if referrer is not None else None
 
+    async def current_discord_id(self, nick: str) -> int | None:
+        """Return the Discord id already bound to `nick`'s player row, if any.
+
+        Args:
+            nick: Game nick, any casing.
+        """
+        player = await self._players.get_by_nick(normalize_nick(nick))
+        return player.discord_id if player is not None else None
+
+    async def link_discord(self, nick: str, discord_id: int) -> bool:
+        """Bind `discord_id` to `nick`, creating the player row if needed.
+
+        заявка 27.08.2026 п.7. Unlike `bind_discord` on the repository, this always overwrites an
+        existing different binding — the admin has already seen and
+        confirmed the previous binding via `current_discord_id`.
+
+        Args:
+            nick: Game nick to bind, any casing.
+            discord_id: Discord id to bind it to.
+
+        Returns:
+            `True` if a write happened, `False` if the nick was already
+            bound to `discord_id`.
+        """
+        nick_norm = normalize_nick(nick)
+        now = self._clock.now()
+        await self._players.get_or_create(nick_norm, nick, now=now)
+        return await self._players.bind_discord(nick_norm, discord_id, force=True, now=now)
+
     async def set_referral(
         self,
         nick: str,

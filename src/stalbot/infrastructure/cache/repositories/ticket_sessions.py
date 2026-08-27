@@ -6,7 +6,7 @@ from decimal import Decimal
 import aiosqlite
 
 from stalbot.application.dto.ticket_session import TicketSession
-from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
+from stalbot.domain.enums import CouponKind, DeliveryMethod, TicketKind, TicketStatus
 from stalbot.infrastructure.cache.db import transaction
 
 
@@ -47,13 +47,13 @@ class TicketSessionsRepository:
                     referrer_nick, referrer_discord_id, deadline, screenshot_url,
                     screenshot_message_id, summary_message_id, panel_message_id,
                     ocr_status, ocr_analysis_id, idempotency_key, created_at, updated_at,
-                    active_order_item_id, coupon_code, coupon_discount_percent
+                    active_order_item_id, coupon_code, coupon_discount_percent, coupon_kind
                 ) VALUES (
                     :channel_id, :kind, :author_id, :status, :delivery_method, :game_nick,
                     :referrer_nick, :referrer_discord_id, :deadline, :screenshot_url,
                     :screenshot_message_id, :summary_message_id, :panel_message_id,
                     :ocr_status, :ocr_analysis_id, :idempotency_key, :created_at, :updated_at,
-                    :active_order_item_id, :coupon_code, :coupon_discount_percent
+                    :active_order_item_id, :coupon_code, :coupon_discount_percent, :coupon_kind
                 )
                 ON CONFLICT (channel_id) DO UPDATE SET
                     kind = excluded.kind,
@@ -74,7 +74,8 @@ class TicketSessionsRepository:
                     updated_at = excluded.updated_at,
                     active_order_item_id = excluded.active_order_item_id,
                     coupon_code = excluded.coupon_code,
-                    coupon_discount_percent = excluded.coupon_discount_percent
+                    coupon_discount_percent = excluded.coupon_discount_percent,
+                    coupon_kind = excluded.coupon_kind
                 """,
                 _session_to_params(session),
             )
@@ -123,6 +124,7 @@ def _session_to_params(session: TicketSession) -> dict[str, object]:
             if session.coupon_discount_percent is not None
             else None
         ),
+        "coupon_kind": session.coupon_kind.value if session.coupon_kind is not None else None,
     }
 
 
@@ -153,4 +155,5 @@ def _row_to_session(row: aiosqlite.Row) -> TicketSession:
             if row["coupon_discount_percent"] is not None
             else None
         ),
+        coupon_kind=CouponKind(row["coupon_kind"]) if row["coupon_kind"] is not None else None,
     )

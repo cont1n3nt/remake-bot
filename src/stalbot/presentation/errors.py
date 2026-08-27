@@ -17,6 +17,7 @@ from stalbot.domain.errors import (
     CouponAlreadyRedeemedError,
     CouponInactiveError,
     CouponNotFoundError,
+    CouponWrongKindError,
     DeadlineParseError,
     DealNotFoundError,
     DomainError,
@@ -62,6 +63,10 @@ _DOMAIN_MESSAGES: dict[type[StalbotError], str] = {
     CouponNotFoundError: "Купон с таким кодом не найден.",
     CouponInactiveError: "Купон отключён, просрочен или исчерпан.",
     CouponAlreadyRedeemedError: "Вы уже использовали этот купон раньше — повторно нельзя.",
+    CouponWrongKindError: (
+        "Этот купон не подходит для этого типа заявки "
+        "(скидка — только заказ бустов, наценка — только продажа/скупка)."
+    ),
 }
 
 _PERMISSION_DENIED_MESSAGE = "Недостаточно прав для этого действия."

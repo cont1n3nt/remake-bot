@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
+from stalbot.domain.enums import CouponKind, DeliveryMethod, TicketKind, TicketStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,3 +46,6 @@ class TicketSession:
     """Locked in at redemption time (заявка 26.08.2026) — a later
     `/coupon_disable` or edit never retroactively changes an already-applied
     discount."""
+    coupon_kind: CouponKind | None = None
+    """Also locked in at redemption time — whether the percent above is a
+    discount or a markup (заявка 27.08.2026 п.10)."""

@@ -74,6 +74,53 @@ async def test_current_referrer_returns_the_players_referrer(
     assert await service.current_referrer("Scaryyyyy") == NormalizedNick("othernick")
 
 
+async def test_current_discord_id_is_none_for_an_unknown_player(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, _players, _state = _service(connection, roles=_fake_roles())
+
+    assert await service.current_discord_id("Scaryyyyy") is None
+
+
+async def test_link_discord_creates_the_player_row_and_binds_it(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, _state = _service(connection, roles=_fake_roles())
+
+    bound = await service.link_discord("Scaryyyyy", 999)
+
+    assert bound is True
+    player = await players.get_by_nick(NormalizedNick("scaryyyyy"))
+    assert player is not None
+    assert player.discord_id == 999
+
+
+async def test_link_discord_overwrites_an_existing_different_binding(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, _state = _service(connection, roles=_fake_roles())
+    now = datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
+    player = await players.get_or_create(NormalizedNick("scaryyyyy"), "Scaryyyyy", now=now)
+    assert player.id is not None
+    await players.set_discord_id(player.id, 111, now=now)
+
+    bound = await service.link_discord("Scaryyyyy", 999)
+
+    assert bound is True
+    assert await service.current_discord_id("Scaryyyyy") == 999
+
+
+async def test_link_discord_is_a_no_op_when_already_bound_to_the_same_account(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, _players, _state = _service(connection, roles=_fake_roles())
+    await service.link_discord("Scaryyyyy", 999)
+
+    bound = await service.link_discord("Scaryyyyy", 999)
+
+    assert bound is False
+
+
 async def test_set_referral_creates_both_players_and_sets_the_referrer(
     connection: aiosqlite.Connection,
 ) -> None:

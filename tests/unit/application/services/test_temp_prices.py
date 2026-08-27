@@ -140,3 +140,48 @@ async def test_set_temp_price_rejects_an_unknown_item(connection: aiosqlite.Conn
 
     with pytest.raises(ItemNotFoundError):
         await service.set_temp_price(999, PriceField.BUY, Decimal(1000), _UNTIL, changed_by=42)
+
+
+# -- заявка 27.08.2026 п.8: /temp_prices listing --------------------------
+
+
+async def test_list_active_is_empty_when_nothing_is_overridden(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, _items = await _service(connection)
+
+    assert await service.list_active() == []
+
+
+async def test_list_active_returns_every_override(connection: aiosqlite.Connection) -> None:
+    service, items = await _service(connection)
+    resource = await items.insert(_item())
+    boost = await items.insert(
+        _item(name="Топот", name_norm="топот", category=ItemCategory.BOOST, price_buy=None)
+    )
+    assert resource.id is not None and boost.id is not None
+    await service.set_temp_price(
+        resource.id, PriceField.BUY, Decimal(500_000), _UNTIL, changed_by=42
+    )
+    await service.set_temp_price(
+        boost.id, PriceField.SELL, Decimal(400_000), _UNTIL, changed_by=42
+    )
+
+    active = await service.list_active()
+
+    assert {(a.item_id, a.field) for a in active} == {
+        (resource.id, PriceField.BUY),
+        (boost.id, PriceField.SELL),
+    }
+
+
+async def test_list_active_omits_reverted_overrides(connection: aiosqlite.Connection) -> None:
+    setter, items = await _service(connection, now=_NOW)
+    item = await items.insert(_item())
+    assert item.id is not None
+    await setter.set_temp_price(item.id, PriceField.BUY, Decimal(500_000), _UNTIL, changed_by=42)
+
+    reverter, _items = await _service(connection, now=_AFTER_UNTIL)
+    await reverter.revert_due()
+
+    assert await reverter.list_active() == []

@@ -20,6 +20,7 @@ from discord import app_commands
 from stalbot.application.dto.price_change import PriceChange
 from stalbot.application.dto.price_import import PriceImportIssue, PriceImportPlan
 from stalbot.domain.entities.catalog_item import CatalogItem
+from stalbot.domain.entities.temp_price import TempPrice
 from stalbot.domain.enums import ItemCategory, PriceField
 from stalbot.domain.money import Rub
 from stalbot.presentation.cogs.pricing import PricingCog
@@ -84,10 +85,27 @@ def _cog(
     return cog, pricing, items
 
 
-def _fake_temp_prices(*, result: PriceChange | None = None) -> MagicMock:
+def _fake_temp_prices(
+    *, result: PriceChange | None = None, active: list[TempPrice] | None = None
+) -> MagicMock:
     temp_prices = MagicMock()
     temp_prices.set_temp_price = AsyncMock(return_value=result or _change())
+    temp_prices.list_active = AsyncMock(return_value=active or [])
     return temp_prices
+
+
+def _temp_price(**overrides: object) -> TempPrice:
+    defaults: dict[str, object] = {
+        "id": 1,
+        "item_id": 1,
+        "field": PriceField.BUY,
+        "original_price": Rub(18000),
+        "expires_at": _NOW,
+        "created_by": 42,
+        "created_at": _NOW,
+    }
+    defaults.update(overrides)
+    return TempPrice(**defaults)  # type: ignore[arg-type]
 
 
 def _interaction(*, user_id: int = 1) -> MagicMock:
@@ -221,6 +239,35 @@ async def test_temp_price_rejects_an_unknown_item() -> None:
 
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "не найден" in (embed.description or "")
+
+
+# --- temp_prices (list) ----------------------------------------------------
+
+
+async def test_temp_prices_reports_when_nothing_is_active() -> None:
+    cog, _pricing, _items = _cog(temp_prices=_fake_temp_prices(active=[]))
+    interaction = _interaction()
+
+    callback: Any = PricingCog.temp_prices.callback
+    await callback(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "нет активных" in (embed.description or "")
+
+
+async def test_temp_prices_lists_active_overrides() -> None:
+    item = _item(id=1, name="Хвост тушкана", price_buy=Rub(19500))
+    active = [_temp_price(item_id=1, field=PriceField.BUY, original_price=Rub(18000))]
+    cog, _pricing, _items = _cog(all_items=[item], temp_prices=_fake_temp_prices(active=active))
+    interaction = _interaction()
+
+    callback: Any = PricingCog.temp_prices.callback
+    await callback(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    description = embed.description or ""
+    assert "Хвост тушкана" in description
+    assert "18" in description
 
 
 # --- new_price -----------------------------------------------------------

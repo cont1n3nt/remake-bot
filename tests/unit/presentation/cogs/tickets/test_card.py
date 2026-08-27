@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from stalbot.application.dto.ticket_session import TicketSession
-from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
+from stalbot.domain.enums import CouponKind, DeliveryMethod, TicketKind, TicketStatus
 from stalbot.presentation.cogs.tickets.card import SCREENSHOT_FILENAME, render_ticket_card
 from stalbot.presentation.embeds.factory import EmbedFactory
 
@@ -70,13 +70,17 @@ def test_filled_fields_are_shown() -> None:
 
 
 def test_coupon_is_shown_when_applied() -> None:
-    embed = render_ticket_card(
-        _session(coupon_code="KLONDIKE10", coupon_discount_percent=Decimal("1.5")), EmbedFactory()
+    session = _session(
+        coupon_code="KLONDIKE10",
+        coupon_kind=CouponKind.MARKUP,
+        coupon_discount_percent=Decimal("1.5"),
     )
+    embed = render_ticket_card(session, EmbedFactory())
 
     description = embed.description or ""
     assert "KLONDIKE10" in description
     assert "1.5" in description
+    assert "+1.5%" in description
 
 
 def test_coupon_is_omitted_when_unset() -> None:

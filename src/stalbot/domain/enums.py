@@ -20,6 +20,19 @@ class ItemCategory(StrEnum):
     BOOST = "boost"
 
 
+class CouponKind(StrEnum):
+    """Which direction a coupon adjusts a ticket's amount (заявка 27.08.2026 п.10).
+
+    `DISCOUNT` only ever applies to `ORDER_BOOSTS` (the shop selling to the
+    player — a discount lowers what they owe). `MARKUP` only ever applies
+    to `SELL_ITEMS`/`SELL_BOOSTS` (скупка — the shop buying from the
+    player — a markup raises what they're paid). Never both.
+    """
+
+    DISCOUNT = "discount"
+    MARKUP = "markup"
+
+
 class PosterKind(StrEnum):
     """Which of the three `/poster` layouts to render (Часть IX, Э11).
 

@@ -37,13 +37,25 @@ from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
 from stalbot.config.settings import Settings
 from stalbot.domain.clock import SystemClock, parse_deadline
 from stalbot.domain.entities.catalog_item import CatalogItem
-from stalbot.domain.enums import DealSource, DealType, DeliveryMethod, TicketKind, TicketStatus
+from stalbot.domain.enums import (
+    CouponKind,
+    DealSource,
+    DealType,
+    DeliveryMethod,
+    TicketKind,
+    TicketStatus,
+)
 from stalbot.domain.errors import AmountParseError, DeadlineParseError
 from stalbot.domain.money import evaluate_amount, format_amount, parse_amount, round_for_storage
 from stalbot.domain.nick import normalize_nick
 from stalbot.domain.progression.ranks import RankLadder, RankTier
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
-from stalbot.presentation.cogs.tickets.card import SCREENSHOT_FILENAME, render_ticket_card
+from stalbot.presentation.cogs.tickets.card import (
+    SCREENSHOT_FILENAME,
+    format_coupon_line,
+    format_role_markup,
+    render_ticket_card,
+)
 from stalbot.presentation.cogs.tickets.modals import (
     AmountModal,
     CouponModal,
@@ -73,9 +85,14 @@ _MENTION_RE = re.compile(r"^<@!?(\d+)>$")
 _HANDLED_KINDS = frozenset({TicketKind.SELL_ITEMS, TicketKind.SELL_BOOSTS, TicketKind.ORDER_BOOSTS})
 
 _DEAL_TYPE_OF: dict[TicketKind, DealType] = {
-    TicketKind.SELL_ITEMS: DealType.SALE,
-    TicketKind.SELL_BOOSTS: DealType.SALE,
-    TicketKind.ORDER_BOOSTS: DealType.PURCHASE,
+    # заявка 27.08.2026 п.1: скупка/продажа боту (SELL_*) is the bot *buying*
+    # from the player — DealType.PURCHASE, feeding purchase_turnover, shown
+    # in the profile as "Оборот продаж" (what the player sold to us). A boost
+    # order is the bot *selling* to the player — DealType.SALE, feeding
+    # sale_turnover / "Оборот покупок" (what the player bought from us).
+    TicketKind.SELL_ITEMS: DealType.PURCHASE,
+    TicketKind.SELL_BOOSTS: DealType.PURCHASE,
+    TicketKind.ORDER_BOOSTS: DealType.SALE,
 }
 
 _PANEL_DESCRIPTIONS: dict[TicketKind, str] = {
@@ -965,17 +982,21 @@ class TicketsCog(commands.Cog):
                 interaction.guild, session.author_id
             )
             if tier is not None and multiplier != Decimal("1.00"):
-                markup_note = (
-                    f"\n-# 🏷️ Применена скидка/наценка от ранга «{tier.label}»: ×{multiplier}"
-                )
+                markup_note = f"\n-# Применена {format_role_markup(tier, multiplier)}"
 
         amount = typed_amount
-        if session.coupon_discount_percent is not None:
-            coupon_multiplier = (Decimal(100) - session.coupon_discount_percent) / Decimal(100)
+        if session.coupon_discount_percent is not None and session.coupon_kind is not None:
+            if session.coupon_kind is CouponKind.MARKUP:
+                coupon_multiplier = (Decimal(100) + session.coupon_discount_percent) / Decimal(100)
+            else:
+                coupon_multiplier = (Decimal(100) - session.coupon_discount_percent) / Decimal(100)
             amount = round_for_storage(typed_amount * coupon_multiplier)
-            markup_note += (
-                f"\n-# 🎟️ Применён промокод «{session.coupon_code}»: "
-                f"-{session.coupon_discount_percent}%"
+            assert session.coupon_code is not None  # noqa: S101 - set together
+            markup_note += "\n-# Применён " + format_coupon_line(
+                session.coupon_code,
+                session.coupon_kind,
+                session.coupon_discount_percent,
+                verb="промокод",
             )
 
         request = AddTransactionRequest(
@@ -1055,15 +1076,16 @@ class TicketsCog(commands.Cog):
             return
 
         coupon = await self._coupons.redeem(
-            code, channel_id=channel_id, discord_id=interaction.user.id
+            code, channel_id=channel_id, discord_id=interaction.user.id, ticket_kind=session.kind
         )
         session = await self._tickets.record_coupon(
-            channel_id, coupon.code, coupon.discount_percent
+            channel_id, coupon.code, coupon.kind, coupon.discount_percent
         )
 
+        adjustment = "скидка" if coupon.kind is CouponKind.DISCOUNT else "наценка"
         embed = self._embeds.success(
             "🎟️ Промокод применён",
-            f"«{coupon.code}»: скидка {coupon.discount_percent}% "
+            f"«{coupon.code}»: {adjustment} {coupon.discount_percent}% "
             "будет учтена при завершении заявки.",
         )
         await interaction.followup.send(embed=embed, ephemeral=True)

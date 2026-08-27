@@ -13,7 +13,7 @@ from decimal import Decimal
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.application.ports.clock import Clock
 from stalbot.domain.entities.screenshot import OCR_STATUS_DISABLED
-from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
+from stalbot.domain.enums import CouponKind, DeliveryMethod, TicketKind, TicketStatus
 from stalbot.domain.errors import TicketSessionNotFoundError
 from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
 
@@ -175,17 +175,18 @@ class TicketService:
         return await self._update(channel_id, status=TicketStatus.CONFIRMED)
 
     async def record_coupon(
-        self, channel_id: int, code: str, discount_percent: Decimal
+        self, channel_id: int, code: str, kind: CouponKind, discount_percent: Decimal
     ) -> TicketSession:
-        """Lock a redeemed coupon's discount onto the session (заявка 26.08.2026).
+        """Lock a redeemed coupon's terms onto the session (заявка 26.08+27.08.2026).
 
         Args:
             channel_id: The ticket channel.
             code: The coupon's code, as stored (upper-cased).
+            kind: Discount (заказ бустов) or markup (скупка).
             discount_percent: The `Decimal` percent to apply at confirm time.
         """
         return await self._update(
-            channel_id, coupon_code=code, coupon_discount_percent=discount_percent
+            channel_id, coupon_code=code, coupon_kind=kind, coupon_discount_percent=discount_percent
         )
 
     async def set_active_order_item(self, channel_id: int, item_id: int | None) -> TicketSession:

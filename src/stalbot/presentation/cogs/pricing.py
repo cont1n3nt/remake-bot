@@ -24,7 +24,7 @@ from stalbot.config.settings import Settings
 from stalbot.domain.clock import SystemClock, format_datetime, parse_deadline
 from stalbot.domain.enums import ItemCategory, PriceField
 from stalbot.domain.errors import DeadlineParseError
-from stalbot.domain.money import evaluate_amount
+from stalbot.domain.money import evaluate_amount, format_amount
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
 from stalbot.presentation.autocomplete import item_choices
 from stalbot.presentation.checks import admin_only
@@ -151,6 +151,40 @@ class PricingCog(commands.Cog):
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[int]]:
         return item_choices(await self._items.all(), current)
+
+    @app_commands.command(
+        name="temp_prices", description="🛡️ [Админ] ⏳ Список всех временных цен"
+    )
+    @admin_only()
+    async def temp_prices(self, interaction: discord.Interaction) -> None:
+        """Handle `/temp_prices`: list every active temp-price override."""
+        await interaction.response.defer(ephemeral=True)
+        active = await self._temp_prices.list_active()
+        if not active:
+            embed = self._embeds.info("⏳ Временные цены", "Сейчас нет активных временных цен.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        catalog = {item.id: item for item in await self._items.all()}
+        lines: list[str] = []
+        for temp in active:
+            item = catalog.get(temp.item_id)
+            item_name = item.name if item is not None else f"#{temp.item_id}"
+            current_price = None
+            if item is not None:
+                current_price = (
+                    item.price_buy if temp.field is PriceField.BUY else item.price_sell
+                )
+            original = (
+                format_amount(temp.original_price) if temp.original_price is not None else "—"
+            )
+            lines.append(
+                f"**{item_name}** ({temp.field.value}): "
+                f"{format_amount(current_price) if current_price is not None else '—'} "
+                f"→ {original} с {format_datetime(temp.expires_at)}"
+            )
+        embed = self._embeds.info("⏳ Временные цены", "\n".join(lines))
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="new_price", description="🛡️ [Админ] 📥 Импортировать цены из TXT")
     @app_commands.describe(файл="TXT-файл прайс-листа (формат — как в /give_price)")

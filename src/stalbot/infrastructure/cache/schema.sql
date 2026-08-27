@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS ticket_sessions (
     updated_at TEXT NOT NULL,
     active_order_item_id INTEGER,
     coupon_code TEXT,
-    coupon_discount_percent TEXT
+    coupon_discount_percent TEXT,
+    coupon_kind TEXT
 );
 
 -- Boost-order draft lines (M10). item_name_norm + category let a line
@@ -327,6 +328,7 @@ CREATE INDEX IF NOT EXISTS ix_temp_prices_expires ON temp_prices(expires_at);
 CREATE TABLE IF NOT EXISTS coupons (
     id INTEGER PRIMARY KEY,
     code TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'discount' CHECK (kind IN ('discount','markup')),
     discount_percent TEXT NOT NULL,
     max_uses INTEGER,
     used_count INTEGER NOT NULL DEFAULT 0,

@@ -7,11 +7,14 @@ editing this one function, not every place a card gets sent or edited.
 Empty fields (no referrer yet, no screenshot yet) are simply omitted.
 """
 
+from decimal import Decimal
+
 import discord
 
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.domain.clock import format_datetime
-from stalbot.domain.enums import DeliveryMethod
+from stalbot.domain.enums import CouponKind, DeliveryMethod
+from stalbot.domain.progression.ranks import RankTier
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 #: Filename every screenshot is re-uploaded under (PLAN.md §11.5) — the
@@ -29,6 +32,42 @@ DELIVERY_LABELS: dict[DeliveryMethod, str] = {
     DeliveryMethod.MAIL: "📬 Почта",
     DeliveryMethod.TRADE: "🤝 Обмен",
 }
+
+
+def role_mention(tier: RankTier) -> str:
+    """A rank as a Discord role tag, `<@&role_id>` — same convention as tagging a user."""
+    return f"<@&{tier.role_id}>"
+
+
+def format_percent(value: Decimal) -> str:
+    """A percent value with no trailing zeros: `Decimal("5.00")` -> `"5"`, `"1.50"` -> `"1.5"`."""
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def format_role_markup(tier: RankTier, multiplier: Decimal) -> str:
+    """`"🏷️ Наценка/скидка по рангу <@&...>: -5%"` — заявка 27.08.2026 п.5: percent, not `×0.95`.
+
+    Args:
+        tier: The rank whose multiplier this is.
+        multiplier: `< 1` is a discount, `> 1` a markup.
+    """
+    percent = (Decimal(1) - multiplier) * 100
+    sign = "-" if percent >= 0 else "+"
+    return f"🏷️ Наценка/скидка по рангу {role_mention(tier)}: {sign}{format_percent(abs(percent))}%"
+
+
+def format_coupon_line(code: str, kind: CouponKind, discount_percent: Decimal, *, verb: str) -> str:
+    """`"🎟️ {verb} «CODE»: -5%"` (discount) or `"... +5%"` (markup).
+
+    Args:
+        code: The coupon's code.
+        kind: Discount or markup.
+        discount_percent: Always positive — the sign comes from `kind`.
+        verb: E.g. "Промокод" or "Применён промокод".
+    """
+    sign = "-" if kind is CouponKind.DISCOUNT else "+"
+    return f"🎟️ {verb} «{code}»: {sign}{format_percent(discount_percent)}%"
 
 
 def render_ticket_card(session: TicketSession, embeds: EmbedFactory) -> discord.Embed:
@@ -54,8 +93,16 @@ def render_ticket_card(session: TicketSession, embeds: EmbedFactory) -> discord.
         if session.referrer_discord_id is not None:
             referrer += f" (<@{session.referrer_discord_id}>)"
         details.append(f"🤝 Пригласил: {referrer}")
-    if session.coupon_code is not None:
-        details.append(f"🎟️ Промокод «{session.coupon_code}»: -{session.coupon_discount_percent}%")
+    if session.coupon_code is not None and session.coupon_kind is not None:
+        assert session.coupon_discount_percent is not None  # noqa: S101 - set together
+        details.append(
+            format_coupon_line(
+                session.coupon_code,
+                session.coupon_kind,
+                session.coupon_discount_percent,
+                verb="Промокод",
+            )
+        )
 
     lines = [_SEPARATOR, f"👤 Игрок: <@{session.author_id}>", "", *details, ""]
     lines.append(f"🕒 Создана: {format_datetime(session.created_at)}")

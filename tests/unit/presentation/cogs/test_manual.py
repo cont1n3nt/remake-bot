@@ -33,6 +33,8 @@ def _cog(
     current_referrer: NormalizedNick | None = None,
     referral_result: SetReferralResult | None = None,
     rank_result: SetRankResult | None = None,
+    current_discord_id: int | None = None,
+    link_bound: bool = True,
 ) -> tuple[ManualCog, MagicMock, MagicMock]:
     manual_grants = MagicMock()
     manual_grants.current_referrer = AsyncMock(return_value=current_referrer)
@@ -40,6 +42,8 @@ def _cog(
     manual_grants.set_rank = AsyncMock(
         return_value=rank_result or SetRankResult(tier=_elite_tier(), granted=True)
     )
+    manual_grants.current_discord_id = AsyncMock(return_value=current_discord_id)
+    manual_grants.link_discord = AsyncMock(return_value=link_bound)
     progression = MagicMock()
     progression.sync = AsyncMock(return_value=[])
     cog = ManualCog(manual_grants, progression, EmbedFactory())
@@ -177,6 +181,62 @@ async def test_set_referral_does_not_confirm_when_referrer_unchanged() -> None:
     await _call_set_referral(cog, interaction, ник_пригласившего="OtherNick")
 
     manual_grants.set_referral.assert_awaited_once()
+
+
+async def _call_link_discord(
+    cog: ManualCog,
+    interaction: MagicMock,
+    *,
+    ник: str = "Scaryyyyy",
+    discord_member: MagicMock | None = None,
+) -> None:
+    callback: Any = ManualCog.link_discord.callback
+    await callback(cog, interaction, ник, discord_member or _member(999))
+
+
+async def test_link_discord_binds_when_unbound() -> None:
+    cog, manual_grants, _progression = _cog(current_discord_id=None, link_bound=True)
+    interaction = _interaction()
+
+    await _call_link_discord(cog, interaction)
+
+    manual_grants.link_discord.assert_awaited_once_with("Scaryyyyy", 999)
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "привязан" in (embed.title or "")
+
+
+async def test_link_discord_is_a_no_op_when_already_bound_to_the_same_account() -> None:
+    cog, manual_grants, _progression = _cog(current_discord_id=999, link_bound=True)
+    interaction = _interaction()
+
+    await _call_link_discord(cog, interaction, discord_member=_member(999))
+
+    manual_grants.link_discord.assert_awaited_once()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Без изменений" in (embed.title or "")
+
+
+async def test_link_discord_asks_for_confirmation_before_relinking() -> None:
+    cog, manual_grants, _progression = _cog(current_discord_id=111, link_bound=True)
+    interaction = _interaction()
+    cog._confirm_relink = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    await _call_link_discord(cog, interaction, discord_member=_member(999))
+
+    cog._confirm_relink.assert_awaited_once_with(interaction, 111)
+    manual_grants.link_discord.assert_awaited_once_with("Scaryyyyy", 999)
+
+
+async def test_link_discord_aborts_when_relink_not_confirmed() -> None:
+    cog, manual_grants, _progression = _cog(current_discord_id=111)
+    interaction = _interaction()
+    cog._confirm_relink = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+    await _call_link_discord(cog, interaction, discord_member=_member(999))
+
+    manual_grants.link_discord.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert embed.title == "Отменено"
 
 
 async def test_set_rank_grants_when_member_lacks_the_role() -> None:

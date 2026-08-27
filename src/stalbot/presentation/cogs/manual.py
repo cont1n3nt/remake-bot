@@ -124,6 +124,48 @@ class ManualCog(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(
+        name="link_discord", description="🛡️ [Админ] 🔗 Привязать Discord-аккаунт к игровому нику"
+    )
+    @app_commands.describe(ник="Игровой ник игрока", аккаунт="Discord-аккаунт для привязки")
+    @app_commands.rename(discord_member="аккаунт")
+    @admin_only()
+    async def link_discord(
+        self, interaction: discord.Interaction, ник: str, discord_member: discord.Member
+    ) -> None:
+        """Handle `/link_discord`: bind (or rebind, with confirmation) a nick's Discord account."""
+        await interaction.response.defer(ephemeral=True)
+
+        existing = await self._manual_grants.current_discord_id(ник)
+        if existing is not None and existing != discord_member.id:
+            confirmed = await self._confirm_relink(interaction, existing)
+            if not confirmed:
+                embed = self._embeds.info("Отменено", "Привязка не была изменена.")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                return
+
+        bound = await self._manual_grants.link_discord(ник, discord_member.id)
+        if not bound:
+            embed = self._embeds.info(
+                "ℹ️ Без изменений", f"Ник **{ник}** уже привязан к {discord_member.mention}."
+            )
+        else:
+            embed = self._embeds.success(
+                "✅ Аккаунт привязан", f"👤 Игрок: {ник} ({discord_member.mention})"
+            )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _confirm_relink(self, interaction: discord.Interaction, existing_id: int) -> bool:
+        embed = self._embeds.warning(
+            "⚠️ Ник уже привязан",
+            f"Этот ник уже привязан к другому аккаунту (<@{existing_id}>). Перепривязать?",
+        )
+        view = ConfirmView(author_id=interaction.user.id)
+        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True, wait=True)
+        view.message = message
+        await view.wait()
+        return bool(view.confirmed)
+
+    @app_commands.command(
         name="set_rank", description="🛡️ [Админ] 🏅 Выдать ранг вручную (только Discord-роль)"
     )
     @app_commands.describe(ник="Игровой ник игрока", ранг="Ранг для ручной выдачи")
