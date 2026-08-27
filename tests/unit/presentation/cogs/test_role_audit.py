@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
+from stalbot.application.dto.role_change import RoleChange
 from stalbot.domain.entities.player import Player
 from stalbot.domain.nick import NormalizedNick
 from stalbot.domain.progression.ranks import RankLadder
@@ -36,11 +37,15 @@ def _member(member_id: int, role_ids: list[int]) -> MagicMock:
     return member
 
 
-def _cog(*, get_by_discord_id: MagicMock | None = None) -> tuple[RoleAuditCog, MagicMock]:
+def _cog(
+    *, get_by_discord_id: MagicMock | None = None, resync_all: MagicMock | None = None
+) -> tuple[RoleAuditCog, MagicMock, MagicMock]:
     players = MagicMock()
     players.get_by_discord_id = get_by_discord_id or AsyncMock(return_value=None)
-    cog = RoleAuditCog(players, EmbedFactory())
-    return cog, players
+    progression = MagicMock()
+    progression.resync_all = resync_all or AsyncMock(return_value=[])
+    cog = RoleAuditCog(players, EmbedFactory(), progression)
+    return cog, players, progression
 
 
 def _interaction(*, guild: MagicMock | None) -> MagicMock:
@@ -59,8 +64,13 @@ async def _call(cog: RoleAuditCog, interaction: MagicMock) -> None:
     await callback(cog, interaction)
 
 
+async def _call_resync(cog: RoleAuditCog, interaction: MagicMock) -> None:
+    callback: Any = RoleAuditCog.resync_roles.callback
+    await callback(cog, interaction)
+
+
 async def test_rejects_outside_a_guild() -> None:
-    cog, _players = _cog()
+    cog, _players, _progression = _cog()
     interaction = _interaction(guild=None)
 
     await _call(cog, interaction)
@@ -73,7 +83,7 @@ async def test_reports_a_role_holder_with_no_bound_player() -> None:
     standard_role_id = RankLadder().by_key("standard").role_id  # type: ignore[union-attr]
     guild = MagicMock(spec=discord.Guild)
     guild.members = [_member(555, [standard_role_id])]
-    cog, players = _cog(get_by_discord_id=AsyncMock(return_value=None))
+    cog, players, _progression = _cog(get_by_discord_id=AsyncMock(return_value=None))
     interaction = _interaction(guild=guild)
 
     await _call(cog, interaction)
@@ -90,7 +100,7 @@ async def test_omits_a_role_holder_with_a_bound_player() -> None:
     standard_role_id = RankLadder().by_key("standard").role_id  # type: ignore[union-attr]
     guild = MagicMock(spec=discord.Guild)
     guild.members = [_member(111, [standard_role_id])]
-    cog, _players = _cog(get_by_discord_id=AsyncMock(return_value=_player()))
+    cog, _players, _progression = _cog(get_by_discord_id=AsyncMock(return_value=_player()))
     interaction = _interaction(guild=guild)
 
     await _call(cog, interaction)
@@ -102,7 +112,7 @@ async def test_omits_a_role_holder_with_a_bound_player() -> None:
 async def test_ignores_members_with_no_tracked_role() -> None:
     guild = MagicMock(spec=discord.Guild)
     guild.members = [_member(222, [999999])]
-    cog, players = _cog()
+    cog, players, _progression = _cog()
     interaction = _interaction(guild=guild)
 
     await _call(cog, interaction)
@@ -116,10 +126,61 @@ async def test_paginates_past_the_page_size() -> None:
     standard_role_id = RankLadder().by_key("standard").role_id  # type: ignore[union-attr]
     guild = MagicMock(spec=discord.Guild)
     guild.members = [_member(i, [standard_role_id]) for i in range(1, 25)]
-    cog, _players = _cog(get_by_discord_id=AsyncMock(return_value=None))
+    cog, _players, _progression = _cog(get_by_discord_id=AsyncMock(return_value=None))
     interaction = _interaction(guild=guild)
 
     await _call(cog, interaction)
+
+    kwargs = interaction.followup.send.call_args.kwargs
+    assert isinstance(kwargs["view"], PaginatedEmbedView)
+
+
+# -- /resync_roles (заявка 27.08.2026: on-demand full resync) --------------
+
+
+async def test_resync_reports_when_nothing_changed() -> None:
+    cog, _players, progression = _cog(resync_all=AsyncMock(return_value=[]))
+    interaction = _interaction(guild=MagicMock(spec=discord.Guild))
+
+    await _call_resync(cog, interaction)
+
+    progression.resync_all.assert_awaited_once()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "в порядке" in (embed.description or "")
+
+
+async def test_resync_reports_granted_and_revoked_roles() -> None:
+    standard = RankLadder().by_key("standard")
+    elite = RankLadder().by_key("elite")
+    assert standard is not None and elite is not None
+    change = RoleChange(
+        nick=NormalizedNick("scaryyyyy"),
+        discord_id=111,
+        granted=(elite.role_id,),
+        revoked=(standard.role_id,),
+    )
+    cog, _players, _progression = _cog(resync_all=AsyncMock(return_value=[change]))
+    interaction = _interaction(guild=MagicMock(spec=discord.Guild))
+
+    await _call_resync(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    field = embed.fields[0]
+    assert "scaryyyyy" in field.name
+    assert "<@111>" in field.name
+    assert "Elite" in field.value
+    assert "Standard" in field.value
+
+
+async def test_resync_paginates_past_the_page_size() -> None:
+    changes = [
+        RoleChange(nick=NormalizedNick(f"player{i}"), discord_id=i, granted=(1,), revoked=())
+        for i in range(1, 25)
+    ]
+    cog, _players, _progression = _cog(resync_all=AsyncMock(return_value=changes))
+    interaction = _interaction(guild=MagicMock(spec=discord.Guild))
+
+    await _call_resync(cog, interaction)
 
     kwargs = interaction.followup.send.call_args.kwargs
     assert isinstance(kwargs["view"], PaginatedEmbedView)

@@ -194,7 +194,9 @@ class StalbotBot(commands.Bot):
         profile_service = ProfileService(players_repo, progression_repo)
         await self.add_cog(ProfileCog(profile_service, self.embed_factory, self.settings))
         await self.add_cog(DatabaseCog(players_repo, progression_repo, self.embed_factory))
-        await self.add_cog(RoleAuditCog(players_repo, self.embed_factory))
+        await self.add_cog(
+            RoleAuditCog(players_repo, self.embed_factory, self.progression_service)
+        )
 
         catalog_items_repo = CatalogItemsRepository(connection)
         catalog_service = CatalogService(

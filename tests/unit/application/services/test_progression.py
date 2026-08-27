@@ -385,3 +385,68 @@ async def test_manual_rank_role_is_left_untouched_by_the_poller(
     state = await state_repo.get(nick)
     assert state is not None
     assert state.manual_rank_role is True  # preserved across the sync
+
+
+# -- resync_all (заявка 27.08.2026: on-demand full resync) -----------------
+
+
+async def test_resync_all_skips_players_without_a_discord_id(
+    connection: aiosqlite.Connection,
+) -> None:
+    await _seed_player(connection, discord_id=None)
+    roles = FakeRoleGateway()
+    service = _service(
+        connection,
+        roles=roles,
+        audit_gateway=FakeAuditGateway(),
+        audit_service=MagicMock(spec=AuditService),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+    )
+
+    changes = await service.resync_all()
+
+    assert changes == []
+    assert roles.calls == []
+
+
+async def test_resync_all_skips_players_with_no_ladder_role(
+    connection: aiosqlite.Connection,
+) -> None:
+    await _seed_player(connection, rank_key=None, referral_role_key=None)
+    roles = FakeRoleGateway()
+    service = _service(
+        connection,
+        roles=roles,
+        audit_gateway=FakeAuditGateway(),
+        audit_service=MagicMock(spec=AuditService),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+    )
+
+    changes = await service.resync_all()
+
+    assert changes == []
+
+
+async def test_resync_all_reports_the_roles_actually_changed(
+    connection: aiosqlite.Connection,
+) -> None:
+    await _seed_player(connection, "first", discord_id=11111, rank_key="elite")
+    await _seed_player(connection, "second", discord_id=22222, rank_key=None)
+    roles = FakeRoleGateway()
+    service = _service(
+        connection,
+        roles=roles,
+        audit_gateway=FakeAuditGateway(),
+        audit_service=MagicMock(spec=AuditService),
+        clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)),
+    )
+
+    changes = await service.resync_all()
+
+    assert len(changes) == 1
+    assert changes[0].nick == NormalizedNick("first")
+    assert changes[0].discord_id == 11111
+    elite = RankLadder().by_key("elite")
+    assert elite is not None
+    assert changes[0].granted == (elite.role_id,)
+    assert changes[0].revoked == ()

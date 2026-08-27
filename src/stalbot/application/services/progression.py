@@ -18,9 +18,10 @@ import discord
 from stalbot.application.dto.audit_event import AuditEvent
 from stalbot.application.dto.progression_state import ProgressionState
 from stalbot.application.dto.promotion import Promotion, PromotionAxis
+from stalbot.application.dto.role_change import RoleChange
 from stalbot.application.ports.audit_gateway import AuditGateway
 from stalbot.application.ports.clock import Clock
-from stalbot.application.ports.role_gateway import RoleGateway, RoleSet
+from stalbot.application.ports.role_gateway import RoleDiff, RoleGateway, RoleSet
 from stalbot.application.services.audit import AuditService
 from stalbot.domain.entities.player import Player
 from stalbot.domain.entities.player_progression import PlayerProgressionRecord
@@ -104,8 +105,45 @@ class ProgressionService:
         players = await self._load_players(nicks)
         promotions: list[Promotion] = []
         for player in players:
-            promotions.extend(await self._sync_one(player, announce_to=announce_to))
+            player_promotions, _diff = await self._sync_one(player, announce_to=announce_to)
+            promotions.extend(player_promotions)
         return promotions
+
+    async def resync_all(
+        self, *, announce_to: discord.abc.Messageable | None = None
+    ) -> list[RoleChange]:
+        """Force a right-now resync of every player and report every role actually changed.
+
+        Unlike `sync()`, whose callers ignore what actually moved, this is
+        for an admin-triggered "fix any drift now" command (заявка
+        27.08.2026: "пересинхронизировать всех игроков... если у кого-то
+        роли не соответствуют") — it surfaces exactly who was touched and
+        which role ids were granted/revoked, instead of just promotions.
+
+        Args:
+            announce_to: Where a public celebration is posted for any
+                promotion this resync also happens to trigger.
+
+        Returns:
+            One `RoleChange` per player who actually had a role granted or
+            revoked (players already in sync, or with no linked Discord
+            account, are omitted).
+        """
+        changes: list[RoleChange] = []
+        for player in await self._load_players(None):
+            if player.discord_id is None:
+                continue
+            _promotions, diff = await self._sync_one(player, announce_to=announce_to)
+            if diff.granted or diff.revoked:
+                changes.append(
+                    RoleChange(
+                        nick=player.nick_norm,
+                        discord_id=player.discord_id,
+                        granted=diff.granted,
+                        revoked=diff.revoked,
+                    )
+                )
+        return changes
 
     async def _load_players(self, nicks: Collection[NormalizedNick] | None) -> list[Player]:
         if nicks is None:
@@ -119,9 +157,10 @@ class ProgressionService:
 
     async def _sync_one(
         self, player: Player, *, announce_to: discord.abc.Messageable | None
-    ) -> list[Promotion]:
+    ) -> tuple[list[Promotion], RoleDiff]:
+        empty_diff = RoleDiff(granted=(), revoked=())
         if player.discord_id is None:
-            return []  # nothing to grant a role to
+            return [], empty_diff  # nothing to grant a role to
         discord_id = player.discord_id
         assert player.id is not None  # noqa: S101 - a fetched player always has a persisted id
 
@@ -143,7 +182,7 @@ class ProgressionService:
         )
         desired = frozenset(tier.role_id for tier in (rank_tier, referral_tier) if tier is not None)
         universe = self._referral_ladder.role_ids if manual_rank else self._role_universe
-        await self._roles.sync_roles(discord_id, RoleSet(desired=desired, universe=universe))
+        diff = await self._roles.sync_roles(discord_id, RoleSet(desired=desired, universe=universe))
 
         promotions: list[Promotion] = []
         if previous is not None and record is not None:
@@ -178,7 +217,7 @@ class ProgressionService:
         for promotion in promotions:
             await self._announce(promotion, announce_to)
 
-        return promotions
+        return promotions, diff
 
     async def sync_booster_flag(self, discord_id: int, is_boosting: bool) -> None:
         """Record a server-boost transition and resync that player's progression.

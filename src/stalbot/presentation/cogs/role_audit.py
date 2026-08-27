@@ -15,6 +15,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from stalbot.application.dto.role_change import RoleChange
+from stalbot.application.services.progression import ProgressionService
 from stalbot.config.ids import PARTNER_ROLE_ID
 from stalbot.domain.progression.ranks import RankLadder
 from stalbot.domain.progression.referrals import ReferralLadder
@@ -27,12 +29,13 @@ _PAGE_SIZE: Final = 20
 
 
 class RoleAuditCog(commands.Cog):
-    """`/role_audit` — read-only cross-check of tracked roles against `players`."""
+    """`/role_audit` (read-only) and `/resync_roles` (fixes drift now)."""
 
     def __init__(
         self,
         players: PlayersRepository,
         embeds: EmbedFactory,
+        progression: ProgressionService,
         *,
         rank_ladder: RankLadder | None = None,
         referral_ladder: ReferralLadder | None = None,
@@ -42,11 +45,14 @@ class RoleAuditCog(commands.Cog):
         Args:
             players: Source of `discord_id` bindings to check role holders against.
             embeds: Builds every embed this cog sends.
+            progression: Backs `/resync_roles` — recomputes and reconciles
+                every player's roles against the current ladder state.
             rank_ladder: Defaults to a fresh `RankLadder()`.
             referral_ladder: Defaults to a fresh `ReferralLadder()`.
         """
         self._players = players
         self._embeds = embeds
+        self._progression = progression
         self._rank_ladder = rank_ladder or RankLadder()
         self._referral_ladder = referral_ladder or ReferralLadder()
 
@@ -84,6 +90,63 @@ class RoleAuditCog(commands.Cog):
             embed=pager.current, view=pager, ephemeral=True, wait=True
         )
         pager.message = message
+
+    @app_commands.command(
+        name="resync_roles",
+        description="🛡️ [Админ] 🔄 Пересчитать и исправить роли всех игроков сейчас",
+    )
+    @admin_only()
+    async def resync_roles(self, interaction: discord.Interaction) -> None:
+        """Handle `/resync_roles`: force `ProgressionService.resync_all()` and report changes.
+
+        Same reconciliation the background poller already runs every 5
+        minutes for every player, triggered on demand — for when an admin
+        wants to see and fix drift right now instead of waiting.
+        """
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        announce_to = channel if isinstance(channel, discord.abc.Messageable) else None
+        changes = await self._progression.resync_all(announce_to=announce_to)
+
+        pages = self._build_resync_pages(changes)
+        if len(pages) == 1:
+            await interaction.followup.send(embed=pages[0], ephemeral=True)
+            return
+        pager = PaginatedEmbedView(pages=pages, author_id=interaction.user.id)
+        message = await interaction.followup.send(
+            embed=pager.current, view=pager, ephemeral=True, wait=True
+        )
+        pager.message = message
+
+    def _build_resync_pages(self, changes: Sequence[RoleChange]) -> list[discord.Embed]:
+        if not changes:
+            return [self._embeds.success("🔄 Синхронизация ролей", "Роли уже были в порядке.")]
+
+        chunks = _chunk(changes, _PAGE_SIZE)
+        pages: list[discord.Embed] = []
+        for index, chunk in enumerate(chunks, start=1):
+            title = (
+                "🔄 Синхронизация ролей"
+                if len(chunks) == 1
+                else f"🔄 Синхронизация ролей (стр. {index}/{len(chunks)})"
+            )
+            summary = f"Изменено ролей у игроков: {len(changes)}." if index == 1 else None
+            embed = self._embeds.success(title, summary)
+            for change in chunk:
+                lines = []
+                if change.granted:
+                    labels = ", ".join(self._role_label(role_id) for role_id in change.granted)
+                    lines.append(f"➕ Выдано: {labels}")
+                if change.revoked:
+                    labels = ", ".join(self._role_label(role_id) for role_id in change.revoked)
+                    lines.append(f"➖ Снято: {labels}")
+                embed.add_field(
+                    name=f"{change.nick} (<@{change.discord_id}>)",
+                    value="\n".join(lines),
+                    inline=False,
+                )
+            pages.append(enforce_limits(embed))
+        return pages
 
     def _tracked_role_ids(self) -> frozenset[int]:
         return self._rank_ladder.role_ids | self._referral_ladder.role_ids | {PARTNER_ROLE_ID}
