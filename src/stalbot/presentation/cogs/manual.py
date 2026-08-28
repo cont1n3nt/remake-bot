@@ -126,7 +126,7 @@ class ManualCog(commands.Cog):
     @app_commands.command(
         name="link_discord", description="🛡️ [Админ] 🔗 Привязать Discord-аккаунт к игровому нику"
     )
-    @app_commands.describe(ник="Игровой ник игрока", аккаунт="Discord-аккаунт для привязки")
+    @app_commands.describe(ник="Игровой ник игрока", discord_member="Discord-аккаунт для привязки")
     @app_commands.rename(discord_member="аккаунт")
     @admin_only()
     async def link_discord(
