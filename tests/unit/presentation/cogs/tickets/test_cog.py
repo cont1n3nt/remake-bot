@@ -18,6 +18,7 @@ import pytest
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.dto.ticket_session import TicketSession
 from stalbot.application.dto.transaction_request import TransactionRegistrationResult
+from stalbot.application.services.order_economics import OrderEconomics, OrderLineCost
 from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
 from stalbot.domain.entities.coupon import Coupon
 from stalbot.domain.entities.deal import Deal
@@ -35,7 +36,12 @@ from stalbot.domain.enums import (
 )
 from stalbot.domain.errors import AmountParseError
 from stalbot.domain.progression.ranks import RankLadder
-from stalbot.presentation.cogs.tickets.cog import TicketsCog, _infer_author_id, _resolve_member
+from stalbot.presentation.cogs.tickets.cog import (
+    TicketsCog,
+    _describe_edit,
+    _infer_author_id,
+    _resolve_member,
+)
 from stalbot.presentation.cogs.tickets.modals import (
     AmountModal,
     CouponModal,
@@ -212,6 +218,7 @@ def _cog(
     players: MagicMock | None = None,
     coupons: MagicMock | None = None,
     embeds: EmbedFactory | None = None,
+    order_economics: MagicMock | None = None,
     tool_wait_timeout: float = 0.05,
     log_channel_id: int = 555,
 ) -> tuple[TicketsCog, MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
@@ -233,6 +240,7 @@ def _cog(
         coupons,
         embeds or EmbedFactory(),
         settings,
+        order_economics=order_economics,
         tool_wait_timeout_seconds=tool_wait_timeout,
     )
     return cog, tickets, screenshots, boost_orders, transactions, progression
@@ -1553,3 +1561,226 @@ def test_resolve_member_by_display_name() -> None:
 
 def test_resolve_member_returns_none_without_a_guild() -> None:
     assert _resolve_member(None, "anything") is None
+
+
+# -- экономика заказа в логах (заявка 13.09.2026 п.7) ----------------------
+
+
+def _fake_order_economics(*, unpriced: int = 0) -> MagicMock:
+    service = MagicMock()
+    service.for_order = AsyncMock(
+        return_value=OrderEconomics(
+            revenue=Decimal(1000),
+            priced=(OrderLineCost(name="Топот", quantity=2, unit_cost_kopeks=30_000),),
+            unpriced=tuple(
+                OrderLineCost(name=f"Без моста {i}", quantity=1, unit_cost_kopeks=None)
+                for i in range(unpriced)
+            ),
+        )
+    )
+    return service
+
+
+def _guild_with_log_channel(log_channel: MagicMock, log_channel_id: int = 555) -> MagicMock:
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_channel = MagicMock(
+        side_effect=lambda cid: log_channel if cid == log_channel_id else None
+    )
+    guild.get_member = MagicMock(return_value=None)
+    return guild
+
+
+async def test_order_economics_is_posted_to_the_log_channel_on_completion() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    economics = _fake_order_economics()
+    log_channel = _text_channel(channel_id=555)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), order_economics=economics)
+    interaction = _interaction(channel=_text_channel(), guild=_guild_with_log_channel(log_channel))
+
+    await cog._on_amount_submitted(interaction, "1000")
+
+    economics.for_order.assert_awaited_once()
+    log_channel.send.assert_awaited_once()
+    embed = log_channel.send.call_args.kwargs["embed"]
+    assert "Экономика заказа" in (embed.title or "")
+
+
+async def test_order_economics_is_computed_before_the_draft_is_cleared() -> None:
+    """`clear()` deletes the very lines the calculation reads — order matters."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    calls: list[str] = []
+    economics = _fake_order_economics()
+    economics.for_order = AsyncMock(side_effect=lambda *a, **k: calls.append("economics"))
+    boost_orders = _fake_boost_orders()
+    boost_orders.clear = AsyncMock(side_effect=lambda *a, **k: calls.append("clear"))
+    cog, *_ = _cog(
+        tickets=_fake_tickets(get_return=session),
+        boost_orders=boost_orders,
+        order_economics=economics,
+    )
+    interaction = _interaction(channel=_text_channel(), guild=None)
+
+    await cog._on_amount_submitted(interaction, "1000")
+
+    assert calls == ["economics", "clear"]
+
+
+async def test_order_economics_failure_never_breaks_the_confirmation() -> None:
+    """The deal is already recorded by then — a broken log entry must not undo it."""
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    economics = MagicMock()
+    economics.for_order = AsyncMock(side_effect=RuntimeError("boom"))
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session), order_economics=economics)
+    interaction = _interaction(channel=_text_channel())
+
+    await cog._on_amount_submitted(interaction, "1000")
+
+    tickets.record_confirmed.assert_awaited_once_with(session.channel_id)
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "зафиксирована" in (embed.title or "")
+
+
+async def test_no_economics_entry_for_a_sell_ticket() -> None:
+    """Only заказ бустов has line items to cost out."""
+    session = _session(kind=TicketKind.SELL_ITEMS, game_nick="Scaryyyyy")
+    economics = _fake_order_economics()
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), order_economics=economics)
+    interaction = _interaction(channel=_text_channel())
+
+    await cog._on_amount_submitted(interaction, "1000")
+
+    economics.for_order.assert_not_called()
+
+
+# -- редактирование заявки на скупку (заявка 13.09.2026 п.9) ---------------
+
+
+async def test_edit_button_opens_the_form_prefilled_from_the_session() -> None:
+    session = _session(game_nick="Scaryyyyy", referrer_nick="Inviter", referrer_discord_id=777)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=session.author_id)
+
+    await cog._on_edit_button(interaction)
+
+    modal = interaction.response.send_modal.call_args.args[0]
+    assert isinstance(modal, TicketFormModal)
+    assert modal.nick.default == "Scaryyyyy"
+    assert modal.referrer_nick.default == "Inviter"
+    assert modal.referrer_discord.default == "<@777>"
+
+
+async def test_edit_button_is_refused_to_a_stranger() -> None:
+    session = _session(game_nick="Scaryyyyy", author_id=42)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=999)
+    interaction.user.guild_permissions.administrator = False
+
+    await cog._on_edit_button(interaction)
+
+    interaction.response.send_modal.assert_not_called()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "Недостаточно прав" in (embed.description or "")
+
+
+async def test_edit_button_is_refused_once_confirmed() -> None:
+    session = _session(game_nick="Scaryyyyy", status=TicketStatus.CONFIRMED)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(user_id=session.author_id)
+
+    await cog._on_edit_button(interaction)
+
+    interaction.response.send_modal.assert_not_called()
+
+
+async def test_edit_writes_only_after_the_change_is_confirmed() -> None:
+    session = _session(game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    cog._confirm_edit = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    interaction = _interaction(channel=_text_channel())
+
+    await cog._on_edit_submitted(interaction, "NewNick", None, None)
+
+    cog._confirm_edit.assert_awaited_once()
+    tickets.record_form.assert_awaited_once()
+    _args, kwargs = tickets.record_form.call_args
+    assert kwargs["game_nick"] == "NewNick"
+
+
+async def test_edit_is_abandoned_when_not_confirmed() -> None:
+    session = _session(game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    cog._confirm_edit = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    interaction = _interaction(channel=_text_channel())
+
+    await cog._on_edit_submitted(interaction, "NewNick", None, None)
+
+    tickets.record_form.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Отменено" in (embed.title or "")
+
+
+async def test_edit_that_changes_nothing_asks_for_no_confirmation() -> None:
+    session = _session(game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    cog._confirm_edit = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    interaction = _interaction(channel=_text_channel())
+
+    await cog._on_edit_submitted(interaction, "Scaryyyyy", None, None)
+
+    cog._confirm_edit.assert_not_called()
+    tickets.record_form.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Без изменений" in (embed.title or "")
+
+
+async def test_edit_never_reassigns_the_ticket_author() -> None:
+    """TICK-2 picks the author from whoever submits the form — right once, wrong on every edit."""
+    session = _session(game_nick="Scaryyyyy", author_id=42)
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    cog._confirm_edit = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    interaction = _interaction(channel=_text_channel(), user_id=999)
+
+    await cog._on_edit_submitted(interaction, "NewNick", None, None)
+
+    tickets.set_author.assert_not_called()
+
+
+async def test_edit_reopens_the_form_on_a_half_filled_referrer_pair() -> None:
+    session = _session(game_nick="Scaryyyyy")
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction()
+
+    await cog._on_edit_submitted(interaction, "Scaryyyyy", "Inviter", None)
+
+    tickets.record_form.assert_not_called()
+    modal = interaction.response.send_modal.call_args.args[0]
+    assert isinstance(modal, TicketFormModal)
+
+
+async def test_edit_is_refused_if_the_ticket_was_confirmed_while_the_modal_was_open() -> None:
+    session = _session(game_nick="Scaryyyyy", status=TicketStatus.CONFIRMED)
+    cog, tickets, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(channel=_text_channel())
+
+    await cog._on_edit_submitted(interaction, "NewNick", None, None)
+
+    tickets.record_form.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Уже подтверждено" in (embed.title or "")
+
+
+def test_describe_edit_lists_every_changed_field() -> None:
+    session = _session(game_nick="Scaryyyyy", referrer_nick="Old", referrer_discord_id=1)
+
+    changes = _describe_edit(session, "NewNick", "New", 2)
+
+    assert len(changes) == 3
+    assert "Scaryyyyy → NewNick" in changes[0]
+    assert "Old → New" in changes[1]
+    assert "<@1> → <@2>" in changes[2]
+
+
+def test_describe_edit_is_empty_when_nothing_moved() -> None:
+    session = _session(game_nick="Scaryyyyy", referrer_nick="Old", referrer_discord_id=1)
+
+    assert _describe_edit(session, "Scaryyyyy", "Old", 1) == []

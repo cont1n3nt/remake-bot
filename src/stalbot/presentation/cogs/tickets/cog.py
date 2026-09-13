@@ -28,6 +28,7 @@ from stalbot.application.services.boost_orders import (
     BoostOrderService,
 )
 from stalbot.application.services.coupons import CouponService
+from stalbot.application.services.order_economics import OrderEconomicsService
 from stalbot.application.services.progression import ProgressionService
 from stalbot.application.services.role_pricing import resolve_price_multiplier
 from stalbot.application.services.screenshots import ScreenshotService
@@ -46,7 +47,13 @@ from stalbot.domain.enums import (
     TicketStatus,
 )
 from stalbot.domain.errors import AmountParseError, DeadlineParseError
-from stalbot.domain.money import evaluate_amount, format_amount, parse_amount, round_for_storage
+from stalbot.domain.money import (
+    evaluate_amount,
+    format_amount,
+    from_storage,
+    parse_amount,
+    round_for_storage,
+)
 from stalbot.domain.nick import normalize_nick
 from stalbot.domain.progression.ranks import RankLadder, RankTier
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
@@ -56,6 +63,7 @@ from stalbot.presentation.cogs.tickets.card import (
     format_role_markup,
     render_ticket_card,
 )
+from stalbot.presentation.cogs.tickets.economics_card import render_order_economics
 from stalbot.presentation.cogs.tickets.modals import (
     AmountModal,
     CouponModal,
@@ -63,7 +71,10 @@ from stalbot.presentation.cogs.tickets.modals import (
     QuantityModal,
     TicketFormModal,
 )
-from stalbot.presentation.cogs.tickets.order_card import render_order_editor, render_order_summary
+from stalbot.presentation.cogs.tickets.order_card import (
+    render_order_editor,
+    render_order_summary,
+)
 from stalbot.presentation.cogs.tickets.order_views import (
     BoostMultiSelectView,
     OrderEditorView,
@@ -76,6 +87,7 @@ from stalbot.presentation.cogs.tickets.views import (
 )
 from stalbot.presentation.embeds.deal import deal_summary_lines
 from stalbot.presentation.embeds.factory import EmbedFactory
+from stalbot.presentation.views.confirm import ConfirmView
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +132,7 @@ class TicketsCog(commands.Cog):
         *,
         clock: Clock | None = None,
         rank_ladder: RankLadder | None = None,
+        order_economics: OrderEconomicsService | None = None,
         tool_wait_timeout_seconds: float = _TOOL_WAIT_TIMEOUT_SECONDS,
     ) -> None:
         """Wire the cog to the services it delegates to.
@@ -139,6 +152,9 @@ class TicketsCog(commands.Cog):
             rank_ladder: Resolves a boost-order author's rank for the
                 role-based price multiplier (§9.1, п.2). Defaults to a
                 fresh `RankLadder()`.
+            order_economics: Computes cost of goods and profit for a
+                confirmed boost order (заявка 13.09.2026 п.7). `None`
+                simply skips that log entry — everything else is unaffected.
             tool_wait_timeout_seconds: How long to wait for Ticket Tool's
                 first message before posting the panel anyway (PLAN.md
                 §11.2). Overridable so tests don't block for 30 real seconds.
@@ -154,6 +170,7 @@ class TicketsCog(commands.Cog):
         self._settings = settings
         self._clock = clock or SystemClock()
         self._rank_ladder = rank_ladder or RankLadder()
+        self._order_economics = order_economics
         self._tool_wait_timeout = tool_wait_timeout_seconds
         self._tool_wait: dict[int, asyncio.Event] = {}
         # UX #15: only images sent after the "📸 Прикрепить скриншот" button was
@@ -169,14 +186,27 @@ class TicketsCog(commands.Cog):
             TicketPanelView(TicketKind.SELL_ITEMS, self._on_start),
             TicketPanelView(TicketKind.SELL_BOOSTS, self._on_start),
             TicketPanelView(TicketKind.ORDER_BOOSTS, self._on_start),
-            TicketSummaryView(
-                self._on_screenshot_button, self._on_confirm_button, self._on_coupon_button
-            ),
+            self._build_summary_view(),
             self._build_order_editor_view(None, ()),
             self._build_order_summary_view(),
         )
 
     # -- Channel lifecycle (PLAN.md §11.2) -----------------------------------
+
+    def _build_summary_view(self) -> TicketSummaryView:
+        """The скупка card's button row.
+
+        One builder for all three construction sites (startup registration,
+        first post, screenshot re-render): adding a button to the card used
+        to mean remembering all three, and forgetting one left that card
+        silently missing it.
+        """
+        return TicketSummaryView(
+            self._on_screenshot_button,
+            self._on_confirm_button,
+            self._on_coupon_button,
+            self._on_edit_button,
+        )
 
     @commands.Cog.listener()
     async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
@@ -406,9 +436,7 @@ class TicketsCog(commands.Cog):
         self, channel: discord.TextChannel, session: TicketSession
     ) -> None:
         embed = render_ticket_card(session, self._embeds)
-        view = TicketSummaryView(
-            self._on_screenshot_button, self._on_confirm_button, self._on_coupon_button
-        )
+        view = self._build_summary_view()
         if session.summary_message_id is not None:
             message = await _try_fetch(channel, session.summary_message_id)
             if message is not None:
@@ -420,7 +448,7 @@ class TicketsCog(commands.Cog):
     # -- Boost-order editor (PLAN.md §11.6) ----------------------------------
 
     async def _on_order_line_selected(self, interaction: discord.Interaction, item_id: int) -> None:
-        session = await self._require_order_participant(interaction)
+        session = await self._require_participant(interaction)
         if session is None:
             return
         await self._tickets.set_active_order_item(session.channel_id, item_id)
@@ -461,7 +489,7 @@ class TicketsCog(commands.Cog):
             embed = self._embeds.error("Ошибка", "Недостаточно прав для этого действия.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-        if session.status is TicketStatus.CONFIRMED:  # TICK-3, see `_require_order_participant`
+        if session.status is TicketStatus.CONFIRMED:  # TICK-3, see `_require_participant`
             embed = self._embeds.warning("⚠️ Уже подтверждено", "Эта заявка уже была подтверждена.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
@@ -506,10 +534,13 @@ class TicketsCog(commands.Cog):
         await self._tickets.set_active_order_item(session.channel_id, None)
         await self._refresh_order_editor_inline(interaction)
 
-    async def _require_order_participant(
-        self, interaction: discord.Interaction
-    ) -> TicketSession | None:
+    async def _require_participant(self, interaction: discord.Interaction) -> TicketSession | None:
         """Fetch the session, rejecting anyone but its author or an admin (PLAN.md §11.6).
+
+        Named for the boost-order editor it was written for, but there is
+        nothing order-specific in it — the скупка edit button (заявка
+        13.09.2026 п.9) needs exactly the same three checks, so it shares
+        this rather than growing a near-copy.
 
         Also rejects once the ticket is `CONFIRMED` (TICK-3): every other
         editor handler routes through this (or `_active_order_session`,
@@ -532,8 +563,8 @@ class TicketsCog(commands.Cog):
         return session
 
     async def _active_order_session(self, interaction: discord.Interaction) -> TicketSession | None:
-        """`_require_order_participant`, plus a warning if no line is currently selected."""
-        session = await self._require_order_participant(interaction)
+        """`_require_participant`, plus a warning if no line is currently selected."""
+        session = await self._require_participant(interaction)
         if session is None:
             return None
         if session.active_order_item_id is None:
@@ -545,7 +576,7 @@ class TicketsCog(commands.Cog):
         return session
 
     async def _on_order_add_boosts(self, interaction: discord.Interaction) -> None:
-        session = await self._require_order_participant(interaction)
+        session = await self._require_participant(interaction)
         if session is None:
             return
         catalog = await self._boost_orders.list_available_items()
@@ -587,7 +618,7 @@ class TicketsCog(commands.Cog):
         (`🏁 Завершить заказ`), this does not register anything, it only switches
         the message back to `OrderSummaryView`.
         """
-        session = await self._require_order_participant(interaction)
+        session = await self._require_participant(interaction)
         if session is None:
             return
         lines = await self._boost_orders.list_lines(session.channel_id)
@@ -603,7 +634,7 @@ class TicketsCog(commands.Cog):
 
     async def _on_order_edit_button(self, interaction: discord.Interaction) -> None:
         """`✏️ Редактировать` on the summary — opens the interactive editor (UX #1)."""
-        session = await self._require_order_participant(interaction)
+        session = await self._require_participant(interaction)
         if session is None:
             return
         rendered = await self._render_order(session.channel_id, interaction.guild)
@@ -852,9 +883,7 @@ class TicketsCog(commands.Cog):
             if summary_message is not None:
                 card_file = discord.File(io.BytesIO(cover_data), filename=SCREENSHOT_FILENAME)
                 embed = render_ticket_card(updated, self._embeds)
-                view = TicketSummaryView(
-                    self._on_screenshot_button, self._on_confirm_button, self._on_coupon_button
-                )
+                view = self._build_summary_view()
                 await summary_message.edit(embed=embed, view=view, attachments=[card_file])
 
         self._awaiting_screenshot.discard(session.channel_id)
@@ -1031,6 +1060,9 @@ class TicketsCog(commands.Cog):
         await self._tickets.record_confirmed(session.channel_id)
         await self._screenshots.record_confirmed_amount(session.channel_id, amount)
         if session.kind is TicketKind.ORDER_BOOSTS:
+            # Before `clear()` — the economics are computed from the very
+            # draft lines that call deletes (заявка 13.09.2026 п.7).
+            await self._log_order_economics(interaction, session, from_storage(result.deal.amount))
             await self._boost_orders.clear(session.channel_id)
 
         sync_nicks = [normalize_nick(session.game_nick)]
@@ -1062,6 +1094,149 @@ class TicketsCog(commands.Cog):
                     f"Будем благодарны за отзыв в <#{self._settings.reviews_channel_id}>! ⭐",
                 ),
             )
+
+    async def _log_order_economics(
+        self, interaction: discord.Interaction, session: TicketSession, revenue: Decimal
+    ) -> None:
+        """Post «💼 Экономика заказа» to the log channel (заявка 13.09.2026 п.7).
+
+        Never raises into the confirmation flow: the deal is already
+        recorded by the time this runs, and a missing bridge or an
+        unreachable log channel must not make a completed order look failed.
+        """
+        if self._order_economics is None:
+            return
+        try:
+            economics = await self._order_economics.for_order(session.channel_id, revenue)
+            if not economics.priced and not economics.unpriced:
+                return  # no lines to report on
+            log_channel = (
+                interaction.guild.get_channel(self._settings.log_channel_id)
+                if interaction.guild
+                else None
+            )
+            if not isinstance(log_channel, discord.TextChannel):
+                logger.warning("order economics skipped: log channel not visible to the bot")
+                return
+            embed = render_order_economics(
+                economics,
+                self._embeds,
+                game_nick=session.game_nick or "—",
+                channel_id=session.channel_id,
+            )
+            await log_channel.send(embed=embed)
+        except Exception:
+            logger.exception(
+                "order economics failed for channel %s — the deal itself is unaffected",
+                session.channel_id,
+            )
+
+    # -- Редактирование заявки на скупку (заявка 13.09.2026 п.9) -------------
+
+    async def _on_edit_button(self, interaction: discord.Interaction) -> None:
+        """`✏️ Редактировать` on a скупка card — reopen the form, pre-filled.
+
+        The boost order has had an editor since UX #1; скупка/продажа had
+        no way to fix a typo in the nick short of opening a new ticket.
+        """
+        session = await self._require_participant(interaction)
+        if session is None:
+            return
+        if session.game_nick is None:
+            embed = self._embeds.error("Ошибка", "Заявка ещё не заполнена — редактировать нечего.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        await interaction.response.send_modal(
+            TicketFormModal(
+                self._on_edit_submitted,
+                embeds=self._embeds,
+                nick=session.game_nick,
+                referrer_nick=session.referrer_nick or "",
+                referrer_discord_text=(
+                    f"<@{session.referrer_discord_id}>" if session.referrer_discord_id else ""
+                ),
+            )
+        )
+
+    async def _on_edit_submitted(
+        self,
+        interaction: discord.Interaction,
+        nick: str,
+        referrer_nick: str | None,
+        referrer_discord_text: str | None,
+    ) -> None:
+        """Show what the edit would change, and write it only once confirmed.
+
+        Deliberately not `_on_form_submitted`: that one calls `set_author`,
+        which on an admin's edit would quietly hand them the ticket (TICK-2
+        picks the author from whoever submits the form — correct the first
+        time, wrong every time after).
+        """
+        if _referrer_pair_incomplete(referrer_nick, referrer_discord_text):
+            await interaction.response.send_modal(
+                TicketFormModal(
+                    self._on_edit_submitted,
+                    embeds=self._embeds,
+                    nick=nick,
+                    referrer_nick=referrer_nick or "",
+                    referrer_discord_text=referrer_discord_text or "",
+                    error_hint=_REFERRER_PAIR_ERROR,
+                )
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        session = await self._tickets.get(interaction.channel_id or 0)
+        if session is None or session.status is TicketStatus.CONFIRMED:
+            embed = self._embeds.warning(
+                "⚠️ Уже подтверждено", "Эту заявку больше нельзя редактировать."
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        referrer_nick, referrer_discord_text = _drop_self_referral(
+            nick, referrer_nick, referrer_discord_text
+        )
+        referrer_member = (
+            _resolve_member(interaction.guild, referrer_discord_text)
+            if referrer_discord_text
+            else None
+        )
+        referrer_discord_id = referrer_member.id if referrer_member else None
+
+        changes = _describe_edit(session, nick, referrer_nick, referrer_discord_id)
+        if not changes:
+            embed = self._embeds.info("ℹ️ Без изменений", "Заявка осталась прежней.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        if not await self._confirm_edit(interaction, changes):
+            embed = self._embeds.info("Отменено", "Заявка не была изменена.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        session = await self._tickets.record_form(
+            session.channel_id,
+            game_nick=nick,
+            referrer_nick=referrer_nick,
+            referrer_discord_id=referrer_discord_id,
+        )
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await self._post_or_update_summary(channel, session)
+
+        embed = self._embeds.success("✏️ Заявка обновлена", "\n".join(changes))
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _confirm_edit(self, interaction: discord.Interaction, changes: list[str]) -> bool:
+        embed = self._embeds.warning(
+            "⚠️ Подтвердите изменения", "\n".join(["Будет изменено:", *changes])
+        )
+        view = ConfirmView(author_id=interaction.user.id)
+        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True, wait=True)
+        view.message = message
+        await view.wait()
+        return bool(view.confirmed)
 
     # -- Coupons (заявка 26.08.2026) ------------------------------------------
 
@@ -1150,6 +1325,29 @@ def _resolve_member(guild: discord.Guild | None, text: str) -> discord.Member | 
         if member.name.lower() == lowered or member.display_name.lower() == lowered:
             return member
     return None
+
+
+def _describe_edit(
+    session: TicketSession,
+    nick: str,
+    referrer_nick: str | None,
+    referrer_discord_id: int | None,
+) -> list[str]:
+    """Build a «было → стало» line for every field an edit actually changes.
+
+    An empty list means nothing moved, which the caller reports instead of
+    writing and re-rendering the card for no reason.
+    """
+    changes: list[str] = []
+    if nick != session.game_nick:
+        changes.append(f"🎮 Ник: {session.game_nick or '—'} → {nick}")
+    if (referrer_nick or None) != (session.referrer_nick or None):
+        changes.append(f"🤝 Пригласил: {session.referrer_nick or '—'} → {referrer_nick or '—'}")
+    if referrer_discord_id != session.referrer_discord_id:
+        before = f"<@{session.referrer_discord_id}>" if session.referrer_discord_id else "—"
+        after = f"<@{referrer_discord_id}>" if referrer_discord_id else "—"
+        changes.append(f"💬 Discord пригласившего: {before} → {after}")
+    return changes
 
 
 def _drop_self_referral(

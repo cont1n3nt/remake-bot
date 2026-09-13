@@ -17,6 +17,7 @@ from stalbot.application.services.catalog import CatalogService
 from stalbot.application.services.coupons import CouponService
 from stalbot.application.services.health import HealthService
 from stalbot.application.services.manual_grants import ManualGrantService
+from stalbot.application.services.order_economics import OrderEconomicsService
 from stalbot.application.services.posters import PosterService
 from stalbot.application.services.pricing import PricingService
 from stalbot.application.services.profile import ProfileService
@@ -278,6 +279,7 @@ class StalbotBot(commands.Bot):
             self.embed_factory,
             self.settings,
             clock=SystemClock(),
+            order_economics=OrderEconomicsService(boost_order_service, shelter_cost_service),
         )
         await self.add_cog(tickets_cog)
         for view in tickets_cog.persistent_views():

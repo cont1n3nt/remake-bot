@@ -75,6 +75,16 @@ def _interaction() -> MagicMock:
     return interaction
 
 
+def _component_interaction() -> MagicMock:
+    """A button press: answered through `response.send_message`, not a followup."""
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.user = MagicMock(spec=discord.Member, id=1)
+    interaction.response = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.original_response = AsyncMock(return_value=MagicMock(spec=discord.Message))
+    return interaction
+
+
 async def _call_database(
     cog: DatabaseCog, interaction: MagicMock, поиск: str | None = None
 ) -> None:
@@ -133,14 +143,105 @@ async def test_database_paginates_past_the_page_size() -> None:
     assert isinstance(kwargs["view"], PaginatedEmbedView)
 
 
-async def test_database_single_page_sends_without_pager() -> None:
+async def test_database_single_page_drops_the_arrows_but_keeps_the_browse_buttons() -> None:
+    """заявка 13.09.2026 п.5: one page has nothing to page through, but still drills down."""
     cog, *_ = _cog(players=[_player()])
     interaction = _interaction()
 
     await _call_database(cog, interaction)
 
-    kwargs = interaction.followup.send.call_args.kwargs
-    assert "view" not in kwargs
+    view = interaction.followup.send.call_args.kwargs["view"]
+    labels = [item.label for item in view.children]
+    assert labels == ["🏅 По рангам", "🤝 По реф-ролям"]
+
+
+# -- переход по рангам/реф-ролям (заявка 13.09.2026 п.5) -------------------
+
+
+async def test_browse_offers_one_button_per_tier_with_holder_counts() -> None:
+    cog, *_ = _cog(
+        players=[_player(id=1), _player(id=2, nick_display="Other")],
+        progressions=[
+            _progression(player_id=1, rank_key="elite"),
+            _progression(player_id=2, rank_key="elite"),
+        ],
+    )
+    interaction = _component_interaction()
+
+    await cog._on_browse(interaction, "rank")
+
+    view = interaction.response.send_message.call_args.kwargs["view"]
+    labels = [item.label for item in view.children]
+    assert labels == [
+        "🔹 Standard (0)",
+        "🔷 Premium (0)",
+        "💠 Prestige (0)",
+        "💎 Elite (2)",
+        "👑 Legend (0)",
+    ]
+
+
+async def test_browse_referral_axis_counts_referral_roles() -> None:
+    cog, *_ = _cog(
+        players=[_player(id=1)],
+        progressions=[_progression(player_id=1, rank_key="elite", referral_role_key="scout")],
+    )
+    interaction = _component_interaction()
+
+    await cog._on_browse(interaction, "referral")
+
+    view = interaction.response.send_message.call_args.kwargs["view"]
+    assert view.children[0].label == "🧭 Скаут (1)"
+
+
+async def test_tier_pick_lists_holders_with_nick_and_discord() -> None:
+    cog, *_ = _cog(
+        players=[
+            _player(id=1, nick_display="Scaryyyyy", discord_id=111),
+            _player(id=2, nick_display="Other", discord_id=None),
+            _player(id=3, nick_display="NotElite", discord_id=333),
+        ],
+        progressions=[
+            _progression(player_id=1, rank_key="elite"),
+            _progression(player_id=2, rank_key="elite"),
+            _progression(player_id=3, rank_key="standard"),
+        ],
+    )
+    interaction = _interaction()
+
+    await cog._on_tier_picked(interaction, "rank", "elite")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    description = embed.description or ""
+    assert "Scaryyyyy → <@111>" in description
+    assert "Other → Discord не привязан" in description
+    assert "NotElite" not in description
+    assert "💎 Elite — 2" in (embed.title or "")
+
+
+async def test_tier_pick_says_so_when_the_tier_is_empty() -> None:
+    cog, *_ = _cog(players=[_player()], progressions=[_progression(player_id=1)])
+    interaction = _interaction()
+
+    await cog._on_tier_picked(interaction, "rank", "legend")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "пока никого нет" in (embed.description or "")
+
+
+async def test_roster_shows_the_referrer_nick_not_a_raw_id() -> None:
+    cog, *_ = _cog(
+        players=[
+            _player(id=1, nick_display="Scaryyyyy", referrer_player_id=2),
+            _player(id=2, nick_display="Inviter"),
+        ]
+    )
+    interaction = _interaction()
+
+    await _call_database(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "🤝 Реферер: Inviter" in embed.fields[0].value
 
 
 # -- поиск (заявка 27.08.2026 п.6) -----------------------------------------

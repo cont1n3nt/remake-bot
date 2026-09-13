@@ -96,6 +96,7 @@ class TicketSummaryView(discord.ui.View):
         on_screenshot: _ButtonHandler,
         on_confirm: _ButtonHandler,
         on_coupon: _ButtonHandler,
+        on_edit: _ButtonHandler,
     ) -> None:
         """Build the view.
 
@@ -103,9 +104,12 @@ class TicketSummaryView(discord.ui.View):
             on_screenshot: Called when `📸 Прикрепить скриншот` is clicked.
             on_confirm: Called when `🏁 Завершить` is clicked.
             on_coupon: Called when `🎟️ Промокод` is clicked (заявка 26.08.2026).
+            on_edit: Called when `✏️ Редактировать` is clicked (заявка 13.09.2026 п.9) —
+                the скупка counterpart of the boost order's own editor.
         """
         super().__init__(timeout=None)
         self.add_item(_ScreenshotButton(on_screenshot))
+        self.add_item(_EditButton(on_edit))
         self.add_item(_CouponButton(on_coupon))
         self.add_item(_ConfirmButton(on_confirm))
 
@@ -121,6 +125,19 @@ class _ScreenshotButton(discord.ui.Button["TicketSummaryView"]):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await self._on_screenshot(interaction)
+
+
+class _EditButton(discord.ui.Button["TicketSummaryView"]):
+    def __init__(self, on_edit: _ButtonHandler) -> None:
+        super().__init__(
+            label="✏️ Редактировать",
+            style=discord.ButtonStyle.secondary,
+            custom_id="ticket:edit",
+        )
+        self._on_edit = on_edit
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_edit(interaction)
 
 
 class _CouponButton(discord.ui.Button["TicketSummaryView"]):
