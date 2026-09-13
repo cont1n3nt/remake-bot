@@ -25,6 +25,7 @@ from stalbot.application.services.posters import PosterService
 from stalbot.application.services.pricing import PricingService
 from stalbot.application.services.profile import ProfileService
 from stalbot.application.services.progression import ProgressionService
+from stalbot.application.services.recipes import RecipeService
 from stalbot.application.services.screenshots import ScreenshotService
 from stalbot.application.services.shelter_cost import ShelterCostService
 from stalbot.application.services.stats import StatsService
@@ -69,6 +70,7 @@ from stalbot.presentation.cogs.posters import PostersCog
 from stalbot.presentation.cogs.pricing import PricingCog
 from stalbot.presentation.cogs.profile import ProfileCog
 from stalbot.presentation.cogs.purchase_calculator import PurchaseCalculatorCog
+from stalbot.presentation.cogs.recipes.cog import RecipesCog
 from stalbot.presentation.cogs.roles import RolesCog
 from stalbot.presentation.cogs.shelter_cost import ShelterCostCog
 from stalbot.presentation.cogs.stats import StatsCog
@@ -271,10 +273,18 @@ class StalbotBot(commands.Bot):
         )
 
         shelter_repo = ShelterRepository(connection)
-        shelter_cost_service = ShelterCostService(shelter_repo)
+        shelter_cost_service = ShelterCostService(shelter_repo, clock=SystemClock())
         await self.add_cog(
             ShelterCostCog(
                 shelter_cost_service, shelter_repo, catalog_items_repo, self.embed_factory
+            )
+        )
+
+        await self.add_cog(
+            RecipesCog(
+                RecipeService(shelter_repo, shelter_cost_service, clock=SystemClock()),
+                shelter_repo,
+                self.embed_factory,
             )
         )
 

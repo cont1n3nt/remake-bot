@@ -1,31 +1,67 @@
-"""`ShelterCostService` — backs `/cost` and `/precost` (sqlite_migration.md §V.2).
+"""`ShelterCostService` — cost-of-goods over the shelter crafting model (§V.2).
 
-Both commands are read-only previews over the same `domain.shelter.cost`
-engine `scripts/recompute_shelter_costs.py` already uses to materialize
-`shelter_cost` — this service never writes anything back to the database,
-it only calls `compute_costs` against the live data (`/cost`) or against a
-set of hypothetical price overrides (`/precost`).
+`current_costs` (`/cost`) and `precost` (`/precost`) are read-only previews
+over `domain.shelter.cost`; neither writes anything back.
+
+`recompute` is the one write, and it exists because the recipe commands
+(заявка 13.09.2026 п.3) changed who edits this data. `shelter_cost` used to
+be materialized only by `scripts/recompute_shelter_costs.py`, run by hand
+after an import — fine while recipes only changed through an import. Now
+the owner edits a recipe from Discord and expects `/cost` to agree a second
+later, so the same computation lives here and runs after every edit.
 """
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from stalbot.application.dto.precost_diff import PrecostDiff
+from stalbot.application.ports.clock import Clock
 from stalbot.domain.errors import ItemNotFoundError
 from stalbot.domain.shelter.cost import CostResult, compute_costs
 from stalbot.infrastructure.cache.repositories.shelter import ShelterRepository
 
 
-class ShelterCostService:
-    """Read-only cost-of-goods lookups over the shelter crafting model."""
+@dataclass(frozen=True, slots=True)
+class RecomputeReport:
+    """What one `recompute()` resolved."""
 
-    def __init__(self, shelter: ShelterRepository) -> None:
+    items: int
+    unresolved: int
+    """Items left with no cost at all — no price, and no recipe that resolves."""
+
+
+class ShelterCostService:
+    """Cost-of-goods lookups, and the one job that materializes them."""
+
+    def __init__(self, shelter: ShelterRepository, *, clock: Clock | None = None) -> None:
         """Wire the service to its collaborator.
 
         Args:
             shelter: Cache repository for `shelter_items`/`recipes`.
+            clock: Time source for `recompute`'s `computed_at` stamp.
+                Optional only so the two read-only callers need not supply
+                one; `recompute` requires it.
         """
         self._shelter = shelter
+        self._clock = clock
+
+    async def recompute(self) -> RecomputeReport:
+        """Recompute and persist every item's cost.
+
+        Called after any recipe, price, level or setting change, so `/cost`
+        never reports a number the current data no longer supports.
+
+        Raises:
+            RuntimeError: The service was built without a clock.
+        """
+        if self._clock is None:
+            raise RuntimeError("ShelterCostService needs a clock to recompute costs")
+        items = await self._shelter.load_item_specs()
+        recipes = await self._shelter.load_recipe_specs_for_current_levels()
+        results = compute_costs(items, recipes)
+        await self._shelter.save_costs(results, now=self._clock.now())
+        unresolved = sum(1 for result in results.values() if result.source == "unresolved")
+        return RecomputeReport(items=len(results), unresolved=unresolved)
 
     async def current_costs(self) -> dict[int, CostResult]:
         """Resolve every shelter item's cost at its current stored price.
