@@ -92,7 +92,7 @@ class PlayerAggregates:
     sale_turnover: int
     """N — sum of this player's own sale deals."""
     coin_ledger_delta: int
-    """Sum of `coin_ledger.delta` for this player (0 until Э12's shop exists)."""
+    """Sum of `coin_ledger.delta` for this player — shop spends and refunds."""
     referral_count: int
     """P — number of players whose resolved referrer is this player."""
     referee_total_turnover: int
@@ -105,6 +105,10 @@ class PlayerAggregates:
     """Count of this player's own deals >= 50,000,000 ₽ (any side)."""
     deal_count_over_100m: int
     """Count of this player's own deals >= 100,000,000 ₽ (any side)."""
+    xp_ledger_delta: int = 0
+    """Sum of `xp_ledger.delta` — XP granted outside the turnover formula
+    (заявка 13.09.2026 п.2: «Сухой паёк», the «Торговая гильдия» deal bonus).
+    Defaults to 0 so every existing construction site stays valid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +217,11 @@ def compute_progression(
         if xp_boost_applied
         else pre_xp
     )
+    # Added *after* the boost, never inside it: the sheet's boost multiplies
+    # XP earned from turnover, and a granted XP («Сухой паёк») is not that.
+    # Added *before* the rank lookup, though — a grant is meant to be able to
+    # push a player over the next threshold, which is what it is bought for.
+    xp += aggregates.xp_ledger_delta
 
     rank = ranks.current(xp)
     rank_one_time_coins = RANK_ONE_TIME_COINS[rank.key] if rank is not None else 0

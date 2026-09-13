@@ -374,3 +374,80 @@ CREATE TABLE IF NOT EXISTS poster_slots (
 );
 CREATE INDEX IF NOT EXISTS ix_poster_slots_section ON poster_slots(section_id, sort_order);
 CREATE INDEX IF NOT EXISTS ix_poster_slots_item    ON poster_slots(catalog_item_id);
+
+-- --- Магазин за Coins (заявка 13.09.2026 п.2, migration 0012) ---
+
+CREATE TABLE IF NOT EXISTS xp_ledger (
+    id         INTEGER PRIMARY KEY,
+    player_id  INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    delta      INTEGER NOT NULL CHECK (delta <> 0),
+    reason     TEXT    NOT NULL,
+    created_by INTEGER,
+    created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_xp_ledger_player ON xp_ledger(player_id);
+
+CREATE TABLE IF NOT EXISTS shop_categories (
+    key         TEXT    PRIMARY KEY,
+    name        TEXT    NOT NULL,
+    description TEXT,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS shop_items (
+    id               INTEGER PRIMARY KEY,
+    category_key     TEXT    NOT NULL REFERENCES shop_categories(key) ON DELETE RESTRICT,
+    name             TEXT    NOT NULL,
+    name_norm        TEXT    NOT NULL,
+    description      TEXT    NOT NULL,
+    price_coins      INTEGER NOT NULL CHECK (price_coins > 0),
+    effect_kind      TEXT    NOT NULL,
+    effect_value     TEXT,
+    duration_days    INTEGER CHECK (duration_days IS NULL OR duration_days > 0),
+    uses             INTEGER CHECK (uses IS NULL OR uses > 0),
+    stock            INTEGER CHECK (stock IS NULL OR stock >= 0),
+    per_player_limit INTEGER CHECK (per_player_limit IS NULL OR per_player_limit > 0),
+    emoji            TEXT,
+    sort_order       INTEGER NOT NULL DEFAULT 0,
+    active           INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+    created_at       TEXT    NOT NULL,
+    updated_at       TEXT,
+    deleted_at       TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_shop_items_name
+    ON shop_items(name_norm) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_shop_items_category ON shop_items(category_key, sort_order);
+
+CREATE TABLE IF NOT EXISTS shop_purchases (
+    id              INTEGER PRIMARY KEY,
+    player_id       INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    shop_item_id    INTEGER NOT NULL REFERENCES shop_items(id) ON DELETE RESTRICT,
+    price_coins     INTEGER NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active','used','expired','refunded')),
+    purchased_at    TEXT    NOT NULL,
+    refunded_at     TEXT,
+    refunded_by     INTEGER,
+    idempotency_key TEXT UNIQUE,
+    created_at      TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_shop_purchases_player ON shop_purchases(player_id, status);
+CREATE INDEX IF NOT EXISTS ix_shop_purchases_item   ON shop_purchases(shop_item_id);
+
+CREATE TABLE IF NOT EXISTS player_effects (
+    id           INTEGER PRIMARY KEY,
+    player_id    INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    purchase_id  INTEGER REFERENCES shop_purchases(id) ON DELETE CASCADE,
+    effect_kind  TEXT    NOT NULL,
+    effect_value TEXT,
+    uses_left    INTEGER CHECK (uses_left IS NULL OR uses_left >= 0),
+    expires_at   TEXT,
+    note         TEXT,
+    created_at   TEXT    NOT NULL,
+    consumed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_player_effects_live
+    ON player_effects(player_id, effect_kind) WHERE consumed_at IS NULL;

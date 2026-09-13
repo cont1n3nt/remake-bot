@@ -58,6 +58,9 @@ _AGGREGATES_SQL = f"""
     ledger AS (
         SELECT player_id, COALESCE(SUM(delta),0) AS delta FROM coin_ledger GROUP BY player_id
     ),
+    xp_ledger_totals AS (
+        SELECT player_id, COALESCE(SUM(delta),0) AS delta FROM xp_ledger GROUP BY player_id
+    ),
     referees AS (
         SELECT p.referrer_player_id AS referrer_id, COUNT(*) AS referral_count,
                COALESCE(SUM(COALESCE(dt.m,0)+COALESCE(dt.n,0)),0) AS referee_turnover
@@ -67,6 +70,7 @@ _AGGREGATES_SQL = f"""
     SELECT p.id AS player_id, p.referrer_player_id, p.is_booster,
            COALESCE(dt.m,0) AS m, COALESCE(dt.n,0) AS n,
            COALESCE(l.delta,0) AS ledger_delta,
+           COALESCE(xl.delta,0) AS xp_ledger_delta,
            COALESCE(dt.booster_deals,0) AS booster_deals,
            COALESCE(dt.deals_50m,0) AS deals_50m,
            COALESCE(dt.deals_100m,0) AS deals_100m,
@@ -75,6 +79,7 @@ _AGGREGATES_SQL = f"""
     FROM players p
     LEFT JOIN deal_totals dt ON dt.player_id = p.id
     LEFT JOIN ledger      l  ON l.player_id  = p.id
+    LEFT JOIN xp_ledger_totals xl ON xl.player_id = p.id
     LEFT JOIN referees    r  ON r.referrer_id = p.id
 """  # noqa: S608
 # Aggregates deliberately do NOT filter by date (§V.1): the sheet's own
@@ -103,6 +108,7 @@ class ProgressionRepository:
                 purchase_turnover=row["m"],
                 sale_turnover=row["n"],
                 coin_ledger_delta=row["ledger_delta"],
+                xp_ledger_delta=row["xp_ledger_delta"],
                 referral_count=row["referral_count"],
                 referee_total_turnover=row["referee_turnover"],
                 has_referrer=row["referrer_player_id"] is not None,
