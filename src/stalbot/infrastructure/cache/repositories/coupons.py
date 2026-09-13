@@ -46,9 +46,7 @@ class CouponsRepository:
 
     async def all_active(self) -> Sequence[Coupon]:
         """Return every currently-active coupon, newest first (`/coupons`)."""
-        cursor = await self._conn.execute(
-            "SELECT * FROM coupons WHERE active = 1 ORDER BY id DESC"
-        )
+        cursor = await self._conn.execute("SELECT * FROM coupons WHERE active = 1 ORDER BY id DESC")
         return [_row_to_coupon(row) async for row in cursor]
 
     async def create(
@@ -117,7 +115,8 @@ class CouponsRepository:
         """
         async with transaction(self._conn):
             await self._conn.execute(
-                "UPDATE coupons SET discount_percent = ?, max_uses = ?, expires_at = ? WHERE id = ?",
+                "UPDATE coupons SET discount_percent = ?, max_uses = ?, expires_at = ? "
+                "WHERE id = ?",
                 (
                     str(discount_percent),
                     max_uses,

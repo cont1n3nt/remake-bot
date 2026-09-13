@@ -43,6 +43,7 @@ from stalbot.presentation.cogs.tickets.modals import (
     TicketFormModal,
 )
 from stalbot.presentation.cogs.tickets.order_views import OrderEditorView, OrderSummaryView
+from stalbot.presentation.embeds.deal import DEAL_TYPE_LABEL
 from stalbot.presentation.embeds.factory import EmbedFactory
 from tests.support.fake_clock import FakeClock
 
@@ -703,6 +704,25 @@ async def test_amount_submitted_registers_the_deal_and_confirms() -> None:
     progression.sync.assert_awaited_once()
     interaction.followup.send.assert_awaited_once()
     channel.send.assert_awaited_once()
+
+
+async def test_amount_submitted_answers_with_the_full_add_style_summary() -> None:
+    """заявка 13.09.2026 п.4: the ticket answer is the same summary `/add` gives."""
+    session = _session(game_nick="Scaryyyyy", author_id=42, referrer_nick="OtherNick")
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    interaction = _interaction(channel=_text_channel())
+
+    await cog._on_amount_submitted(interaction, "100 000")
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    description = embed.description or ""
+    assert "Scaryyyyy" in description
+    assert "<@42>" in description
+    assert "1 Coins" in description
+    assert "10 XP" in description
+    assert "OtherNick" in description
+    # SELL_ITEMS is the bot buying from the player.
+    assert DEAL_TYPE_LABEL[DealType.PURCHASE] in description
 
 
 async def test_amount_submitted_tags_the_author_and_asks_for_a_review() -> None:
@@ -1479,7 +1499,7 @@ async def test_amount_submitted_notes_the_rank_markup_for_order_boosts() -> None
     premium = RankLadder().by_key("premium")
     assert premium is not None
     session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
-    cog, _tickets, _screenshots, boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
+    cog, _tickets, _screenshots, _boost_orders, *_ = _cog(tickets=_fake_tickets(get_return=session))
     member = MagicMock(spec=discord.Member)
     member.roles = [MagicMock(id=premium.role_id)]
     guild = MagicMock(spec=discord.Guild)

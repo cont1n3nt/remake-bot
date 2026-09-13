@@ -74,6 +74,7 @@ from stalbot.presentation.cogs.tickets.views import (
     TicketPanelView,
     TicketSummaryView,
 )
+from stalbot.presentation.embeds.deal import deal_summary_lines
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 logger = logging.getLogger(__name__)
@@ -1039,10 +1040,18 @@ class TicketsCog(commands.Cog):
         if isinstance(channel, discord.abc.Messageable):
             await self._progression.sync(sync_nicks, announce_to=channel)
 
-        embed = self._embeds.success(
-            "✅ Сделка зафиксирована",
-            f"Сумма: {format_amount(result.deal.amount)}.{markup_note}",
+        # заявка 13.09.2026 п.4: the same summary `/add` answers with — the
+        # two paths record the identical deal, so they report it identically.
+        lines = deal_summary_lines(
+            result.deal,
+            deal_type=_DEAL_TYPE_OF[session.kind],
+            nick=session.game_nick,
+            discord_id=session.author_id,
+            discord_bound=result.discord_bound,
+            referrer_nick=session.referrer_nick,
+            extra=[line for line in markup_note.split("\n") if line],
         )
+        embed = self._embeds.success("✅ Сделка зафиксирована", "\n".join(lines))
         await interaction.followup.send(embed=embed, ephemeral=True)
         if isinstance(channel, discord.abc.Messageable):
             await channel.send(
@@ -1118,7 +1127,9 @@ def _infer_author_id(channel: discord.TextChannel) -> int:
     return 0
 
 
-_REFERRER_PAIR_ERROR = "Укажите оба поля — и ник, и Discord пригласившего — либо оставьте оба пустыми."
+_REFERRER_PAIR_ERROR = (
+    "Укажите оба поля — и ник, и Discord пригласившего — либо оставьте оба пустыми."
+)
 
 
 def _referrer_pair_incomplete(referrer_nick: str | None, referrer_discord_text: str | None) -> bool:

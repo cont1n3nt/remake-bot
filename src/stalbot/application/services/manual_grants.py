@@ -22,6 +22,7 @@ from stalbot.application.ports.clock import Clock
 from stalbot.application.ports.role_gateway import RoleGateway, RoleSet
 from stalbot.domain.nick import NormalizedNick, normalize_nick
 from stalbot.domain.progression.ranks import RankLadder, RankTier
+from stalbot.domain.progression.referrals import ReferralLadder
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.infrastructure.cache.repositories.progression import ProgressionRepository
 from stalbot.infrastructure.cache.repositories.progression_state import ProgressionStateRepository
@@ -39,6 +40,7 @@ class ManualGrantService:
         *,
         clock: Clock,
         rank_ladder: RankLadder | None = None,
+        referral_ladder: ReferralLadder | None = None,
     ) -> None:
         """Wire the service to its collaborators.
 
@@ -49,6 +51,9 @@ class ManualGrantService:
             roles: Grants/revokes the manually-assigned rank role.
             clock: Time source, tz-aware `GMT3`.
             rank_ladder: Defaults to a fresh `RankLadder()`.
+            referral_ladder: Defaults to a fresh `ReferralLadder()` — only
+                `unlink_discord` needs it, to know which referral roles to
+                strip along with the rank ones.
         """
         self._players = players
         self._progression = progression
@@ -56,6 +61,7 @@ class ManualGrantService:
         self._roles = roles
         self._clock = clock
         self._rank_ladder = rank_ladder or RankLadder()
+        self._referral_ladder = referral_ladder or ReferralLadder()
 
     async def current_referrer(self, nick: str) -> NormalizedNick | None:
         """Return the referrer already on record for `nick`, if any.
@@ -97,6 +103,59 @@ class ManualGrantService:
         now = self._clock.now()
         await self._players.get_or_create(nick_norm, nick, now=now)
         return await self._players.bind_discord(nick_norm, discord_id, force=True, now=now)
+
+    async def unlink_discord(self, nick: str) -> int | None:
+        """Unbind `nick`'s Discord account, stripping the roles that came with it.
+
+        заявка 13.09.2026 п.11 — for when a player's character is banned and
+        the nick has to be re-bound to a different account.
+
+        The role revocation is the part that cannot be skipped.
+        `ProgressionService._sync_one` returns early for a player with no
+        `discord_id`, so once the binding is gone nothing will ever revoke
+        the rank/referral roles again — they would sit on the old account
+        forever. They are taken away here, while the binding still says
+        where to take them from.
+
+        `manual_rank_role` is cleared for the same reason: it is a flag that
+        makes the poller leave the rank ladder alone, and it belongs to the
+        binding that is being removed, not to the nick's next one.
+
+        Args:
+            nick: Game nick to unbind, any casing.
+
+        Returns:
+            The Discord id that was unbound, or `None` if the nick has no
+            player row or was not bound to anything.
+        """
+        nick_norm = normalize_nick(nick)
+        player = await self._players.get_by_nick(nick_norm)
+        if player is None or player.discord_id is None:
+            return None
+        assert player.id is not None  # noqa: S101 - a fetched player always has a persisted id
+
+        discord_id = player.discord_id
+        await self._roles.sync_roles(
+            discord_id,
+            RoleSet(
+                desired=frozenset(),
+                universe=self._rank_ladder.role_ids | self._referral_ladder.role_ids,
+            ),
+        )
+        await self._players.set_discord_id(player.id, None, now=self._clock.now())
+
+        previous = await self._progression_state.get(nick_norm)
+        if previous is not None and previous.manual_rank_role:
+            await self._progression_state.upsert(
+                ProgressionState(
+                    nick=nick_norm,
+                    last_rank=previous.last_rank,
+                    last_referral_role=previous.last_referral_role,
+                    manual_rank_role=False,
+                    announced_at=previous.announced_at,
+                )
+            )
+        return discord_id
 
     async def set_referral(
         self,

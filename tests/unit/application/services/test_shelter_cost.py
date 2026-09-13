@@ -38,6 +38,10 @@ async def _build_chain(
 ) -> tuple[ShelterRepository, dict[str, int]]:
     """`Мякоть` (my_kopeks=1000) -> `Настойка` (1 Мякоть) -> `Эликсир` (1 Настойка)."""
     shelter = ShelterRepository(connection)
+    # `recipes.profession_key` is a real FK into `professions`, which no
+    # migration seeds — `scripts/import_shelter.py` does. Without this the
+    # inserts below fail on the foreign key, not on anything under test.
+    await shelter.set_professions({"cooking": ("Кулинария", 1)})
     item_ids = await shelter.insert_items(
         [
             _item("мякоть", my_kopeks=1000),
@@ -86,7 +90,7 @@ async def test_precost_ripples_through_every_transitive_consumer(
     shelter, item_ids = await _build_chain(connection)
     service = ShelterCostService(shelter)
 
-    diffs = await service.precost(item_ids["мякоть"], 3000)
+    diffs = await service.precost({item_ids["мякоть"]: 3000})
 
     affected = {diff.item_id: diff for diff in diffs}
     assert affected[item_ids["мякоть"]].before_kopeks == 1000
@@ -106,7 +110,7 @@ async def test_precost_omits_items_whose_cost_does_not_change(
     )
     service = ShelterCostService(shelter)
 
-    diffs = await service.precost(item_ids["мякоть"], 3000)
+    diffs = await service.precost({item_ids["мякоть"]: 3000})
 
     assert {diff.item_id for diff in diffs} == {item_ids["мякоть"]}
 
@@ -117,7 +121,7 @@ async def test_precost_at_the_same_price_reports_no_changes(
     shelter, item_ids = await _build_chain(connection)
     service = ShelterCostService(shelter)
 
-    diffs = await service.precost(item_ids["мякоть"], 1000)
+    diffs = await service.precost({item_ids["мякоть"]: 1000})
 
     assert diffs == []
 
@@ -127,4 +131,20 @@ async def test_precost_rejects_an_unknown_item(connection: aiosqlite.Connection)
     service = ShelterCostService(shelter)
 
     with pytest.raises(ItemNotFoundError):
-        await service.precost(999, 1000)
+        await service.precost({999: 1000})
+
+
+async def test_precost_applies_every_override_in_one_run(
+    connection: aiosqlite.Connection,
+) -> None:
+    """заявка 13.09.2026 п.12: several prices move together, one preview."""
+    shelter, item_ids = await _build_chain(connection)
+    service = ShelterCostService(shelter)
+
+    diffs = await service.precost({item_ids["мякоть"]: 3000, item_ids["настойка"]: 500})
+
+    by_id = {diff.item_id: diff for diff in diffs}
+    # `настойка` is pinned outright, so it no longer follows `мякоть`...
+    assert by_id[item_ids["настойка"]].after_kopeks == 500
+    # ...and `эликсир`, crafted from it, follows the pinned price, not 3000.
+    assert by_id[item_ids["эликсир"]].after_kopeks == 500

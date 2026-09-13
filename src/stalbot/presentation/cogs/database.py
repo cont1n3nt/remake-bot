@@ -61,9 +61,7 @@ class DatabaseCog(commands.Cog):
         поиск="Фильтр по нику (часть) или Discord (@упоминание/ID) — необязательно"
     )
     @admin_only()
-    async def database(
-        self, interaction: discord.Interaction, поиск: str | None = None
-    ) -> None:
+    async def database(self, interaction: discord.Interaction, поиск: str | None = None) -> None:
         """Handle `/database`: page through every player, optionally filtered by nick/Discord."""
         await interaction.response.defer(ephemeral=True)
         players = await self._players.all()
@@ -110,9 +108,7 @@ class DatabaseCog(commands.Cog):
             pages.append(enforce_limits(embed))
         return pages
 
-    def _format_player(
-        self, player: Player, progression: PlayerProgressionRecord | None
-    ) -> str:
+    def _format_player(self, player: Player, progression: PlayerProgressionRecord | None) -> str:
         lines = [
             f"💬 Discord: {f'<@{player.discord_id}>' if player.discord_id else 'не привязан'}",
             f"🚀 Буст сервера: {'да' if player.is_booster else 'нет'}",
@@ -134,7 +130,10 @@ class DatabaseCog(commands.Cog):
                 lines.append(f"🏅 Ранг: {rank.label}")
             if referral_role is not None:
                 lines.append(f"🤝 Реф-роль: {referral_role.label}")
-            lines.append(f"👥 Приглашено: {progression.referral_count}")
+            # заявка 13.09.2026 п.8: same "omit, don't show a zero" rule the
+            # turnovers below already follow, and `/profile` now follows too.
+            if progression.referral_count:
+                lines.append(f"👥 Приглашено: {progression.referral_count}")
             if progression.purchase_turnover:
                 lines.append(f"📤 Оборот продаж: {format_amount(progression.purchase_turnover)}")
             if progression.sale_turnover:

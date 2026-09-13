@@ -229,9 +229,7 @@ async def test_temp_price_rejects_an_unknown_item() -> None:
     items_mock = MagicMock()
     items_mock.get_by_id = AsyncMock(return_value=None)
     items_mock.all = AsyncMock(return_value=[])
-    cog = PricingCog(
-        MagicMock(), items_mock, EmbedFactory(), MagicMock(), _fake_temp_prices()
-    )
+    cog = PricingCog(MagicMock(), items_mock, EmbedFactory(), MagicMock(), _fake_temp_prices())
     interaction = _interaction()
 
     callback: Any = PricingCog.temp_price.callback

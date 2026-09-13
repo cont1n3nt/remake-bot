@@ -109,10 +109,13 @@ class BoostOrderService:
     async def list_available_items(self) -> Sequence[CatalogItem]:
         """Return every sellable catalog item, for the "add boosts" picker.
 
-        Both categories — a boost order isn't boosts-only, the same picker
-        is how resources get ordered through this ticket too. "Sellable"
-        means `price_sell` is set; an item with no sell price can't be
-        priced into an order line at all.
+        "Sellable" means `price_sell` is set; an item with no sell price
+        can't be priced into an order line at all. In practice that is the
+        boosts: `category` is a deal side rather than a taxonomy (§I.5),
+        and `catalog_items`' own CHECK forbids a `resource` a `price_sell`
+        — so anything meant to be *sold* to a player is cataloged as a
+        boost, whatever it is in the game. No category branch is needed
+        here, and none is wanted: the filter is the price, not the label.
 
         Grouped by `CATALOG_SECTION_ORDER` (заявка 21.08.2026 п.2) — same
         section order the boost posters use — then by name, instead of raw
@@ -277,13 +280,14 @@ class BoostOrderService:
     async def compute_order_total(self, channel_id: int) -> Decimal:
         """Sum every line's `quantity * price_sell`, read fresh from the catalog.
 
-        Always `price_sell`, resources included — a boost-order ticket is
+        Always `price_sell`, never `price_buy` — a boost-order ticket is
         the bot *selling to* the player (opposite direction from the
         скупка calculator's `compute_total`), the same pricing
-        `order_card.py`'s own displayed total already uses. Kept as its own
-        method rather than branching `compute_total` on the caller, since
-        the two calculators price resources in opposite directions and a
-        shared method could not serve both without a flag.
+        `order_card.py`'s own displayed total already uses. A line whose
+        item has no sell price contributes nothing; by the CHECK in §I.5
+        that is every `resource`, which is why this can't just be
+        `compute_total` with a flag — that one prices a resource at
+        `price_buy` and would charge the player for it.
 
         Args:
             channel_id: The order-boosts ticket channel.

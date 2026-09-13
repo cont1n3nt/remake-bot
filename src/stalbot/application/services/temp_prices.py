@@ -15,7 +15,7 @@ from stalbot.domain.entities.item_price_history import ItemPriceHistoryEntry
 from stalbot.domain.entities.temp_price import TempPrice
 from stalbot.domain.enums import PriceChangeSource, PriceField
 from stalbot.domain.errors import ItemNotFoundError
-from stalbot.domain.money import to_storage
+from stalbot.domain.money import Rub, to_storage
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
 from stalbot.infrastructure.cache.repositories.item_price_history import ItemPriceHistoryRepository
 from stalbot.infrastructure.cache.repositories.temp_prices import TempPricesRepository
@@ -115,7 +115,7 @@ class TempPriceService:
         self,
         item_id: int,
         field: PriceField,
-        new_price: int | None,
+        new_price: Rub | None,
         *,
         changed_by: int | None,
         now: datetime,

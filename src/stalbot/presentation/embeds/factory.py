@@ -10,7 +10,7 @@ from typing import Protocol
 
 import discord
 
-from stalbot.application.dto.audit_event import AuditEvent
+from stalbot.application.dto.audit_event import AuditActor, AuditEvent
 from stalbot.domain.clock import SystemClock
 from stalbot.domain.enums import TicketKind
 from stalbot.presentation.embeds.palette import (
@@ -104,16 +104,22 @@ class EmbedFactory:
         return self._build(Color.TICKET, title or TICKET_TITLES[kind], description, kind="Заявки")
 
     def audit(self, event: AuditEvent) -> discord.Embed:
-        """Build the one audit-log embed format (`#9B59B6`, PLAN.md §5.4)."""
+        """Build the one audit-log embed format (`#9B59B6`, PLAN.md §5.4).
+
+        A `BOT` event (заявка 13.09.2026 п.1) keeps the same fields and
+        color but relabels them: the person named is the player the bot
+        acted *on*, not someone who ran a command.
+        """
+        by_bot = event.actor is AuditActor.BOT
         embed = self._build(
             Color.AUDIT,
-            f"{Emoji.AUDIT} Использование команды",
+            f"{Emoji.BOT} Действие бота" if by_bot else f"{Emoji.AUDIT} Использование команды",
             None,
             now=event.occurred_at,
             kind="Логи",
         )
         embed.add_field(
-            name=f"{Emoji.USER} Пользователь",
+            name=f"{Emoji.USER} {'Игрок' if by_bot else 'Пользователь'}",
             value=_truncate(
                 f"<@{event.user_id}> ({event.user_display}, ID: {event.user_id})",
                 _FIELD_VALUE_MAX,
@@ -126,12 +132,12 @@ class EmbedFactory:
             inline=True,
         )
         embed.add_field(
-            name=f"{Emoji.COMMAND} Команда",
+            name=f"{Emoji.BOT} Действие" if by_bot else f"{Emoji.COMMAND} Команда",
             value=_truncate(event.command, _FIELD_VALUE_MAX),
             inline=True,
         )
         embed.add_field(
-            name=f"{Emoji.ARGUMENTS} Аргументы",
+            name=f"{Emoji.ARGUMENTS} {'Подробности' if by_bot else 'Аргументы'}",
             value=_truncate(event.arguments or "—", _FIELD_VALUE_MAX),
             inline=False,
         )

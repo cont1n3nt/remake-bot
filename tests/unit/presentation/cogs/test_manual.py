@@ -35,6 +35,7 @@ def _cog(
     rank_result: SetRankResult | None = None,
     current_discord_id: int | None = None,
     link_bound: bool = True,
+    unlink_result: int | None = 999,
 ) -> tuple[ManualCog, MagicMock, MagicMock]:
     manual_grants = MagicMock()
     manual_grants.current_referrer = AsyncMock(return_value=current_referrer)
@@ -44,6 +45,7 @@ def _cog(
     )
     manual_grants.current_discord_id = AsyncMock(return_value=current_discord_id)
     manual_grants.link_discord = AsyncMock(return_value=link_bound)
+    manual_grants.unlink_discord = AsyncMock(return_value=unlink_result)
     progression = MagicMock()
     progression.sync = AsyncMock(return_value=[])
     cog = ManualCog(manual_grants, progression, EmbedFactory())
@@ -206,7 +208,12 @@ async def test_link_discord_binds_when_unbound() -> None:
 
 
 async def test_link_discord_is_a_no_op_when_already_bound_to_the_same_account() -> None:
-    cog, manual_grants, _progression = _cog(current_discord_id=999, link_bound=True)
+    # `link_bound=False` is what the real service returns here: `bind_discord`
+    # reports whether a write actually happened, and re-binding a nick to the
+    # account it is already on writes nothing. Passing `True` (as this test
+    # used to) described a state the service cannot produce, and asserted the
+    # "Без изменений" branch the cog only takes on `False`.
+    cog, manual_grants, _progression = _cog(current_discord_id=999, link_bound=False)
     interaction = _interaction()
 
     await _call_link_discord(cog, interaction, discord_member=_member(999))
@@ -269,3 +276,49 @@ async def test_set_rank_toggles_off_when_member_already_has_the_role() -> None:
     assert kwargs["revoke"] is True
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "снят" in (embed.description or "")
+
+
+# -- /unlink_discord (заявка 13.09.2026 п.11) ------------------------------
+
+
+async def _call_unlink_discord(
+    cog: ManualCog, interaction: MagicMock, *, ник: str = "Scaryyyyy"
+) -> None:
+    callback: Any = ManualCog.unlink_discord.callback
+    await callback(cog, interaction, ник)
+
+
+async def test_unlink_discord_unbinds_after_confirmation() -> None:
+    cog, manual_grants, _progression = _cog(current_discord_id=999, unlink_result=999)
+    interaction = _interaction()
+    cog._confirm_unlink = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    await _call_unlink_discord(cog, interaction)
+
+    manual_grants.unlink_discord.assert_awaited_once_with("Scaryyyyy")
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "отвязан" in (embed.title or "").casefold()
+    assert "<@999>" in (embed.description or "")
+
+
+async def test_unlink_discord_aborts_when_not_confirmed() -> None:
+    cog, manual_grants, _progression = _cog(current_discord_id=999)
+    interaction = _interaction()
+    cog._confirm_unlink = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+    await _call_unlink_discord(cog, interaction)
+
+    manual_grants.unlink_discord.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Отменено" in (embed.title or "")
+
+
+async def test_unlink_discord_says_so_when_nothing_is_bound() -> None:
+    cog, manual_grants, _progression = _cog(current_discord_id=None)
+    interaction = _interaction()
+
+    await _call_unlink_discord(cog, interaction)
+
+    manual_grants.unlink_discord.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Нечего отвязывать" in (embed.title or "")

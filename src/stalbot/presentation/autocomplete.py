@@ -54,7 +54,9 @@ def item_choices(
     return choices
 
 
-def shelter_item_choices(items: Sequence[ShelterItem], query: str) -> list[app_commands.Choice[int]]:
+def shelter_item_choices(
+    items: Sequence[ShelterItem], query: str
+) -> list[app_commands.Choice[int]]:
     """Rank shelter items by *query*, for `/cost` and `/precost` (§V.2).
 
     Same fuzzy-match ranking as `item_choices`, but over `shelter_items` —

@@ -13,6 +13,7 @@ from stalbot.application.dto.price_change import PriceChange
 from stalbot.application.services.audit import AuditService
 from stalbot.config.settings import Settings
 from stalbot.domain.enums import ItemCategory, PriceField
+from stalbot.domain.money import Rub
 from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.logging.trace import current_trace_id
 from stalbot.presentation.bot import StalbotBot, _channel_display, _format_arguments
@@ -302,8 +303,8 @@ async def test_run_temp_price_revert_logs_and_announces_reverted_changes(
         item_name="Аптечка",
         category=ItemCategory.RESOURCE,
         field=PriceField.BUY,
-        old_price=300_000,
-        new_price=250_000,
+        old_price=Rub(300_000),
+        new_price=Rub(250_000),
     )
     temp_price_service = MagicMock()
     temp_price_service.revert_due = AsyncMock(return_value=[change])

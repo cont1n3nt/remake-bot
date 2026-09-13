@@ -9,10 +9,12 @@ inserts its fixture items and reads back the assigned ids rather than
 hardcoding them.
 """
 
+import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import aiosqlite
+import pytest
 
 from stalbot.application.dto.boost_order_line import BoostOrderLine
 from stalbot.application.services.boost_orders import (
@@ -83,23 +85,42 @@ def _resource_with_price(name: str, price_buy: Decimal) -> CatalogItem:
     return _draft(name, price_buy=price_buy, category=ItemCategory.RESOURCE)
 
 
-def _resource_for_sale(name: str, price_sell: Decimal) -> CatalogItem:
-    return _draft(name, price_sell=price_sell, category=ItemCategory.RESOURCE)
-
-
-async def test_list_available_items_includes_both_categories_with_a_sell_price(
+async def test_list_available_items_is_everything_with_a_sell_price(
     connection: aiosqlite.Connection,
 ) -> None:
-    """The order picker isn't boosts-only — the seller also orders resources through it."""
-    service, (boost_a, boost_b, no_sell_price, sellable_resource) = await _service_with_items(
-        connection,
-        [_boost_a(), _boost_b(), _resource(), _resource_for_sale("Аптечка", Decimal(50000))],
+    """The picker's rule is "has a sell price", which in practice means the boosts.
+
+    `category` is a deal side, not a taxonomy (sqlite_migration.md §I.5):
+    `resource` is what the bot buys and `catalog_items`' own CHECK forbids
+    it a `price_sell` at all — see
+    `test_a_resource_cannot_carry_a_sell_price` below. So a resource is
+    never orderable, and the filter needs no category branch of its own.
+    """
+    service, (boost_a, boost_b, resource) = await _service_with_items(
+        connection, [_boost_a(), _boost_b(), _resource()]
     )
 
     available = await service.list_available_items()
 
-    assert {item.id for item in available} == {boost_a.id, boost_b.id, sellable_resource.id}
-    assert no_sell_price.id not in {item.id for item in available}
+    assert {item.id for item in available} == {boost_a.id, boost_b.id}
+    assert resource.id not in {item.id for item in available}
+
+
+async def test_a_resource_cannot_carry_a_sell_price(
+    connection: aiosqlite.Connection,
+) -> None:
+    """The CHECK that makes "orderable resource" impossible, pinned explicitly.
+
+    Two tests used to assert the opposite and could never have passed
+    against the real schema. Asserting the constraint here keeps the
+    contradiction from creeping back into either side.
+    """
+    items_repo = CatalogItemsRepository(connection)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        await items_repo.insert(
+            _draft("Аптечка", price_sell=Decimal(50000), category=ItemCategory.RESOURCE)
+        )
 
 
 async def test_list_available_items_groups_by_the_canonical_section_order(
@@ -109,16 +130,12 @@ async def test_list_available_items_groups_by_the_canonical_section_order(
     grenade = _draft(
         "Граната", price_sell=Decimal(1), category=ItemCategory.BOOST, section="Пиротехника"
     )
-    soup = _draft(
-        "Суп", price_sell=Decimal(1), category=ItemCategory.BOOST, section="Кулинария"
-    )
+    soup = _draft("Суп", price_sell=Decimal(1), category=ItemCategory.BOOST, section="Кулинария")
     unmapped = _draft("Неизвестное", price_sell=Decimal(1), category=ItemCategory.BOOST)
     booze = _draft(
         "Самогон", price_sell=Decimal(1), category=ItemCategory.BOOST, section="Самогоноварение"
     )
-    service, _persisted = await _service_with_items(
-        connection, [grenade, soup, unmapped, booze]
-    )
+    service, _persisted = await _service_with_items(connection, [grenade, soup, unmapped, booze])
 
     available = await service.list_available_items()
 
@@ -399,24 +416,18 @@ async def test_compute_total_uses_price_buy_for_resources(
     assert total == Decimal(500) * 4
 
 
-async def test_compute_order_total_always_uses_price_sell_even_for_resources(
+async def test_compute_order_total_prices_every_line_at_price_sell(
     connection: aiosqlite.Connection,
 ) -> None:
     """The opposite direction from `compute_total`: a boost order sells *to* the player."""
-    resource = _resource_for_sale("Аптечка", Decimal(500))
-    boost = _boost_a()
-    service, (resource_item, boost_item) = await _service_with_items(
-        connection, [resource, boost]
-    )
-    assert resource_item.id is not None and boost_item.id is not None
-    await service.apply_page_selection(
-        111, [resource_item, boost_item], frozenset({resource_item.id, boost_item.id})
-    )
-    await service.set_quantity(111, resource_item.id, 4)
+    service, (boost_a, boost_b) = await _service_with_items(connection, [_boost_a(), _boost_b()])
+    assert boost_a.id is not None and boost_b.id is not None
+    await service.apply_page_selection(111, [boost_a, boost_b], frozenset({boost_a.id, boost_b.id}))
+    await service.set_quantity(111, boost_b.id, 4)
 
     total = await service.compute_order_total(111)
 
-    assert total == Decimal(500) * 4 + Decimal(300000)
+    assert total == Decimal(300000) + Decimal(150000) * 4
 
 
 async def test_compute_order_total_skips_a_resource_with_no_sell_price(

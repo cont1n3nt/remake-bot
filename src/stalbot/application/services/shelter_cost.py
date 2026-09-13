@@ -4,9 +4,10 @@ Both commands are read-only previews over the same `domain.shelter.cost`
 engine `scripts/recompute_shelter_costs.py` already uses to materialize
 `shelter_cost` — this service never writes anything back to the database,
 it only calls `compute_costs` against the live data (`/cost`) or against a
-hypothetical one-item price override (`/precost`).
+set of hypothetical price overrides (`/precost`).
 """
 
+from collections.abc import Mapping
 from dataclasses import replace
 
 from stalbot.application.dto.precost_diff import PrecostDiff
@@ -37,31 +38,38 @@ class ShelterCostService:
         recipes = await self._shelter.load_recipe_specs_for_current_levels()
         return compute_costs(items, recipes)
 
-    async def precost(self, item_id: int, new_my_kopeks: int) -> list[PrecostDiff]:
-        """Preview which items' cost would change if *item_id* cost *new_my_kopeks*.
+    async def precost(self, overrides: Mapping[int, int]) -> list[PrecostDiff]:
+        """Preview which items' cost would change at the given hypothetical prices.
 
         Nothing is written — this computes the full cost graph twice (once
-        at the current stored price, once with `item_id.my_kopeks`
-        overridden) and returns every item whose resolved cost differs
-        between the two runs. A plain diff of two full `compute_costs` runs
-        already covers every downstream consumer, direct or transitive, so
-        no separate "what uses this ingredient" index is needed.
+        at the current stored prices, once with every `my_kopeks` in
+        *overrides* replaced) and returns every item whose resolved cost
+        differs between the two runs. A plain diff of two full
+        `compute_costs` runs already covers every downstream consumer,
+        direct or transitive, so no separate "what uses this ingredient"
+        index is needed — and that is exactly why several overrides cost no
+        more than one (заявка 13.09.2026 п.12: preview a whole price move,
+        not one ingredient at a time). Two ingredients of the same craft
+        moving together can even cancel out, which one-at-a-time previews
+        can't show.
 
         Args:
-            item_id: The `shelter_items.id` whose price is being previewed.
-            new_my_kopeks: The hypothetical `my_kopeks` value.
+            overrides: `shelter_items.id -> hypothetical my_kopeks`, at
+                least one entry.
 
         Raises:
-            ItemNotFoundError: `item_id` is not a known shelter item.
+            ItemNotFoundError: An id in *overrides* is not a known shelter item.
         """
         items = await self._shelter.load_item_specs()
-        if item_id not in items:
-            raise ItemNotFoundError(str(item_id))
+        for item_id in overrides:
+            if item_id not in items:
+                raise ItemNotFoundError(str(item_id))
         recipes = await self._shelter.load_recipe_specs_for_current_levels()
 
         baseline = compute_costs(items, recipes)
         hypothetical_items = dict(items)
-        hypothetical_items[item_id] = replace(items[item_id], my_kopeks=new_my_kopeks)
+        for item_id, new_my_kopeks in overrides.items():
+            hypothetical_items[item_id] = replace(items[item_id], my_kopeks=new_my_kopeks)
         hypothetical = compute_costs(hypothetical_items, recipes)
 
         names = {item.id: item.name for item in await self._shelter.all_items()}

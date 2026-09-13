@@ -9,11 +9,13 @@ item present in the layout but renamed/removed from `catalog_items`
 since extraction must be silently skipped, not crash the build.
 """
 
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 import aiosqlite
 
-from stalbot.application.services.posters import PosterService
+from stalbot.application.services.posters import PosterService, _assets_dir, _load_layout
 from stalbot.domain.entities.catalog_item import CatalogItem
 from stalbot.domain.enums import ItemCategory, PosterKind
 from stalbot.domain.money import Rub
@@ -21,6 +23,11 @@ from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItems
 from stalbot.infrastructure.cache.repositories.items import normalize_item_name
 
 _NOW = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+
+#: Mirrors `scripts/extract_poster_assets.py` — the characters it replaces
+#: in a filename, and the `_2`/`_3` suffix it appends on a name collision.
+_UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*]')
+_ICON_VARIANT_SUFFIX = re.compile(r"_\d+$")
 
 
 async def _seed(
@@ -144,3 +151,36 @@ async def test_build_ignores_soft_deleted_items(connection: aiosqlite.Connection
 
     all_names = [slot.name for section in spec.sections for slot in section.slots]
     assert "Уха" not in all_names
+
+
+def test_every_layout_icon_belongs_to_its_own_item() -> None:
+    """No slot may point at another item's picture (owner bug report: Морфин/лимонник).
+
+    The extraction script (`scripts/extract_poster_assets.py`) dedupes
+    icons by content hash across sheets, so two items whose anchors
+    happened to yield identical bytes end up sharing one filename — which
+    is how the «Скуп ваших бустов» sheet's Морфин came to render мякоть
+    лимонника's picture. A filename is the only evidence the layout keeps
+    of which item an icon was extracted for, so it has to match.
+    """
+    mismatched: list[str] = []
+    for kind in PosterKind:
+        layout = _load_layout(kind)
+        for section in layout["sections"]:
+            for entry in section["items"]:
+                stem = _ICON_VARIANT_SUFFIX.sub("", Path(entry["icon"]).stem)
+                if stem != _UNSAFE_FILENAME_CHARS.sub("_", entry["name_norm"]):
+                    mismatched.append(f"{kind.value}: {entry['name']} -> {entry['icon']}")
+    assert not mismatched
+
+
+def test_every_layout_icon_file_exists() -> None:
+    """A slot pointing at a missing file renders as a blank frame, silently."""
+    missing: list[str] = []
+    for kind in PosterKind:
+        layout = _load_layout(kind)
+        for section in layout["sections"]:
+            for entry in section["items"]:
+                if not (_assets_dir() / entry["icon"]).is_file():
+                    missing.append(f"{kind.value}: {entry['name']} -> {entry['icon']}")
+    assert not missing

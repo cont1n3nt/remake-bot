@@ -152,9 +152,7 @@ class PricingCog(commands.Cog):
     ) -> list[app_commands.Choice[int]]:
         return item_choices(await self._items.all(), current)
 
-    @app_commands.command(
-        name="temp_prices", description="🛡️ [Админ] ⏳ Список всех временных цен"
-    )
+    @app_commands.command(name="temp_prices", description="🛡️ [Админ] ⏳ Список всех временных цен")
     @admin_only()
     async def temp_prices(self, interaction: discord.Interaction) -> None:
         """Handle `/temp_prices`: list every active temp-price override."""
@@ -172,9 +170,7 @@ class PricingCog(commands.Cog):
             item_name = item.name if item is not None else f"#{temp.item_id}"
             current_price = None
             if item is not None:
-                current_price = (
-                    item.price_buy if temp.field is PriceField.BUY else item.price_sell
-                )
+                current_price = item.price_buy if temp.field is PriceField.BUY else item.price_sell
             original = (
                 format_amount(temp.original_price) if temp.original_price is not None else "—"
             )

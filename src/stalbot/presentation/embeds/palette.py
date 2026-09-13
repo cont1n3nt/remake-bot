@@ -38,6 +38,7 @@ class Emoji:
     ERROR: Final = "❌"
     TICKET: Final = "🎫"
     AUDIT: Final = "🧾"
+    BOT: Final = "🤖"
     USER: Final = "👤"
     CHANNEL: Final = "📍"
     COMMAND: Final = "⌨️"

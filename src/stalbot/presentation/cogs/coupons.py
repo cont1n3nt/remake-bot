@@ -108,10 +108,7 @@ class _CouponsView(AuthorLockedView):
             placeholder="Выберите купон",
             options=[
                 discord.SelectOption(
-                    label=(
-                        f"{c.code} — {c.discount_percent}% "
-                        f"({_KIND_LABEL[c.kind].split()[0]})"
-                    ),
+                    label=(f"{c.code} — {c.discount_percent}% ({_KIND_LABEL[c.kind].split()[0]})"),
                     value=c.code,
                 )
                 for c in self._coupons.values()
@@ -185,9 +182,7 @@ class CouponsCog(commands.Cog):
             app_commands.Choice(
                 name=_KIND_LABEL[CouponKind.DISCOUNT], value=CouponKind.DISCOUNT.value
             ),
-            app_commands.Choice(
-                name=_KIND_LABEL[CouponKind.MARKUP], value=CouponKind.MARKUP.value
-            ),
+            app_commands.Choice(name=_KIND_LABEL[CouponKind.MARKUP], value=CouponKind.MARKUP.value),
         ]
     )
     @admin_only()
@@ -248,9 +243,7 @@ class CouponsCog(commands.Cog):
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(
-        name="coupon_delete", description="🛡️ [Админ] 🗑️ Удалить промокод навсегда"
-    )
+    @app_commands.command(name="coupon_delete", description="🛡️ [Админ] 🗑️ Удалить промокод навсегда")
     @app_commands.describe(код="Код промокода")
     @admin_only()
     async def coupon_delete(self, interaction: discord.Interaction, код: str) -> None:

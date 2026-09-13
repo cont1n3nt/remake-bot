@@ -99,7 +99,6 @@ class ProfileCog(commands.Cog):
         referral_tier = (
             self._referral_ladder.by_key(view.referral_role_key) if view.referral_role_key else None
         )
-        rank_label = rank_tier.label if rank_tier is not None else "—"
 
         lines: list[str] = []
 
@@ -117,16 +116,17 @@ class ProfileCog(commands.Cog):
             name="🪙 Coins", value=format_amount(view.coins, currency=False), inline=True
         )
         embed.add_field(name="⚡ XP", value=format_amount(view.xp, currency=False), inline=True)
-        embed.add_field(name="🏅 Ранг", value=rank_label, inline=True)
-        # заявка 21.08.2026 п.10: an empty field is omitted entirely, not
-        # shown as "—" — реферальная роль, Discord и обороты все follow this.
+        # заявка 21.08.2026 п.10, extended 13.09.2026 п.8: an empty field is
+        # omitted entirely, not shown as "—" or "0" — ранг, реферальная
+        # роль, приглашённые, Discord и обороты все follow this.
+        if rank_tier is not None:
+            embed.add_field(name="🏅 Ранг", value=rank_tier.label, inline=True)
         if referral_tier is not None:
             embed.add_field(name="🤝 Реф-роль", value=referral_tier.label, inline=True)
-        embed.add_field(name="👥 Приглашено", value=str(view.referrals_count), inline=True)
+        if view.referrals_count:
+            embed.add_field(name="👥 Приглашено", value=str(view.referrals_count), inline=True)
         if view.player.discord_id is not None:
-            embed.add_field(
-                name="💬 Discord", value=f"<@{view.player.discord_id}>", inline=True
-            )
+            embed.add_field(name="💬 Discord", value=f"<@{view.player.discord_id}>", inline=True)
         if view.purchase_turnover:
             embed.add_field(
                 name="📤 Оборот продаж",

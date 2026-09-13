@@ -97,9 +97,7 @@ async def main(argv: list[str] | None = None) -> None:
     updated, already_set = await run(cache_db)
     await cache_db.close()
 
-    logger.info(
-        "Секции проставлены: %d обновлено, %d уже совпадали", updated, already_set
-    )
+    logger.info("Секции проставлены: %d обновлено, %d уже совпадали", updated, already_set)
 
 
 if __name__ == "__main__":

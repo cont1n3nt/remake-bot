@@ -47,18 +47,20 @@ _SELL_ITEMS_CATEGORY = next(
 def _build_cog(sessions: TicketSessionsRepository) -> tuple[TicketsCog, TicketService]:
     """Build a full `TicketsCog` graph around a real ticket-sessions repository.
 
-    The other four collaborators (`screenshots`/`boost_orders`/
-    `transactions`/`progression`) play no part in the confirm-button path
-    exercised here, so they stay mocked — only the persistence path this
-    test is about needs to be real.
+    The other six collaborators (`screenshots`/`boost_orders`/
+    `transactions`/`progression`/`players`/`coupons`) play no part in the
+    confirm-button path exercised here, so they stay mocked — only the
+    persistence path this test is about needs to be real.
     """
     tickets = TicketService(sessions, clock=FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC)))
     cog = TicketsCog(
         tickets,
-        MagicMock(),
-        MagicMock(),
-        MagicMock(),
-        MagicMock(),
+        MagicMock(),  # screenshots
+        MagicMock(),  # boost_orders
+        MagicMock(),  # transactions
+        MagicMock(),  # progression
+        MagicMock(),  # players
+        MagicMock(),  # coupons
         EmbedFactory(),
         MagicMock(log_channel_id=555),
     )

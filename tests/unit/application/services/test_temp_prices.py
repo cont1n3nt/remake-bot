@@ -103,7 +103,7 @@ async def test_revert_due_is_a_no_op_before_expiry(connection: aiosqlite.Connect
 async def test_reapplying_before_expiry_keeps_the_true_original(
     connection: aiosqlite.Connection,
 ) -> None:
-    """A second `/temp_price` before the first reverts must not adopt the temp value as 'original'."""
+    """A second `/temp_price` before the first reverts keeps the *real* original price."""
     setter, items = await _service(connection, now=_NOW)
     item = await items.insert(_item())
     assert item.id is not None
@@ -163,9 +163,7 @@ async def test_list_active_returns_every_override(connection: aiosqlite.Connecti
     await service.set_temp_price(
         resource.id, PriceField.BUY, Decimal(500_000), _UNTIL, changed_by=42
     )
-    await service.set_temp_price(
-        boost.id, PriceField.SELL, Decimal(400_000), _UNTIL, changed_by=42
-    )
+    await service.set_temp_price(boost.id, PriceField.SELL, Decimal(400_000), _UNTIL, changed_by=42)
 
     active = await service.list_active()
 

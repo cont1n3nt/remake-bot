@@ -15,6 +15,7 @@ from stalbot.application.ports.role_gateway import RoleDiff, RoleGateway, RoleSe
 from stalbot.application.services.manual_grants import ManualGrantService
 from stalbot.domain.nick import NormalizedNick
 from stalbot.domain.progression.ranks import RankLadder
+from stalbot.domain.progression.referrals import ReferralLadder
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.infrastructure.cache.repositories.progression import ProgressionRepository
 from stalbot.infrastructure.cache.repositories.progression_state import ProgressionStateRepository
@@ -228,3 +229,86 @@ async def test_set_rank_toggle_off_revokes_and_clears_the_flag(
     # Tracked rank/referral-role keys survive the toggle.
     assert stored.last_rank == "premium"
     assert stored.last_referral_role == "scout"
+
+
+# -- unlink_discord (заявка 13.09.2026 п.11) -------------------------------
+
+
+async def test_unlink_discord_clears_the_binding_and_returns_the_old_id(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, _state = _service(connection, roles=_fake_roles())
+    await service.link_discord("Scaryyyyy", 111)
+
+    unbound = await service.unlink_discord("Scaryyyyy")
+
+    assert unbound == 111
+    player = await players.get_by_nick(NormalizedNick("scaryyyyy"))
+    assert player is not None
+    assert player.discord_id is None
+
+
+async def test_unlink_discord_strips_every_rank_and_referral_role(
+    connection: aiosqlite.Connection,
+) -> None:
+    """The whole point: nothing revokes these once the binding is gone."""
+    roles = _fake_roles()
+    service, _players, _state = _service(connection, roles=roles)
+    await service.link_discord("Scaryyyyy", 111)
+
+    await service.unlink_discord("Scaryyyyy")
+
+    roles.sync_roles.assert_awaited_once()
+    discord_id, role_set = roles.sync_roles.await_args.args
+    assert discord_id == 111
+    assert role_set == RoleSet(
+        desired=frozenset(),
+        universe=RankLadder().role_ids | ReferralLadder().role_ids,
+    )
+
+
+async def test_unlink_discord_clears_the_manual_rank_flag(
+    connection: aiosqlite.Connection,
+) -> None:
+    """A manual rank belongs to the binding being removed, not to the next one."""
+    service, _players, state = _service(connection, roles=_fake_roles())
+    await service.link_discord("Scaryyyyy", 111)
+    await state.upsert(
+        ProgressionState(
+            nick=NormalizedNick("scaryyyyy"),
+            last_rank="elite",
+            last_referral_role=None,
+            manual_rank_role=True,
+            announced_at=None,
+        )
+    )
+
+    await service.unlink_discord("Scaryyyyy")
+
+    stored = await state.get(NormalizedNick("scaryyyyy"))
+    assert stored is not None
+    assert stored.manual_rank_role is False
+    assert stored.last_rank == "elite"  # untouched — only the flag is the binding's
+
+
+async def test_unlink_discord_is_a_no_op_for_an_unbound_nick(
+    connection: aiosqlite.Connection,
+) -> None:
+    roles = _fake_roles()
+    service, players, _state = _service(connection, roles=roles)
+    await players.get_or_create(
+        NormalizedNick("scaryyyyy"), "Scaryyyyy", now=datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
+    )
+
+    assert await service.unlink_discord("Scaryyyyy") is None
+    roles.sync_roles.assert_not_called()
+
+
+async def test_unlink_discord_is_a_no_op_for_an_unknown_nick(
+    connection: aiosqlite.Connection,
+) -> None:
+    roles = _fake_roles()
+    service, _players, _state = _service(connection, roles=roles)
+
+    assert await service.unlink_discord("Nobody") is None
+    roles.sync_roles.assert_not_called()

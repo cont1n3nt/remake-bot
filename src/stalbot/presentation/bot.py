@@ -63,7 +63,7 @@ from stalbot.presentation.cogs.posters import PostersCog
 from stalbot.presentation.cogs.pricing import PricingCog
 from stalbot.presentation.cogs.profile import ProfileCog
 from stalbot.presentation.cogs.purchase_calculator import PurchaseCalculatorCog
-from stalbot.presentation.cogs.role_audit import RoleAuditCog
+from stalbot.presentation.cogs.roles import RolesCog
 from stalbot.presentation.cogs.shelter_cost import ShelterCostCog
 from stalbot.presentation.cogs.stats import StatsCog
 from stalbot.presentation.cogs.tag import TagCog
@@ -194,9 +194,7 @@ class StalbotBot(commands.Bot):
         profile_service = ProfileService(players_repo, progression_repo)
         await self.add_cog(ProfileCog(profile_service, self.embed_factory, self.settings))
         await self.add_cog(DatabaseCog(players_repo, progression_repo, self.embed_factory))
-        await self.add_cog(
-            RoleAuditCog(players_repo, self.embed_factory, self.progression_service)
-        )
+        await self.add_cog(RolesCog(self.embed_factory, self.progression_service))
 
         catalog_items_repo = CatalogItemsRepository(connection)
         catalog_service = CatalogService(
@@ -237,7 +235,11 @@ class StalbotBot(commands.Bot):
 
         shelter_repo = ShelterRepository(connection)
         shelter_cost_service = ShelterCostService(shelter_repo)
-        await self.add_cog(ShelterCostCog(shelter_cost_service, shelter_repo, self.embed_factory))
+        await self.add_cog(
+            ShelterCostCog(
+                shelter_cost_service, shelter_repo, catalog_items_repo, self.embed_factory
+            )
+        )
 
         stats_service = StatsService(deals_repo, players_repo)
         await self.add_cog(StatsCog(stats_service, deals_repo, players_repo, self.embed_factory))
@@ -368,9 +370,7 @@ class StalbotBot(commands.Bot):
                 for change in reverted
             ]
             await log_channel.send(
-                embed=self.embed_factory.info(
-                    "⏳ Временные цены сброшены", "\n".join(lines)
-                )
+                embed=self.embed_factory.info("⏳ Временные цены сброшены", "\n".join(lines))
             )
 
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:

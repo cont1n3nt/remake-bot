@@ -187,9 +187,7 @@ async def test_markup_coupon_accepted_on_either_sell_kind(
         "SKUP", CouponKind.MARKUP, Decimal(5), max_uses=None, expires_at=None, created_by=1
     )
 
-    await service.redeem(
-        "SKUP", channel_id=111, discord_id=222, ticket_kind=TicketKind.SELL_ITEMS
-    )
+    await service.redeem("SKUP", channel_id=111, discord_id=222, ticket_kind=TicketKind.SELL_ITEMS)
     coupon = await service.redeem(
         "SKUP", channel_id=112, discord_id=333, ticket_kind=TicketKind.SELL_BOOSTS
     )

@@ -18,13 +18,9 @@ from stalbot.domain.money import evaluate_amount, format_amount
 from stalbot.domain.nick import normalize_nick
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
 from stalbot.presentation.checks import admin_only
+from stalbot.presentation.embeds.deal import DEAL_TYPE_LABEL, deal_summary_lines
 from stalbot.presentation.embeds.factory import EmbedFactory
 from stalbot.presentation.views.confirm import ConfirmView
-
-_DEAL_TYPE_LABEL = {
-    DealType.PURCHASE: "🟢 Покупка (у меня)",
-    DealType.SALE: "🟡 Продажа (мне)",
-}
 
 
 class TransactionsCog(commands.Cog):
@@ -64,9 +60,9 @@ class TransactionsCog(commands.Cog):
     @app_commands.choices(
         тип=[
             app_commands.Choice(
-                name=_DEAL_TYPE_LABEL[DealType.PURCHASE], value=DealType.PURCHASE.value
+                name=DEAL_TYPE_LABEL[DealType.PURCHASE], value=DealType.PURCHASE.value
             ),
-            app_commands.Choice(name=_DEAL_TYPE_LABEL[DealType.SALE], value=DealType.SALE.value),
+            app_commands.Choice(name=DEAL_TYPE_LABEL[DealType.SALE], value=DealType.SALE.value),
         ]
     )
     @app_commands.rename(discord_member="аккаунт")
@@ -168,7 +164,7 @@ class TransactionsCog(commands.Cog):
 
         lines = [
             f"👤 Ник: {nick_display}",
-            f"📌 Тип: {_DEAL_TYPE_LABEL[deleted.deal_type]}",
+            f"📌 Тип: {DEAL_TYPE_LABEL[deleted.deal_type]}",
             f"💰 Сумма: {format_amount(deleted.amount)}",
             f"🪙 Списано: {deleted.coins} Coins • ⚡ {deleted.xp} XP",
             f"🕒 Дата сделки: {format_datetime(deleted.occurred_at)}",
@@ -182,7 +178,7 @@ class TransactionsCog(commands.Cog):
         embed = self._embeds.warning(
             "⚠️ Подтвердите удаление",
             f"Удалить сделку #{deal.id}?\n"
-            f"👤 {nick_display} • {_DEAL_TYPE_LABEL[deal.deal_type]} • "
+            f"👤 {nick_display} • {DEAL_TYPE_LABEL[deal.deal_type]} • "
             f"{format_amount(deal.amount)} • {deal.coins} Coins / {deal.xp} XP\n"
             f"🕒 {format_datetime(deal.occurred_at)}",
         )
@@ -221,19 +217,15 @@ class TransactionsCog(commands.Cog):
         referrer_nick: str | None,
         warnings: list[str],
     ) -> None:
-        lines = [
-            f"📌 Тип: {_DEAL_TYPE_LABEL[deal_type]}",
-            f"👤 Ник: {nick}",
-            f"💬 Discord: {member.mention}",
-            f"💰 Сумма: {format_amount(result.deal.amount)}",
-            f"🪙 Начислено: {result.deal.coins} Coins • ⚡ {result.deal.xp} XP",
-        ]
-        if referrer_nick:
-            lines.append(f"🤝 Реферал: {referrer_nick}")
-        lines.append(f"🕒 Дата: {format_datetime(result.deal.occurred_at)}")
-        if result.discord_bound:
-            lines.append("🔗 Discord ID привязан к нику")
-        lines.extend(warnings)
+        lines = deal_summary_lines(
+            result.deal,
+            deal_type=deal_type,
+            nick=nick,
+            discord_id=member.id,
+            discord_bound=result.discord_bound,
+            referrer_nick=referrer_nick,
+            extra=warnings,
+        )
 
         embed = self._embeds.success("✅ Сделка зафиксирована", "\n".join(lines))
         await interaction.followup.send(embed=embed, ephemeral=True)

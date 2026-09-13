@@ -46,9 +46,7 @@ class ManualCog(commands.Cog):
         ник_пригласившего="Игровой ник пригласившего",
         referrer_discord_member="Discord-аккаунт пригласившего",
     )
-    @app_commands.rename(
-        discord_member="аккаунт", referrer_discord_member="аккаунт_пригласившего"
-    )
+    @app_commands.rename(discord_member="аккаунт", referrer_discord_member="аккаунт_пригласившего")
     @admin_only()
     async def set_referral(
         self,
@@ -153,6 +151,70 @@ class ManualCog(commands.Cog):
                 "✅ Аккаунт привязан", f"👤 Игрок: {ник} ({discord_member.mention})"
             )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="unlink_discord",
+        description="🛡️ [Админ] 🔓 Отвязать Discord-аккаунт от игрового ника",
+    )
+    @app_commands.describe(ник="Игровой ник, у которого снять привязку")
+    @admin_only()
+    async def unlink_discord(self, interaction: discord.Interaction, ник: str) -> None:
+        """Handle `/unlink_discord`: confirm, then unbind and strip the roles (заявка п.11)."""
+        await interaction.response.defer(ephemeral=True)
+
+        existing = await self._manual_grants.current_discord_id(ник)
+        if existing is None:
+            embed = self._embeds.info(
+                "ℹ️ Нечего отвязывать", f"К нику **{ник}** не привязан ни один аккаунт."
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        if not await self._confirm_unlink(interaction, ник, existing):
+            embed = self._embeds.info("Отменено", "Привязка осталась на месте.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        unbound = await self._manual_grants.unlink_discord(ник)
+        if unbound is None:
+            # Lost a race with another admin doing the same thing.
+            embed = self._embeds.info(
+                "ℹ️ Нечего отвязывать", f"К нику **{ник}** уже не привязан ни один аккаунт."
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        embed = self._embeds.success(
+            "🔓 Аккаунт отвязан",
+            f"👤 Игрок: {ник}\n"
+            f"💬 Отвязан: <@{unbound}>\n"
+            "🏅 Ранговая и реферальная роли сняты с этого аккаунта.\n"
+            "Теперь ник можно привязать заново через `/link_discord`.",
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+        await self._send_public_notice(
+            interaction,
+            "🔓 Привязка снята",
+            f"👤 Игрок: {ник}\n"
+            f"💬 Отвязан аккаунт <@{unbound}>, ранговая и реферальная роли сняты.\n"
+            f"Снято администратором {interaction.user.mention}.",
+        )
+
+    async def _confirm_unlink(
+        self, interaction: discord.Interaction, nick: str, existing_id: int
+    ) -> bool:
+        embed = self._embeds.warning(
+            "⚠️ Подтвердите отвязку",
+            f"Отвязать ник **{nick}** от <@{existing_id}>?\n"
+            "С этого аккаунта будут сняты ранговая и реферальная роли. "
+            "Прогресс ника (Coins, XP, сделки) не пострадает.",
+        )
+        view = ConfirmView(author_id=interaction.user.id)
+        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True, wait=True)
+        view.message = message
+        await view.wait()
+        return bool(view.confirmed)
 
     async def _confirm_relink(self, interaction: discord.Interaction, existing_id: int) -> bool:
         embed = self._embeds.warning(

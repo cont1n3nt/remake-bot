@@ -1,8 +1,14 @@
 """Tests for the pure formatting helpers in `presentation.cogs.shelter_cost`."""
 
 from stalbot.application.dto.precost_diff import PrecostDiff
+from stalbot.domain.money import format_kopeks
 from stalbot.domain.shelter.cost import CostResult
-from stalbot.presentation.cogs.shelter_cost import _cost_text, _format_diffs, _format_result
+from stalbot.presentation.cogs.shelter_cost import (
+    _cost_text,
+    _format_diffs,
+    _format_overrides,
+    _format_result,
+)
 
 
 def test_cost_text_formats_kopeks() -> None:
@@ -46,3 +52,15 @@ def test_format_diffs_shows_before_and_after_per_item() -> None:
     assert "10,00 ₽ → 30,00 ₽" in text
     assert "Настойка" in text
     assert "— → 30,00 ₽" in text
+
+
+def test_format_overrides_lists_every_previewed_price() -> None:
+    """заявка 13.09.2026 п.12: the header has to say which scenario is shown."""
+    text = _format_overrides({1: 3000, 2: 500}, {1: "Мякоть", 2: "Настойка"})
+
+    assert f"Мякоть → {format_kopeks(3000)}" in text
+    assert f"Настойка → {format_kopeks(500)}" in text
+
+
+def test_format_overrides_falls_back_to_the_id_for_an_unnamed_item() -> None:
+    assert _format_overrides({7: 100}, {}) == f"🧪 7 → {format_kopeks(100)}"

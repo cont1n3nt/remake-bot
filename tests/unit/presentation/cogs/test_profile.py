@@ -222,6 +222,21 @@ async def test_profile_shows_nonzero_turnover_fields_only() -> None:
     assert field_values["💹 Общий оборот"] == format_amount(500_000)
 
 
+async def test_profile_omits_rank_and_referral_count_when_empty() -> None:
+    """заявка 13.09.2026 п.8: no "Ранг: —" and no "Приглашено: 0" for a fresh player."""
+    view = _view(progression=_progression(rank_key=None, referral_role_key=None, referral_count=0))
+    cog, _service = _cog(profile_view=view)
+    interaction = _interaction()
+
+    await _call_profile(cog, interaction)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    field_names = {field.name for field in embed.fields}
+    assert "🏅 Ранг" not in field_names
+    assert "🤝 Реф-роль" not in field_names
+    assert "👥 Приглашено" not in field_names
+
+
 async def test_referrals_single_page_sends_without_pager_view() -> None:
     referred = [ReferredPlayer(nick_display="Alice", discord_id=999)]
     cog, service = _cog(referrals=(_view(), referred))

@@ -11,7 +11,7 @@ import aiosqlite
 import pytest
 
 from stalbot.application.services.tickets import TicketService
-from stalbot.domain.enums import DeliveryMethod, TicketKind, TicketStatus
+from stalbot.domain.enums import CouponKind, DeliveryMethod, TicketKind, TicketStatus
 from stalbot.domain.errors import TicketSessionNotFoundError
 from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
 from tests.support.fake_clock import FakeClock
@@ -109,20 +109,23 @@ async def test_record_form_stores_the_deadline_for_order_boosts(
     assert updated.deadline == deadline
 
 
-async def test_record_coupon_stores_the_code_and_percent(
+async def test_record_coupon_stores_the_code_kind_and_percent(
     connection: aiosqlite.Connection,
 ) -> None:
+    """заявка 27.08.2026 п.10: the kind is locked onto the session alongside the percent."""
     service = _service(connection)
     await service.open_ticket(111, TicketKind.SELL_ITEMS, 222)
 
-    updated = await service.record_coupon(111, "KLONDIKE10", Decimal("1.5"))
+    updated = await service.record_coupon(111, "KLONDIKE10", CouponKind.MARKUP, Decimal("1.5"))
 
     assert updated.coupon_code == "KLONDIKE10"
+    assert updated.coupon_kind is CouponKind.MARKUP
     assert updated.coupon_discount_percent == Decimal("1.5")
 
     reloaded = await service.get(111)
     assert reloaded is not None
     assert reloaded.coupon_code == "KLONDIKE10"
+    assert reloaded.coupon_kind is CouponKind.MARKUP
     assert reloaded.coupon_discount_percent == Decimal("1.5")
 
 

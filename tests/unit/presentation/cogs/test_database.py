@@ -52,7 +52,9 @@ def _progression(**overrides: object) -> PlayerProgressionRecord:
 
 
 def _cog(
-    *, players: list[Player] | None = None, progressions: list[PlayerProgressionRecord] | None = None
+    *,
+    players: list[Player] | None = None,
+    progressions: list[PlayerProgressionRecord] | None = None,
 ) -> tuple[DatabaseCog, MagicMock, MagicMock]:
     players_repo = MagicMock()
     players_repo.all = AsyncMock(return_value=players if players is not None else [_player()])

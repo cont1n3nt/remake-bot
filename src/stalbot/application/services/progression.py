@@ -15,7 +15,7 @@ from collections.abc import Collection
 
 import discord
 
-from stalbot.application.dto.audit_event import AuditEvent
+from stalbot.application.dto.audit_event import AuditActor, AuditEvent
 from stalbot.application.dto.progression_state import ProgressionState
 from stalbot.application.dto.promotion import Promotion, PromotionAxis
 from stalbot.application.dto.role_change import RoleChange
@@ -36,6 +36,13 @@ from stalbot.infrastructure.logging.trace import current_trace_id
 from stalbot.presentation.embeds.factory import EmbedFactory
 
 logger = logging.getLogger(__name__)
+
+#: How a granted role is described in the audit log, per promotion axis
+#: (заявка 13.09.2026 п.1) — "Выдал ранг 💎 Elite", not "progression.sync".
+_AXIS_ACTION: dict[PromotionAxis, str] = {
+    "rank": "🏅 Выдал ранг",
+    "referral_role": "🤝 Выдал реф-роль",
+}
 
 
 class ProgressionService:
@@ -116,9 +123,9 @@ class ProgressionService:
 
         Unlike `sync()`, whose callers ignore what actually moved, this is
         for an admin-triggered "fix any drift now" command (заявка
-        27.08.2026: "пересинхронизировать всех игроков... если у кого-то
-        роли не соответствуют") — it surfaces exactly who was touched and
-        which role ids were granted/revoked, instead of just promotions.
+        27.08.2026 — resync every player, and say whose roles did not match)
+        — it surfaces exactly who was touched and which role ids were
+        granted/revoked, instead of just promotions.
 
         Args:
             announce_to: Where a public celebration is posted for any
@@ -258,17 +265,25 @@ class ProgressionService:
         else:
             await self._audit_gateway.send_batch([embed])
 
+        # заявка 13.09.2026 п.1: logged as an action the *bot* took, not as
+        # a command the player ran — `AuditActor.BOT` relabels the embed
+        # ("Действие бота" / "Игрок" / "Действие") so nobody reads it as
+        # the player having invoked something to grant themselves a role.
         self._audit_service.record(
             AuditEvent(
                 user_id=promotion.discord_id,
                 user_display=str(promotion.nick),
                 channel_display=_channel_display(announce_to),
-                command="progression.sync",
-                arguments=f"ник={promotion.nick} • {promotion.axis}={promotion.label}",
-                result="Повышение",
+                command=f"{_AXIS_ACTION[promotion.axis]} {promotion.label}",
+                arguments=(
+                    f"Ник: {promotion.nick} • Достижение: 🪙 {promotion.coins} Coins • "
+                    f"⚡ {promotion.xp} XP"
+                ),
+                result="Роль выдана автоматически",
                 duration_seconds=0.0,
                 trace_id=current_trace_id(),
                 occurred_at=self._clock.now(),
+                actor=AuditActor.BOT,
             )
         )
 
