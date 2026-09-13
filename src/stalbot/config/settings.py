@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     cache_db_path: Path = Path("./data/cache.sqlite3")
     progression_poll_seconds: int = Field(default=300, gt=0)
 
+    # --- Posters (заявка 13.09.2026 п.6) ---
+    #: Where poster icons live. Under `./data` on purpose: `docker-compose.yml`
+    #: bind-mounts that directory, so icons uploaded through `/poster_item`
+    #: survive a redeploy — unlike the package's own `assets/posters/icons`,
+    #: which is rebuilt from the wheel every time.
+    poster_icons_dir: Path = Path("./data/poster_icons")
+
     # --- Behavior toggles (PLAN.md §17.2) ---
     price_import_confirm: bool = True
     admin_can_view_any_profile: bool = True

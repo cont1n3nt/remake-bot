@@ -4,6 +4,8 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from decimal import Decimal
+from importlib import resources
+from pathlib import Path
 from typing import Any, Final
 
 import discord
@@ -18,6 +20,7 @@ from stalbot.application.services.coupons import CouponService
 from stalbot.application.services.health import HealthService
 from stalbot.application.services.manual_grants import ManualGrantService
 from stalbot.application.services.order_economics import OrderEconomicsService
+from stalbot.application.services.poster_layout import PosterLayoutService
 from stalbot.application.services.posters import PosterService
 from stalbot.application.services.pricing import PricingService
 from stalbot.application.services.profile import ProfileService
@@ -41,6 +44,7 @@ from stalbot.infrastructure.cache.repositories.item_price_history import (
     ItemPriceHistoryRepository,
 )
 from stalbot.infrastructure.cache.repositories.players import PlayersRepository
+from stalbot.infrastructure.cache.repositories.poster_layout import PosterLayoutRepository
 from stalbot.infrastructure.cache.repositories.progression import ProgressionRepository
 from stalbot.infrastructure.cache.repositories.progression_state import ProgressionStateRepository
 from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
@@ -54,6 +58,7 @@ from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.infrastructure.discord.role_gateway import DiscordRoleGateway
 from stalbot.infrastructure.logging.trace import current_trace_id, new_trace_id, set_trace_id
 from stalbot.infrastructure.ocr.null import NullOcrGateway
+from stalbot.infrastructure.posters.icon_store import PosterIconStore
 from stalbot.infrastructure.posters.pillow_renderer import PillowRenderer
 from stalbot.presentation.cogs.catalog import CatalogCog
 from stalbot.presentation.cogs.coupons import CouponsCog
@@ -89,6 +94,16 @@ _TEMP_PRICE_POLL_INTERVAL_SECONDS: Final = 60
 #: capped by `REQUEST_TIMEOUT_SECONDS`, plus backoff) — this is a backstop
 #: against a genuinely wedged task, not a tight budget for the common case.
 _SHUTDOWN_TIMEOUT_SECONDS: Final = 60.0
+
+
+def _package_logo_path() -> Path:
+    """The logo shipped inside the wheel.
+
+    Unlike item icons, the logo is branding rather than data the owner
+    edits from Discord, so it stays in the package instead of moving to
+    `Settings.poster_icons_dir` with the rest (заявка 13.09.2026 п.6).
+    """
+    return Path(str(resources.files("stalbot") / "assets" / "posters" / "logo.png"))
 
 
 class _StalbotCommandTree(app_commands.CommandTree["StalbotBot"]):
@@ -214,6 +229,13 @@ class StalbotBot(commands.Bot):
             clock=SystemClock(),
         )
         self.temp_price_service = temp_price_service
+
+        poster_layout_repo = PosterLayoutRepository(connection)
+        icon_store = PosterIconStore(self.settings.poster_icons_dir)
+        poster_layout_service = PosterLayoutService(
+            poster_layout_repo, catalog_items_repo, icon_store, clock=SystemClock()
+        )
+
         await self.add_cog(
             CatalogCog(
                 catalog_service,
@@ -221,6 +243,7 @@ class StalbotBot(commands.Bot):
                 catalog_items_repo,
                 self.emoji_resolver,
                 self.embed_factory,
+                poster_layout_service,
             )
         )
         await self.add_cog(
@@ -232,7 +255,20 @@ class StalbotBot(commands.Bot):
                 temp_price_service,
             )
         )
-        await self.add_cog(PostersCog(PosterService(catalog_items_repo), PillowRenderer()))
+        await self.add_cog(
+            PostersCog(
+                PosterService(
+                    catalog_items_repo,
+                    poster_layout_repo,
+                    icons_dir=self.settings.poster_icons_dir,
+                    logo_path=_package_logo_path(),
+                ),
+                PillowRenderer(),
+                poster_layout_service,
+                catalog_items_repo,
+                self.embed_factory,
+            )
+        )
 
         shelter_repo = ShelterRepository(connection)
         shelter_cost_service = ShelterCostService(shelter_repo)

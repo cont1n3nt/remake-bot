@@ -346,3 +346,31 @@ CREATE TABLE IF NOT EXISTS coupon_redemptions (
     redeemed_at TEXT NOT NULL,
     UNIQUE (coupon_id, discord_id)
 );
+
+-- --- Poster layout (заявка 13.09.2026 п.6, migration 0011) ---
+
+CREATE TABLE IF NOT EXISTS poster_sections (
+    id          INTEGER PRIMARY KEY,
+    poster_kind TEXT    NOT NULL
+                CHECK (poster_kind IN ('resources','boosts','boost_purchases')),
+    name        TEXT,
+    sort_order  INTEGER NOT NULL,
+    columns     INTEGER NOT NULL DEFAULT 1 CHECK (columns >= 1),
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_poster_sections_kind ON poster_sections(poster_kind, sort_order);
+
+CREATE TABLE IF NOT EXISTS poster_slots (
+    id              INTEGER PRIMARY KEY,
+    section_id      INTEGER NOT NULL REFERENCES poster_sections(id) ON DELETE CASCADE,
+    sort_order      INTEGER NOT NULL,
+    catalog_item_id INTEGER REFERENCES catalog_items(id) ON DELETE SET NULL,
+    display_name    TEXT    NOT NULL,
+    name_norm       TEXT    NOT NULL,
+    icon_file       TEXT    NOT NULL,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_poster_slots_section ON poster_slots(section_id, sort_order);
+CREATE INDEX IF NOT EXISTS ix_poster_slots_item    ON poster_slots(catalog_item_id);

@@ -100,6 +100,16 @@ class CouponWrongKindError(DomainError):
     """
 
 
+class IconRejectedError(DomainError):
+    """An uploaded poster icon is unusable (заявка 13.09.2026 п.6).
+
+    A `DomainError` even though decoding the image is I/O: the rule being
+    broken is about the *input the user supplied*, and its message is
+    written to be read by them — which is what puts an exception on this
+    side of the hierarchy.
+    """
+
+
 class InfrastructureError(StalbotError):
     """Failure talking to an external system (cache, Discord)."""
 

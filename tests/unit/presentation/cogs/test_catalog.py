@@ -15,7 +15,8 @@ from discord import app_commands
 
 from stalbot.application.dto.delete_item_result import DeleteItemResult
 from stalbot.domain.entities.catalog_item import CatalogItem
-from stalbot.domain.enums import ItemCategory
+from stalbot.domain.entities.poster_layout import PosterSlotRow
+from stalbot.domain.enums import ItemCategory, PosterKind
 from stalbot.domain.money import Rub
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.presentation.cogs.catalog import CatalogCog, _PriceListView
@@ -44,6 +45,20 @@ def _item(**overrides: object) -> CatalogItem:
     return CatalogItem(**defaults)  # type: ignore[arg-type]
 
 
+def _slot(**overrides: object) -> PosterSlotRow:
+    defaults: dict[str, object] = {
+        "id": 1,
+        "section_id": 1,
+        "sort_order": 0,
+        "display_name": "Аптечка",
+        "name_norm": "аптечка",
+        "icon_file": "аптечка-abc123.png",
+        "catalog_item_id": 1,
+    }
+    defaults.update(overrides)
+    return PosterSlotRow(**defaults)  # type: ignore[arg-type]
+
+
 def _cog(
     *,
     added_item: CatalogItem | None = None,
@@ -52,6 +67,8 @@ def _cog(
     by_category: dict[ItemCategory, list[CatalogItem]] | None = None,
     export_text: str = "price list\n",
     emojis: EmojiResolver | None = None,
+    poster_layout: MagicMock | None = None,
+    removed_slots: int = 0,
 ) -> tuple[CatalogCog, MagicMock, MagicMock, MagicMock]:
     catalog = MagicMock()
     catalog.add_item = AsyncMock(return_value=added_item or _item())
@@ -62,7 +79,12 @@ def _cog(
     items.all = AsyncMock(return_value=all_items or [])
     by_category = by_category or {}
     items.by_category = AsyncMock(side_effect=lambda category: by_category.get(category, []))
-    cog = CatalogCog(catalog, pricing, items, emojis or EmojiResolver(), EmbedFactory())
+    poster_layout = poster_layout or MagicMock()
+    poster_layout.add_item = AsyncMock(return_value=_slot())
+    poster_layout.remove_every_slot_for = AsyncMock(return_value=removed_slots)
+    cog = CatalogCog(
+        catalog, pricing, items, emojis or EmojiResolver(), EmbedFactory(), poster_layout
+    )
     return cog, catalog, pricing, items
 
 
@@ -335,3 +357,114 @@ async def test_price_list_view_on_timeout_disables_buttons() -> None:
 
     assert all(item.disabled for item in view.children if isinstance(item, discord.ui.Button))
     message.edit.assert_awaited_once_with(view=view)
+
+
+# -- плакат прямо из /item_add (заявка 13.09.2026, вторая половина п.13) ----
+
+
+def _attachment(data: bytes = b"png-bytes") -> MagicMock:
+    attachment = MagicMock(spec=discord.Attachment)
+    attachment.read = AsyncMock(return_value=data)
+    return attachment
+
+
+async def test_item_add_puts_the_item_on_the_poster_when_asked() -> None:
+    poster_layout = MagicMock()
+    cog, _catalog, _pricing, _items = _cog(poster_layout=poster_layout)
+    interaction = _interaction()
+
+    await _call_item_add(
+        cog,
+        interaction,
+        плакат=PosterKind.BOOSTS.value,
+        скриншот=_attachment(b"the-picture"),
+        секция="Медицина",
+    )
+
+    poster_layout.add_item.assert_awaited_once()
+    args, kwargs = poster_layout.add_item.call_args
+    assert args[0] is PosterKind.BOOSTS
+    assert kwargs["section_name"] == "Медицина"
+    assert kwargs["icon_data"] == b"the-picture"
+
+
+async def test_item_add_leaves_the_poster_alone_by_default() -> None:
+    poster_layout = MagicMock()
+    cog, _catalog, _pricing, _items = _cog(poster_layout=poster_layout)
+    interaction = _interaction()
+
+    await _call_item_add(cog, interaction)
+
+    poster_layout.add_item.assert_not_called()
+
+
+async def test_item_add_refuses_a_poster_without_a_screenshot() -> None:
+    """Half a pair is a typo — creating the item anyway would look like it worked."""
+    poster_layout = MagicMock()
+    cog, catalog, _pricing, _items = _cog(poster_layout=poster_layout)
+    interaction = _interaction()
+
+    await _call_item_add(cog, interaction, плакат=PosterKind.BOOSTS.value)
+
+    catalog.add_item.assert_not_called()
+    poster_layout.add_item.assert_not_called()
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "оба поля" in (embed.description or "")
+
+
+async def test_item_add_refuses_a_screenshot_without_a_poster() -> None:
+    poster_layout = MagicMock()
+    cog, catalog, _pricing, _items = _cog(poster_layout=poster_layout)
+    interaction = _interaction()
+
+    await _call_item_add(cog, interaction, скриншот=_attachment())
+
+    catalog.add_item.assert_not_called()
+    poster_layout.add_item.assert_not_called()
+
+
+async def test_del_item_takes_the_item_off_every_poster() -> None:
+    poster_layout = MagicMock()
+    cog, _catalog, _pricing, _items = _cog(poster_layout=poster_layout, removed_slots=2)
+    interaction = _interaction()
+
+    callback: Any = CatalogCog.del_item.callback
+    await callback(cog, interaction, 1)
+
+    poster_layout.remove_every_slot_for.assert_awaited_once_with(1)
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "Снят с плакатов: 2" in (embed.description or "")
+
+
+async def test_del_item_says_nothing_about_posters_when_it_was_on_none() -> None:
+    cog, _catalog, _pricing, _items = _cog(removed_slots=0)
+    interaction = _interaction()
+
+    callback: Any = CatalogCog.del_item.callback
+    await callback(cog, interaction, 1)
+
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "плакат" not in (embed.description or "")
+
+
+async def _call_item_add(
+    cog: CatalogCog,
+    interaction: MagicMock,
+    *,
+    плакат: str | None = None,
+    скриншот: MagicMock | None = None,
+    секция: str | None = None,
+) -> None:
+    callback: Any = CatalogCog.item_add.callback
+    await callback(
+        cog,
+        interaction,
+        "Аптечка",
+        _category_choice(ItemCategory.BOOST),
+        None,
+        "1000",
+        None,
+        плакат,
+        скриншот,
+        секция,
+    )

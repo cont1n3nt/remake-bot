@@ -12,9 +12,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from stalbot.application.services.catalog import CatalogService
+from stalbot.application.services.poster_layout import PosterLayoutService
 from stalbot.application.services.pricing import PricingService
 from stalbot.domain.entities.catalog_item import CatalogItem
-from stalbot.domain.enums import ItemCategory
+from stalbot.domain.enums import ItemCategory, PosterKind
 from stalbot.domain.money import evaluate_amount, format_amount
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
@@ -29,6 +30,14 @@ _CATEGORY_LABEL: Final[dict[ItemCategory, str]] = {
 }
 _PRICE_LIST_PAGE_SIZE: Final = 15
 
+#: Shared with `cogs/posters.py` — the same three names the `/poster`
+#: choices use, so a poster is called the same thing wherever it is named.
+_POSTER_TITLE: Final[dict[PosterKind, str]] = {
+    PosterKind.RESOURCES: "Скупка ресурсов",
+    PosterKind.BOOSTS: "Продажа бустов",
+    PosterKind.BOOST_PURCHASES: "Скупка бустов",
+}
+
 
 class CatalogCog(commands.Cog):
     """`/item_add`, `/del_item`, `/price_list`, `/give_price`."""
@@ -40,6 +49,7 @@ class CatalogCog(commands.Cog):
         items: CatalogItemsRepository,
         emojis: EmojiResolver,
         embeds: EmbedFactory,
+        poster_layout: PosterLayoutService,
     ) -> None:
         """Wire the cog to the services it delegates to.
 
@@ -49,12 +59,16 @@ class CatalogCog(commands.Cog):
             items: Read-only lookup for `/price_list` and autocomplete.
             emojis: Resolves an item's stored emoji name for display.
             embeds: Builds every embed this cog sends.
+            poster_layout: Puts a new item straight onto a poster, and
+                takes a deleted one off every poster it was on
+                (заявка 13.09.2026, вторая половина п.13).
         """
         self._catalog = catalog
         self._pricing = pricing
         self._items = items
         self._emojis = emojis
         self._embeds = embeds
+        self._poster_layout = poster_layout
 
     @app_commands.command(name="item_add", description="🛡️ [Админ] ➕ Добавить предмет в базу")
     @app_commands.describe(
@@ -63,6 +77,9 @@ class CatalogCog(commands.Cog):
         цена_покупки="Цена скупки, например 250000 или 250к (опционально)",
         цена_продажи="Цена продажи, например 300000 или 300к (опционально)",
         эмодзи="Имя кастомного эмодзи на сервере (опционально)",
+        плакат="Сразу поставить на плакат — вместе со скриншотом (опционально)",
+        скриншот="Картинка предмета для плаката — PNG, JPEG или WebP",
+        секция="Секция плаката (новая создастся) — опционально",
     )
     @app_commands.choices(
         категория=[
@@ -72,7 +89,12 @@ class CatalogCog(commands.Cog):
             app_commands.Choice(
                 name=_CATEGORY_LABEL[ItemCategory.BOOST], value=ItemCategory.BOOST.value
             ),
-        ]
+        ],
+        плакат=[
+            app_commands.Choice(name="Скупка ресурсов", value=PosterKind.RESOURCES.value),
+            app_commands.Choice(name="Продажа бустов", value=PosterKind.BOOSTS.value),
+            app_commands.Choice(name="Скупка бустов", value=PosterKind.BOOST_PURCHASES.value),
+        ],
     )
     @admin_only()
     async def item_add(
@@ -83,9 +105,23 @@ class CatalogCog(commands.Cog):
         цена_покупки: str | None = None,
         цена_продажи: str | None = None,
         эмодзи: str | None = None,
+        плакат: str | None = None,
+        скриншот: discord.Attachment | None = None,
+        секция: str | None = None,
     ) -> None:
-        """Handle `/item_add`: create a new catalog entry."""
+        """Handle `/item_add`: create a new catalog entry, optionally placing it on a poster."""
         await interaction.response.defer(ephemeral=True)
+
+        # Checked before the item is written: a half-given poster pair is a
+        # typo, and creating the item anyway would leave the owner thinking
+        # it reached the poster (заявка 13.09.2026, вторая половина п.13).
+        if (плакат is None) != (скриншот is None):
+            embed = self._embeds.error(
+                "Ошибка",
+                "Для плаката нужны оба поля — и сам плакат, и скриншот. Либо оставьте оба пустыми.",
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
         category = ItemCategory(категория.value)
         price_buy = evaluate_amount(цена_покупки) if цена_покупки else None
         price_sell = evaluate_amount(цена_продажи) if цена_продажи else None
@@ -101,6 +137,16 @@ class CatalogCog(commands.Cog):
         lines = [*_item_summary_lines(item)]
         if эмодзи and not self._emojis.exists(эмодзи):
             lines.append("⚠️ Эмодзи с таким именем не найдено на сервере.")
+
+        if плакат is not None and скриншот is not None and item.id is not None:
+            kind = PosterKind(плакат)
+            slot = await self._poster_layout.add_item(
+                kind, item.id, section_name=секция, icon_data=await скриншот.read()
+            )
+            lines.append(
+                f"🖼️ На плакате «{_POSTER_TITLE[kind]}», секция "
+                f"{секция or 'новая без названия'} — картинка {slot.icon_file}"
+            )
 
         embed = self._embeds.success("✅ Предмет добавлен", "\n".join(lines))
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -119,6 +165,11 @@ class CatalogCog(commands.Cog):
                 f"⚠️ Затронуты черновики заказов бустов в "
                 f"{len(result.affected_order_channels)} канале(ах)."
             )
+        # A slot whose item is gone renders as nothing at all, so leaving it
+        # behind would only hide that the poster quietly shrank.
+        removed_slots = await self._poster_layout.remove_every_slot_for(предмет)
+        if removed_slots:
+            lines.append(f"🖼️ Снят с плакатов: {removed_slots} поз.")
 
         embed = self._embeds.success("🗑️ Предмет удалён", "\n".join(lines))
         await interaction.followup.send(embed=embed, ephemeral=True)
