@@ -77,6 +77,8 @@ from stalbot.presentation.cogs.purchase_calculator import PurchaseCalculatorCog
 from stalbot.presentation.cogs.recipes.cog import RecipesCog
 from stalbot.presentation.cogs.roles import RolesCog
 from stalbot.presentation.cogs.shelter_cost import ShelterCostCog
+from stalbot.presentation.cogs.shop.admin_cog import ShopAdminCog
+from stalbot.presentation.cogs.shop.cog import ShopCog
 from stalbot.presentation.cogs.stats import StatsCog
 from stalbot.presentation.cogs.tag import TagCog
 from stalbot.presentation.cogs.tickets.cog import TicketsCog
@@ -330,6 +332,8 @@ class StalbotBot(commands.Bot):
             clock=SystemClock(),
         )
         self.shop_service = shop_service
+        await self.add_cog(ShopCog(shop_service, self.embed_factory))
+        await self.add_cog(ShopAdminCog(shop_service, players_repo, self.embed_factory))
 
         tickets_cog = TicketsCog(
             ticket_service,
