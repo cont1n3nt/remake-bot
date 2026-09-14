@@ -116,3 +116,45 @@ class InfrastructureError(StalbotError):
 
 class DatabaseError(InfrastructureError):
     """The SQLite cache failed in a way the caller should surface to the user."""
+
+
+class PlayerNotLinkedError(DomainError):
+    """A Discord account used against the shop has no linked game nick.
+
+    Distinct from `NickNotBoundError` (nick -> Discord direction, used by
+    `/set_referral` and friends): this is the Discord -> nick direction —
+    someone with no `players` row at all tries to open `/shop`.
+    """
+
+
+class InsufficientCoinsError(DomainError):
+    """A purchase costs more Coins than the player currently has."""
+
+
+class ShopItemUnavailableError(DomainError):
+    """The item is inactive, soft-deleted, or out of stock."""
+
+
+class ShopPurchaseLimitReachedError(DomainError):
+    """The player has already bought this item as many times as it allows."""
+
+
+class ShopPurchaseNotFoundError(DomainError):
+    """No purchase with that id (admin refund flow)."""
+
+
+class ShopPurchaseAlreadyRefundedError(DomainError):
+    """That purchase was already refunded once — refunding it again would double-pay."""
+
+
+class DuplicateShopItemError(DomainError):
+    """A shop item with that name already exists."""
+
+
+class ShopItemMisconfiguredError(DomainError):
+    """A shop item's `effect_value` is unreadable for what its `effect_kind` needs.
+
+    Raised at purchase time rather than left to silently grant zero — an
+    admin data-entry mistake must surface as a refusal, not as a player
+    quietly receiving nothing for their Coins.
+    """
