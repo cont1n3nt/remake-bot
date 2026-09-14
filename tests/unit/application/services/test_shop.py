@@ -605,6 +605,78 @@ async def test_an_expired_effect_no_longer_contributes(connection: aiosqlite.Con
     assert await service.apply_percent_effects(_DISCORD_ID, "discount") == 0
 
 
+async def test_preview_does_not_spend_a_uses_limited_effect(
+    connection: aiosqlite.Connection,
+) -> None:
+    """The split `TicketsCog` relies on: price the deal first, spend only once it is confirmed."""
+    service, players, progression = _service(connection)
+    await _player_with_coins(connection, players, progression, coins=100)
+    await _category(service)
+    item = await service.add_item(
+        "small", "Тайный Контракт", "Наценка.", 75, "markup_percent", effect_value="2", uses=1
+    )
+    assert item.id is not None
+    await service.buy(_DISCORD_ID, item.id, idempotency_key="click-1")
+
+    previewed_twice = (
+        await service.apply_percent_effects(_DISCORD_ID, "markup", consume=False),
+        await service.apply_percent_effects(_DISCORD_ID, "markup", consume=False),
+    )
+    consumed = await service.apply_percent_effects(_DISCORD_ID, "markup", consume=True)
+    after_consuming = await service.apply_percent_effects(_DISCORD_ID, "markup", consume=False)
+
+    assert previewed_twice == (Decimal(2), Decimal(2))
+    assert consumed == Decimal(2)
+    assert after_consuming == 0
+
+
+async def test_grant_deal_xp_bonus_credits_the_percentage_of_the_deal(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, progression = _service(connection)
+    player_id = await _player_with_coins(connection, players, progression, coins=300)
+    await _category(service)
+    item = await service.add_item(
+        "small", "Гильдия", "+50% XP.", 175, "xp_multiplier", effect_value="50", duration_days=7
+    )
+    assert item.id is not None
+    await service.buy(_DISCORD_ID, item.id, idempotency_key="click-1")
+
+    bonus = await service.grant_deal_xp_bonus(_DISCORD_ID, 40)
+
+    assert bonus == 20
+    record = await progression.get(player_id)
+    assert record is not None
+    assert record.xp == 20
+
+
+async def test_grant_deal_xp_bonus_is_zero_with_no_active_multiplier(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, progression = _service(connection)
+    await _player_with_coins(connection, players, progression, coins=100)
+
+    assert await service.grant_deal_xp_bonus(_DISCORD_ID, 40) == 0
+
+
+async def test_grant_deal_xp_bonus_spends_a_uses_limited_multiplier(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, progression = _service(connection)
+    await _player_with_coins(connection, players, progression, coins=300)
+    await _category(service)
+    item = await service.add_item(
+        "small", "Гильдия", "+50% XP.", 175, "xp_multiplier", effect_value="50", uses=1
+    )
+    assert item.id is not None
+    await service.buy(_DISCORD_ID, item.id, idempotency_key="click-1")
+
+    first = await service.grant_deal_xp_bonus(_DISCORD_ID, 40)
+    second = await service.grant_deal_xp_bonus(_DISCORD_ID, 40)
+
+    assert (first, second) == (20, 0)
+
+
 async def test_apply_xp_multiplier_ignores_percent_effects(
     connection: aiosqlite.Connection,
 ) -> None:

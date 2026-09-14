@@ -208,6 +208,13 @@ def _fake_coupons() -> MagicMock:
     return coupons
 
 
+def _fake_shop(*, percent: Decimal = Decimal(0), xp_bonus: int = 0) -> MagicMock:
+    shop = MagicMock()
+    shop.apply_percent_effects = AsyncMock(return_value=percent)
+    shop.grant_deal_xp_bonus = AsyncMock(return_value=xp_bonus)
+    return shop
+
+
 def _cog(
     *,
     tickets: MagicMock | None = None,
@@ -219,6 +226,7 @@ def _cog(
     coupons: MagicMock | None = None,
     embeds: EmbedFactory | None = None,
     order_economics: MagicMock | None = None,
+    shop: MagicMock | None = None,
     tool_wait_timeout: float = 0.05,
     log_channel_id: int = 555,
 ) -> tuple[TicketsCog, MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
@@ -241,6 +249,7 @@ def _cog(
         embeds or EmbedFactory(),
         settings,
         order_economics=order_economics,
+        shop=shop,
         tool_wait_timeout_seconds=tool_wait_timeout,
     )
     return cog, tickets, screenshots, boost_orders, transactions, progression
@@ -766,6 +775,101 @@ async def test_amount_submitted_applies_the_coupon_discount_to_the_registered_am
     assert request.amount == Decimal(90000)
     embed = interaction.followup.send.call_args.kwargs["embed"]
     assert "KLONDIKE10" in (embed.description or "")
+
+
+# -- Shop effects (заявка 13.09.2026 п.2, часть 3) -------------------------
+
+
+async def test_amount_submitted_applies_a_shop_discount_for_order_boosts() -> None:
+    session = _session(game_nick="Scaryyyyy", kind=TicketKind.ORDER_BOOSTS)
+    shop = _fake_shop(percent=Decimal(10))
+    cog, *_, transactions, _progression = _cog(tickets=_fake_tickets(get_return=session), shop=shop)
+    interaction = _interaction()
+
+    await cog._on_amount_submitted(interaction, "100000")
+
+    (request,), _kwargs = transactions.register.call_args
+    assert request.amount == Decimal(90000)
+    shop.apply_percent_effects.assert_any_await(session.author_id, "discount", consume=False)
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "скидка магазина 10%" in (embed.description or "")
+
+
+async def test_amount_submitted_applies_a_shop_markup_for_sell_tickets() -> None:
+    session = _session(game_nick="Scaryyyyy", kind=TicketKind.SELL_ITEMS)
+    shop = _fake_shop(percent=Decimal(5))
+    cog, *_, transactions, _progression = _cog(tickets=_fake_tickets(get_return=session), shop=shop)
+    interaction = _interaction()
+
+    await cog._on_amount_submitted(interaction, "100000")
+
+    (request,), _kwargs = transactions.register.call_args
+    assert request.amount == Decimal(105000)
+    shop.apply_percent_effects.assert_any_await(session.author_id, "markup", consume=False)
+    embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert "наценка магазина 5%" in (embed.description or "")
+
+
+async def test_amount_submitted_spends_the_shop_effect_only_once_confirmed() -> None:
+    """The preview (`consume=False`) prices the deal; only the confirmed,
+    non-replayed write actually spends a uses-limited effect (`consume=True`)."""
+    session = _session(game_nick="Scaryyyyy", kind=TicketKind.ORDER_BOOSTS)
+    shop = _fake_shop(percent=Decimal(10))
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), shop=shop)
+    interaction = _interaction()
+
+    await cog._on_amount_submitted(interaction, "100000")
+
+    assert shop.apply_percent_effects.await_args_list == [
+        ((session.author_id, "discount"), {"consume": False}),
+        ((session.author_id, "discount"), {"consume": True}),
+    ]
+
+
+async def test_amount_submitted_grants_the_shop_xp_bonus() -> None:
+    session = _session(game_nick="Scaryyyyy", author_id=42)
+    shop = _fake_shop(xp_bonus=3)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), shop=shop)
+    interaction = _interaction()
+
+    await cog._on_amount_submitted(interaction, "100 000")
+
+    shop.grant_deal_xp_bonus.assert_awaited_once_with(42, 10)
+
+
+async def test_amount_submitted_does_not_spend_shop_effects_on_a_replayed_registration() -> None:
+    session = _session(game_nick="Scaryyyyy")
+    replayed_deal = Deal(
+        id=1,
+        player_id=1,
+        occurred_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        occurred_at_kind=OccurredAtKind.BOT,
+        deal_type=DealType.SALE,
+        amount=Decimal(100000),  # type: ignore[arg-type]
+        coins=1,
+        xp=10,
+        rank_at_deal=None,
+        booster_at_deal=False,
+        recorded_by=None,
+        source=DealSource.TICKET,
+        legacy_sheet_row=None,
+        created_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+    )
+    replayed_result = TransactionRegistrationResult(
+        deal=replayed_deal, nick_display="Scaryyyyy", discord_bound=False, replayed=True
+    )
+    shop = _fake_shop(percent=Decimal(10))
+    cog, *_ = _cog(
+        tickets=_fake_tickets(get_return=session),
+        transactions=_fake_transactions(register_result=replayed_result),
+        shop=shop,
+    )
+    interaction = _interaction(channel=_text_channel())
+
+    await cog._on_amount_submitted(interaction, "100 000")
+
+    shop.apply_percent_effects.assert_awaited_once_with(session.author_id, "markup", consume=False)
+    shop.grant_deal_xp_bonus.assert_not_called()
 
 
 # -- Coupons (заявка 26.08.2026) ------------------------------------------

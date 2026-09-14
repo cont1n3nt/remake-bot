@@ -32,6 +32,7 @@ from stalbot.application.services.order_economics import OrderEconomicsService
 from stalbot.application.services.progression import ProgressionService
 from stalbot.application.services.role_pricing import resolve_price_multiplier
 from stalbot.application.services.screenshots import ScreenshotService
+from stalbot.application.services.shop import PercentSide, ShopService
 from stalbot.application.services.tickets import TicketService
 from stalbot.application.services.transactions import TransactionService
 from stalbot.config.ids import TICKET_CATEGORIES, TICKET_TOOL_BOT_ID
@@ -108,6 +109,15 @@ _DEAL_TYPE_OF: dict[TicketKind, DealType] = {
     TicketKind.ORDER_BOOSTS: DealType.SALE,
 }
 
+_SHOP_PERCENT_SIDE_OF: dict[TicketKind, PercentSide] = {
+    # Mirrors `_DEAL_TYPE_OF`'s bot's-side framing: a boost order is the bot
+    # *selling*, so a shop discount effect lowers it; a sell-to-us deal is
+    # the bot *buying*, so a shop markup effect raises it.
+    TicketKind.SELL_ITEMS: "markup",
+    TicketKind.SELL_BOOSTS: "markup",
+    TicketKind.ORDER_BOOSTS: "discount",
+}
+
 _PANEL_DESCRIPTIONS: dict[TicketKind, str] = {
     TicketKind.SELL_ITEMS: "Чтобы оформить сделку, заполните форму по кнопке ниже.",
     TicketKind.SELL_BOOSTS: "Чтобы оформить сделку, заполните форму по кнопке ниже.",
@@ -133,6 +143,7 @@ class TicketsCog(commands.Cog):
         clock: Clock | None = None,
         rank_ladder: RankLadder | None = None,
         order_economics: OrderEconomicsService | None = None,
+        shop: ShopService | None = None,
         tool_wait_timeout_seconds: float = _TOOL_WAIT_TIMEOUT_SECONDS,
     ) -> None:
         """Wire the cog to the services it delegates to.
@@ -155,6 +166,10 @@ class TicketsCog(commands.Cog):
             order_economics: Computes cost of goods and profit for a
                 confirmed boost order (заявка 13.09.2026 п.7). `None`
                 simply skips that log entry — everything else is unaffected.
+            shop: Resolves and spends a confirming player's active shop
+                discount/markup/XP-multiplier effects (заявка 13.09.2026
+                п.2). `None` simply means no shop effect ever applies —
+                everything else about confirming a ticket is unaffected.
             tool_wait_timeout_seconds: How long to wait for Ticket Tool's
                 first message before posting the panel anyway (PLAN.md
                 §11.2). Overridable so tests don't block for 30 real seconds.
@@ -171,6 +186,7 @@ class TicketsCog(commands.Cog):
         self._clock = clock or SystemClock()
         self._rank_ladder = rank_ladder or RankLadder()
         self._order_economics = order_economics
+        self._shop = shop
         self._tool_wait_timeout = tool_wait_timeout_seconds
         self._tool_wait: dict[int, asyncio.Event] = {}
         # UX #15: only images sent after the "📸 Прикрепить скриншот" button was
@@ -1029,6 +1045,25 @@ class TicketsCog(commands.Cog):
                 verb="промокод",
             )
 
+        shop_side = _SHOP_PERCENT_SIDE_OF[session.kind]
+        if self._shop is not None:
+            # Preview only (`consume=False`) — this call may run again for a
+            # losing half of a staggered double-confirm, and previewing
+            # spends nothing. The winning call spends its use below, once
+            # `register()` confirms it actually recorded the deal.
+            shop_percent = await self._shop.apply_percent_effects(
+                session.author_id, shop_side, consume=False
+            )
+            if shop_percent > 0:
+                shop_multiplier = (
+                    (Decimal(100) - shop_percent) / Decimal(100)
+                    if shop_side == "discount"
+                    else (Decimal(100) + shop_percent) / Decimal(100)
+                )
+                amount = round_for_storage(amount * shop_multiplier)
+                verb = "скидка" if shop_side == "discount" else "наценка"
+                markup_note += f"\n-# Применена {verb} магазина {shop_percent}%"
+
         request = AddTransactionRequest(
             nick=session.game_nick,
             deal_type=_DEAL_TYPE_OF[session.kind],
@@ -1064,6 +1099,14 @@ class TicketsCog(commands.Cog):
             # draft lines that call deletes (заявка 13.09.2026 п.7).
             await self._log_order_economics(interaction, session, from_storage(result.deal.amount))
             await self._boost_orders.clear(session.channel_id)
+
+        if self._shop is not None:
+            # This call is the one that actually spends a uses-limited
+            # effect — it only runs on the confirmed-and-not-replayed path,
+            # so a losing half of a staggered double-confirm (caught by
+            # `result.replayed` above) never reaches here and never spends.
+            await self._shop.apply_percent_effects(session.author_id, shop_side, consume=True)
+            await self._shop.grant_deal_xp_bonus(session.author_id, result.deal.xp)
 
         sync_nicks = [normalize_nick(session.game_nick)]
         if session.referrer_nick:

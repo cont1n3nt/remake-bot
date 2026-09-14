@@ -28,6 +28,7 @@ from stalbot.application.services.progression import ProgressionService
 from stalbot.application.services.recipes import RecipeService
 from stalbot.application.services.screenshots import ScreenshotService
 from stalbot.application.services.shelter_cost import ShelterCostService
+from stalbot.application.services.shop import ShopService
 from stalbot.application.services.stats import StatsService
 from stalbot.application.services.temp_prices import TempPriceService
 from stalbot.application.services.tickets import TicketService
@@ -38,6 +39,7 @@ from stalbot.domain.money import format_amount
 from stalbot.infrastructure.cache.db import CacheDb
 from stalbot.infrastructure.cache.repositories.boost_order_lines import BoostOrderLinesRepository
 from stalbot.infrastructure.cache.repositories.catalog_items import CatalogItemsRepository
+from stalbot.infrastructure.cache.repositories.coin_ledger import CoinLedgerRepository
 from stalbot.infrastructure.cache.repositories.coupons import CouponsRepository
 from stalbot.infrastructure.cache.repositories.deals import DealsRepository
 from stalbot.infrastructure.cache.repositories.idempotency import IdempotencyRepository
@@ -52,8 +54,10 @@ from stalbot.infrastructure.cache.repositories.screenshot_analyses import (
     ScreenshotAnalysesRepository,
 )
 from stalbot.infrastructure.cache.repositories.shelter import ShelterRepository
+from stalbot.infrastructure.cache.repositories.shop import ShopRepository
 from stalbot.infrastructure.cache.repositories.temp_prices import TempPricesRepository
 from stalbot.infrastructure.cache.repositories.ticket_sessions import TicketSessionsRepository
+from stalbot.infrastructure.cache.repositories.xp_ledger import XpLedgerRepository
 from stalbot.infrastructure.discord.audit_channel import AuditChannelGateway
 from stalbot.infrastructure.discord.emoji_resolver import EmojiResolver
 from stalbot.infrastructure.discord.role_gateway import DiscordRoleGateway
@@ -165,6 +169,9 @@ class StalbotBot(commands.Bot):
         self.health_service: HealthService | None = None
         #: Built by `_setup_cache` — `/temp_price`'s auto-revert poll (заявка 21.08.2026 п.9).
         self.temp_price_service: TempPriceService | None = None
+        #: Built by `_setup_cache` — shared by the ticket flow and the future
+        #: `/shop` storefront/admin cogs (заявка 13.09.2026 п.2).
+        self.shop_service: ShopService | None = None
 
     async def setup_hook(self) -> None:
         """Open the cache, then register commands."""
@@ -314,6 +321,16 @@ class StalbotBot(commands.Bot):
         coupon_service = CouponService(CouponsRepository(connection), clock=SystemClock())
         await self.add_cog(CouponsCog(coupon_service, self.embed_factory))
 
+        shop_service = ShopService(
+            ShopRepository(connection),
+            players_repo,
+            progression_repo,
+            CoinLedgerRepository(connection),
+            XpLedgerRepository(connection),
+            clock=SystemClock(),
+        )
+        self.shop_service = shop_service
+
         tickets_cog = TicketsCog(
             ticket_service,
             screenshot_service,
@@ -326,6 +343,7 @@ class StalbotBot(commands.Bot):
             self.settings,
             clock=SystemClock(),
             order_economics=OrderEconomicsService(boost_order_service, shelter_cost_service),
+            shop=shop_service,
         )
         await self.add_cog(tickets_cog)
         for view in tickets_cog.persistent_views():

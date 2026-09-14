@@ -534,8 +534,10 @@ class ShopService:
 
     # --- percent effects (queue for /recipe-style ticket integration) ----
 
-    async def apply_percent_effects(self, discord_id: int, side: PercentSide) -> Decimal:
-        """Sum and spend every live percent effect on one side, for a ticket confirm.
+    async def apply_percent_effects(
+        self, discord_id: int, side: PercentSide, *, consume: bool = True
+    ) -> Decimal:
+        """Sum every live percent effect on one side, for a ticket confirm.
 
         A duration-limited effect (`expires_at` set, `uses_left` `None`)
         keeps applying to every ticket until it expires on its own — it is
@@ -546,6 +548,16 @@ class ShopService:
         Args:
             discord_id: The ticket author.
             side: `"discount"` (заказ бустов) or `"markup"` (скупка).
+            consume: Whether to actually spend a use of each uses-limited
+                effect that contributed. `False` previews the number
+                without spending anything — the caller's own confirm flow
+                has to know the discount *before* it knows whether this
+                particular call is the one that will actually record the
+                deal (a staggered double-confirm can have two callers reach
+                this point, and only one of them ends up writing — see
+                `TicketsCog._on_amount_submitted`). Preview first to price
+                the deal, then call again with `consume=True` only once the
+                write is confirmed to be this call's own.
 
         Returns:
             The combined percent — `0` if the player holds none, or is not
@@ -564,18 +576,22 @@ class ShopService:
             if contributed is None:
                 continue
             total += contributed
-            if effect.uses_left is not None:
+            if consume and effect.uses_left is not None:
                 assert effect.id is not None  # noqa: S101 - a fetched effect always has an id
                 await self._shop.consume_effect(effect.id, now=now)
         return total
 
-    async def apply_xp_multiplier(self, discord_id: int) -> Decimal:
-        """Sum and spend every live `xp_multiplier` effect, for a deal confirm.
+    async def apply_xp_multiplier(self, discord_id: int, *, consume: bool = True) -> Decimal:
+        """Sum every live `xp_multiplier` effect, for a deal confirm.
 
-        Same use-vs-duration rule as `apply_percent_effects`.
+        Same use-vs-duration rule, and the same preview/consume split, as
+        `apply_percent_effects`. `grant_deal_xp_bonus` is the usual entry
+        point — it calls this and turns the percent into an actual credit.
 
         Args:
             discord_id: The player whose deal is being confirmed.
+            consume: Whether to spend a use of each uses-limited effect
+                that contributed.
 
         Returns:
             The combined percent — `0` if none apply.
@@ -593,10 +609,53 @@ class ShopService:
             if percent is None:
                 continue
             total += percent
-            if effect.uses_left is not None:
+            if consume and effect.uses_left is not None:
                 assert effect.id is not None  # noqa: S101 - a fetched effect always has an id
                 await self._shop.consume_effect(effect.id, now=now)
         return total
+
+    async def grant_deal_xp_bonus(self, discord_id: int, deal_xp: int) -> int:
+        """Credit the XP an active `xp_multiplier` effect adds to one just-recorded deal.
+
+        Called once, after a deal has actually been written (never on a
+        replayed/losing confirm — see `apply_percent_effects`'s docstring
+        for why that distinction matters). `deal_reward()` already decided
+        `deal_xp` from the deal's own turnover formula; this adds the
+        multiplier on top as a separate `xp_ledger` credit rather than
+        reaching back into that computation, which is what lets `/cost`-
+        style recomputation stay ignorant of shop effects entirely.
+
+        Args:
+            discord_id: The player whose deal was just recorded.
+            deal_xp: The deal's own XP reward (`Deal.xp` — before any
+                shop bonus), the base the percent applies to.
+
+        Returns:
+            The bonus XP actually credited — `0` if no multiplier applies.
+        """
+        percent = await self.apply_xp_multiplier(discord_id)
+        if percent <= 0 or deal_xp <= 0:
+            return 0
+        bonus = int((Decimal(deal_xp) * percent / 100).to_integral_value())
+        if bonus <= 0:
+            return 0
+
+        player = await self._players.get_by_discord_id(discord_id)
+        if player is None or player.id is None:
+            return 0
+        now = self._clock.now()
+        await self._xp_ledger.add(
+            XpLedgerEntry(
+                id=None,
+                player_id=player.id,
+                delta=bonus,
+                reason="shop_xp_multiplier",
+                created_by=None,
+                created_at=now,
+            )
+        )
+        await self._progression.recompute([player.id], now=now)
+        return bonus
 
     # --- admin CRUD --------------------------------------------------------
 
