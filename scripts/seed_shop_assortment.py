@@ -1,10 +1,13 @@
 """One-off: seed the owner's confirmed Coins-shop assortment (заявка 13.09.2026 п.2).
 
-The 12 items and 4 categories below are copied verbatim (prices, names,
-effects) from the owner's own message specifying the shop. Nothing here is
-invented — it exists so the assortment does not have to be typed into
-Discord by hand through a dozen `/shop_item add` calls after each fresh
-deploy.
+The 11 items and 4 categories below are copied from the owner's own
+message specifying the shop (13.09.2026), minus one deliberate deviation:
+«Личный Сейф» (`reserve_extend` — extending a reservation) is dropped
+entirely per the owner's follow-up decision on 15.09.2026 — there is no
+reservation system in the bot to extend, and they chose to drop the
+privilege rather than build one. Everything else is unchanged; this exists
+so the rest doesn't have to be typed into Discord by hand through a dozen
+`/shop_item add` calls after each fresh deploy.
 
 Idempotent per item: re-running skips any item whose name already exists
 (`ShopService.add_item` raises `DuplicateShopItemError`) rather than
@@ -23,16 +26,20 @@ item description so nobody mistakes it for the full original text):
   buyer — nothing in `ShopService.buy()` today lets a purchase name a
   second recipient.
 
-Four effect kinds sell, attach, and refund correctly (`ShopService.buy()`/
-`refund()` don't care what `effect_kind` a value is), but nothing outside
-the shop yet *reads* the resulting `player_effects` row to act on it:
-`queue_skip` (no queue-ordering command exists to move a ticket to the
-front), `reserve_extend` (no reservation system exists to extend),
-`here_ping` (no @here-permission gate exists), and `promo_code` (no
-"redeemer grants the buyer a passive per-deal royalty" mechanism exists —
-a different shape than `CouponService`'s flat percent-discount coupons).
-Selling them now still leaves the assortment matching the owner's list
-exactly; wiring each one up is separate, scoped work.
+Automation status of the three effect kinds that needed a decision
+(15.09.2026):
+
+- `queue_skip` — fully wired. `TicketsCog._apply_queue_skip` spends the
+  effect and renames the ticket channel the moment its author is known.
+- `here_ping` — deliberately left manual, per the owner: they grant this
+  themselves. `EffectKind.HERE_PING` is intentionally outside
+  `AUTOMATIC_KINDS`, so the item card says so honestly.
+- `promo_code` — the redeemed-newbie +1 Coin welcome grant is automatic
+  (`ShopService.grant_referral_welcome_bonus`, fired from
+  `TransactionService` the moment a referrer is first bound); the
+  franchise owner's own ongoing reward is not a new mechanic layered on
+  top — it is the referral-turnover math `domain.progression.calculator`
+  already computes for any referrer, automatically, on every recompute.
 
 Lives in `scripts/`, not `src/` — one-shot seed code, not part of the
 coverage denominator (sqlite_migration.md §XI).
@@ -181,19 +188,6 @@ _ITEMS: tuple[_SeedItem, ...] = (
     ),
     _SeedItem(
         category_key="large",
-        name="Личный Сейф",
-        description=(
-            "Позволяет держать один забронированный товар в брони до 4 суток "
-            "(вместо стандартных 24 часов)."
-        ),
-        price_coins=105,
-        effect_kind=EffectKind.RESERVE_EXTEND.value,
-        effect_value="4",
-        duration_days=14,
-        emoji="🛡️",
-    ),
-    _SeedItem(
-        category_key="large",
         name="Временный контракт «Медиа-Партнёр»",
         description=(
             "Даёт право раз в 3 дня тегать роль @here в канале «📢・информация» "
@@ -253,7 +247,7 @@ class SeedReport:
 
 
 async def run(cache_db: CacheDb) -> SeedReport:
-    """Upsert the 4 categories and add whichever of the 12 items are missing.
+    """Upsert the 4 categories and add whichever of the 11 items are missing.
 
     Args:
         cache_db: An already-connected-or-not `CacheDb` for the live cache.

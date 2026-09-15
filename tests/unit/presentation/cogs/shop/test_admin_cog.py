@@ -329,6 +329,6 @@ async def test_category_autocomplete_filters_by_key_or_name() -> None:
     # Stacking three `.autocomplete()` decorators on one function confuses mypy's
     # inferred type for it (discord.py's own overloads) even though the plain
     # bound method still takes (interaction, current) at runtime.
-    choices = await cog._category_autocomplete(interaction, "small")  # type: ignore[call-arg]
+    choices = await cog._category_autocomplete(interaction, "small")  # type: ignore[call-arg, misc]
 
     assert [c.value for c in choices] == ["small"]

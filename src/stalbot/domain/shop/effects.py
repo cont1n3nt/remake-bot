@@ -43,16 +43,21 @@ class EffectKind(StrEnum):
     """Множитель XP со сделок («Торговая гильдия»): `"50"` = +50%."""  # noqa: RUF001
 
     QUEUE_SKIP = "queue_skip"
-    """Проход без очереди. Очередь — порядок тикетов от старого к новому."""
-
-    RESERVE_EXTEND = "reserve_extend"
-    """Продление брони, в часах."""
+    """Проход без очереди. Очередь — порядок тикетов от старого к новому.
+    Переименовывает канал тикета автора эффекта («⚡・» перед именем) в
+    момент, когда автор тикета становится точно известен (заявка
+    13.09.2026 п.2)."""
 
     HERE_PING = "here_ping"
-    """Право тегать @here; `effect_value` — кулдаун в днях."""
+    """Право тегать @here; `effect_value` — кулдаун в днях. Выдаётся
+    администратором вручную — бот не проверяет и не применяет это право."""
 
     PROMO_CODE = "promo_code"
-    """Личный промокод — заводится через купоны."""
+    """Личная франшиза: новичок, впервые указавший владельца эффекта
+    рефералом, получает +1 Coin сразу (`ShopService.
+    grant_referral_welcome_bonus`); дальнейшее пассивное вознаграждение —
+    уже существующая реферальная математика `domain.progression.
+    calculator`, ничем не отличающаяся от любого другого реферера."""
 
     MANUAL = "manual"
     """Всё остальное: бот хранит и показывает, применяет админ."""
@@ -63,8 +68,22 @@ PERCENT_KINDS: Final = frozenset(
     {EffectKind.DISCOUNT_PERCENT, EffectKind.MARKUP_PERCENT, EffectKind.XP_MULTIPLIER}
 )
 
-#: Kinds the bot resolves on its own. Everything else is shown to the admin.
-AUTOMATIC_KINDS: Final = frozenset(EffectKind) - {EffectKind.MANUAL}
+#: Kinds the bot resolves on its own. Everything else is shown to the
+#: admin — `here_ping` included, by the owner's own choice (заявка
+#: 13.09.2026 п.2): they grant that permission by hand, so the item card
+#: says so rather than implying the bot handles it.
+AUTOMATIC_KINDS: Final = frozenset(
+    {
+        EffectKind.DISCOUNT_PERCENT,
+        EffectKind.MARKUP_PERCENT,
+        EffectKind.BOTH_PERCENT,
+        EffectKind.XP_GRANT,
+        EffectKind.COINS_GRANT,
+        EffectKind.XP_MULTIPLIER,
+        EffectKind.QUEUE_SKIP,
+        EffectKind.PROMO_CODE,
+    }
+)
 
 #: How each kind reads in Russian, for the admin's own lists and pickers.
 KIND_LABELS: Final[dict[str, str]] = {
@@ -75,7 +94,6 @@ KIND_LABELS: Final[dict[str, str]] = {
     EffectKind.COINS_GRANT: "🪙 Разовые Coins",
     EffectKind.XP_MULTIPLIER: "🚀 Множитель XP со сделок, %",  # noqa: RUF001
     EffectKind.QUEUE_SKIP: "⏱️ Без очереди",
-    EffectKind.RESERVE_EXTEND: "🛡️ Продление брони, ч",
     EffectKind.HERE_PING: "📢 Право на @here",
     EffectKind.PROMO_CODE: "🏷️ Личный промокод",
     EffectKind.MANUAL: "📝 Вручную",

@@ -657,6 +657,74 @@ class ShopService:
         await self._progression.recompute([player.id], now=now)
         return bonus
 
+    # --- queue skip & referrals --------------------------------------------
+
+    async def consume_queue_skip(self, discord_id: int) -> bool:
+        """Spend one live `queue_skip` effect for *discord_id*, if they have one.
+
+        Called once a ticket's real author is definitively known (the form
+        submit, not `_infer_author_id`'s best-effort channel-open guess) —
+        an Экспресс-талон is for whichever ticket its buyer opens next, not
+        one chosen in advance.
+
+        Args:
+            discord_id: The ticket's author.
+
+        Returns:
+            Whether an effect was actually spent — the caller uses this to
+            decide whether the ticket channel gets renamed.
+        """
+        player = await self._players.get_by_discord_id(discord_id)
+        if player is None or player.id is None:
+            return False
+        now = self._clock.now()
+        for effect in await self._shop.live_effects(player.id, now=now):
+            if effect.effect_kind == EffectKind.QUEUE_SKIP:
+                assert effect.id is not None  # noqa: S101 - a fetched effect always has an id
+                await self._shop.consume_effect(effect.id, now=now)
+                return True
+        return False
+
+    async def grant_referral_welcome_bonus(
+        self, new_player_id: int, referrer_player_id: int
+    ) -> int:
+        """Credit a freshly-referred player +1 Coin if the referrer holds a live «Личная Франшиза».
+
+        Called once, from `TransactionService`, at the exact moment a
+        player's referrer is bound for the first time — `referrer_player_id`
+        is only ever set once per player and never rewritten, so this can
+        never double-grant for the same referral. The referrer's own
+        ongoing reward is not a separate mechanic: it is whatever
+        `domain.progression.calculator`'s existing referral-turnover math
+        already credits them for having a referred player at all — «Личная
+        Франшиза» only makes the referrer nameable via a purchase, and adds
+        this one-time welcome grant on top.
+
+        Args:
+            new_player_id: The just-referred player receiving the bonus.
+            referrer_player_id: Whose live `promo_code` effect to check.
+
+        Returns:
+            `1` if a bonus was granted, `0` if the referrer holds no live
+            «Личная Франшиза» effect.
+        """
+        now = self._clock.now()
+        effects = await self._shop.live_effects(referrer_player_id, now=now)
+        if not any(effect.effect_kind == EffectKind.PROMO_CODE for effect in effects):
+            return 0
+        await self._coin_ledger.add(
+            CoinLedgerEntry(
+                id=None,
+                player_id=new_player_id,
+                delta=1,
+                reason="shop_promo_welcome",
+                created_by=None,
+                created_at=now,
+            )
+        )
+        await self._progression.recompute([new_player_id], now=now)
+        return 1
+
     # --- admin CRUD --------------------------------------------------------
 
     async def upsert_category(

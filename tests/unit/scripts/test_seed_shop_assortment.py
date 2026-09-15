@@ -23,13 +23,13 @@ def _load_module(name: str, path: Path) -> ModuleType:
 seed_mod = _load_module("seed_shop_assortment", _MODULE_PATH)
 
 
-async def test_run_seeds_all_four_categories_and_twelve_items(tmp_path: Path) -> None:
+async def test_run_seeds_all_four_categories_and_eleven_items(tmp_path: Path) -> None:
     cache_db = CacheDb(tmp_path / "cache.sqlite3")
     try:
         report = await seed_mod.run(cache_db)
 
         assert report.categories == 4
-        assert report.items_added == 12
+        assert report.items_added == 11
         assert report.items_skipped == ()
 
         connection = await cache_db.connect()
@@ -37,7 +37,7 @@ async def test_run_seeds_all_four_categories_and_twelve_items(tmp_path: Path) ->
         categories = await shop.categories(include_inactive=True)
         items = await shop.items(include_hidden=True)
         assert {c.key for c in categories} == {"small", "medium", "large", "elite"}
-        assert len(items) == 12
+        assert len(items) == 11
         assert {item.price_coins for item in items} == {
             15,
             20,
@@ -46,12 +46,12 @@ async def test_run_seeds_all_four_categories_and_twelve_items(tmp_path: Path) ->
             65,
             75,
             90,
-            105,
             120,
             150,
             175,
             200,
         }
+        assert "reserve_extend" not in {item.effect_kind for item in items}
     finally:
         await cache_db.close()
 
@@ -63,11 +63,11 @@ async def test_run_is_idempotent(tmp_path: Path) -> None:
         second = await seed_mod.run(cache_db)
 
         assert second.items_added == 0
-        assert len(second.items_skipped) == 12
+        assert len(second.items_skipped) == 11
 
         connection = await cache_db.connect()
         shop = ShopRepository(connection)
         items = await shop.items(include_hidden=True)
-        assert len(items) == 12  # not doubled
+        assert len(items) == 11  # not doubled
     finally:
         await cache_db.close()

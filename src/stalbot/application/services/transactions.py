@@ -16,6 +16,7 @@ from stalbot.application.dto.transaction_request import (
     TransactionRegistrationResult,
 )
 from stalbot.application.ports.clock import Clock
+from stalbot.application.services.shop import ShopService
 from stalbot.domain.entities.deal import Deal
 from stalbot.domain.enums import OccurredAtKind
 from stalbot.domain.errors import DealNotFoundError
@@ -39,6 +40,7 @@ class TransactionService:
         idempotency: IdempotencyRepository,
         *,
         clock: Clock,
+        shop: ShopService | None = None,
     ) -> None:
         """Wire the service to its collaborators.
 
@@ -48,12 +50,18 @@ class TransactionService:
             progression: Recomputes Coins/XP/rank after the deal is inserted.
             idempotency: Prevents a retried write from duplicating a deal.
             clock: Time source, tz-aware `GMT3`.
+            shop: Grants a shop-bought «Личная Франшиза» welcome bonus the
+                moment a referrer is bound for the first time (заявка
+                13.09.2026 п.2). `None` simply means no such bonus ever
+                applies — everything else about recording a deal is
+                unaffected.
         """
         self._players = players
         self._deals = deals
         self._progression = progression
         self._idempotency = idempotency
         self._clock = clock
+        self._shop = shop
         #: Serializes the whole replay-check -> insert -> record path
         #: (CLUSTER-1): two concurrent calls with the same idempotency key
         #: could otherwise both pass the replay check before either has
@@ -110,6 +118,11 @@ class TransactionService:
             assert referrer.id is not None  # noqa: S101 - get_or_create always returns a persisted player
             await self._players.set_referrer(player.id, referrer.id, now=now)
             referrer_player_id = referrer.id
+            if self._shop is not None:
+                # Only reachable once per player — `write_referrer` requires
+                # `referrer_player_id is None`, and it is never unset once
+                # written, so this can never double-grant the same referral.
+                await self._shop.grant_referral_welcome_bonus(player.id, referrer.id)
 
         progression_record = await self._progression.get(player.id)
         reward = deal_reward(request.deal_type, int(stored_amount))

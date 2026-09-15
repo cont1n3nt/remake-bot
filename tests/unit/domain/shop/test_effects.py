@@ -112,9 +112,15 @@ def test_a_description_includes_the_value_when_there_is_one() -> None:
     assert "3" in describe_effect(EffectKind.DISCOUNT_PERCENT, "3")
 
 
-def test_manual_is_the_only_kind_the_bot_does_not_apply_itself() -> None:
+def test_percent_grant_queue_and_promo_kinds_are_automatic() -> None:
     assert is_automatic(EffectKind.DISCOUNT_PERCENT)
     assert is_automatic(EffectKind.QUEUE_SKIP)
+    assert is_automatic(EffectKind.PROMO_CODE)
+
+
+def test_here_ping_and_manual_are_applied_by_the_admin() -> None:
+    """The owner grants @here access by hand (заявка 13.09.2026 п.2, decided 15.09.2026)."""
+    assert not is_automatic(EffectKind.HERE_PING)
     assert not is_automatic(EffectKind.MANUAL)
 
 

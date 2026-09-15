@@ -208,10 +208,13 @@ def _fake_coupons() -> MagicMock:
     return coupons
 
 
-def _fake_shop(*, percent: Decimal = Decimal(0), xp_bonus: int = 0) -> MagicMock:
+def _fake_shop(
+    *, percent: Decimal = Decimal(0), xp_bonus: int = 0, queue_skip: bool = False
+) -> MagicMock:
     shop = MagicMock()
     shop.apply_percent_effects = AsyncMock(return_value=percent)
     shop.grant_deal_xp_bonus = AsyncMock(return_value=xp_bonus)
+    shop.consume_queue_skip = AsyncMock(return_value=queue_skip)
     return shop
 
 
@@ -466,6 +469,36 @@ async def test_on_form_submitted_posts_a_new_summary_card() -> None:
     channel.send.assert_awaited_once()
     tickets.record_summary_message.assert_awaited_once()
     interaction.followup.send.assert_awaited_once()
+
+
+async def test_on_form_submitted_spends_the_authors_queue_skip() -> None:
+    session = _session(game_nick="Scaryyyyy")
+    shop = _fake_shop(queue_skip=True)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), shop=shop)
+    channel = _text_channel()
+    channel.name = "sell-items-scaryyyyy"
+    channel.edit = AsyncMock()
+    interaction = _interaction(channel=channel, user_id=42)
+
+    await cog._on_form_submitted(interaction, "Scaryyyyy", None, None)
+
+    shop.consume_queue_skip.assert_awaited_once_with(42)
+    channel.edit.assert_awaited_once_with(name="⚡・sell-items-scaryyyyy")
+
+
+async def test_on_order_form_submitted_spends_the_authors_queue_skip() -> None:
+    session = _session(kind=TicketKind.ORDER_BOOSTS, game_nick="Scaryyyyy")
+    shop = _fake_shop(queue_skip=True)
+    cog, *_ = _cog(tickets=_fake_tickets(get_return=session), shop=shop)
+    channel = _text_channel()
+    channel.name = "order-boosts-scaryyyyy"
+    channel.edit = AsyncMock()
+    interaction = _interaction(channel=channel, user_id=42)
+
+    await cog._on_order_form_submitted(interaction, "Scaryyyyy", "через 3 часа", None, None)
+
+    shop.consume_queue_skip.assert_awaited_once_with(42)
+    channel.edit.assert_awaited_once_with(name="⚡・order-boosts-scaryyyyy")
 
 
 async def test_on_form_submitted_resolves_a_mentioned_referrer() -> None:
@@ -870,6 +903,68 @@ async def test_amount_submitted_does_not_spend_shop_effects_on_a_replayed_regist
 
     shop.apply_percent_effects.assert_awaited_once_with(session.author_id, "markup", consume=False)
     shop.grant_deal_xp_bonus.assert_not_called()
+
+
+# -- Queue skip (заявка 13.09.2026 п.2, decided 15.09.2026) ----------------
+
+
+async def test_apply_queue_skip_renames_the_channel_when_a_talon_is_spent() -> None:
+    shop = _fake_shop(queue_skip=True)
+    cog, *_ = _cog(shop=shop)
+    channel = _text_channel()
+    channel.name = "sell-items-scaryyyyy"
+    channel.edit = AsyncMock()
+
+    await cog._apply_queue_skip(channel, 42)
+
+    shop.consume_queue_skip.assert_awaited_once_with(42)
+    channel.edit.assert_awaited_once_with(name="⚡・sell-items-scaryyyyy")
+
+
+async def test_apply_queue_skip_does_nothing_without_a_live_talon() -> None:
+    shop = _fake_shop(queue_skip=False)
+    cog, *_ = _cog(shop=shop)
+    channel = _text_channel()
+    channel.name = "sell-items-scaryyyyy"
+    channel.edit = AsyncMock()
+
+    await cog._apply_queue_skip(channel, 42)
+
+    channel.edit.assert_not_called()
+
+
+async def test_apply_queue_skip_is_a_noop_without_a_shop() -> None:
+    cog, *_ = _cog(shop=None)
+    channel = _text_channel()
+    channel.edit = AsyncMock()
+
+    await cog._apply_queue_skip(channel, 42)
+
+    channel.edit.assert_not_called()
+
+
+async def test_apply_queue_skip_does_not_double_prefix_an_already_marked_channel() -> None:
+    shop = _fake_shop(queue_skip=True)
+    cog, *_ = _cog(shop=shop)
+    channel = _text_channel()
+    channel.name = "⚡・sell-items-scaryyyyy"
+    channel.edit = AsyncMock()
+
+    await cog._apply_queue_skip(channel, 42)
+
+    channel.edit.assert_not_called()
+
+
+async def test_apply_queue_skip_swallows_a_rename_failure() -> None:
+    shop = _fake_shop(queue_skip=True)
+    cog, *_ = _cog(shop=shop)
+    channel = _text_channel()
+    channel.name = "sell-items-scaryyyyy"
+    channel.edit = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(status=403), "Missing Permissions")
+    )
+
+    await cog._apply_queue_skip(channel, 42)  # must not raise
 
 
 # -- Coupons (заявка 26.08.2026) ------------------------------------------

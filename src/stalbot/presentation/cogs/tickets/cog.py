@@ -118,6 +118,11 @@ _SHOP_PERCENT_SIDE_OF: dict[TicketKind, PercentSide] = {
     TicketKind.ORDER_BOOSTS: "discount",
 }
 
+#: Marks a ticket channel whose author spent an Экспресс-талон (заявка
+#: 13.09.2026 п.2) — a visual cue for admins scanning the channel list,
+#: not anything the bot itself reads back.
+_QUEUE_SKIP_PREFIX = "⚡・"
+
 _PANEL_DESCRIPTIONS: dict[TicketKind, str] = {
     TicketKind.SELL_ITEMS: "Чтобы оформить сделку, заполните форму по кнопке ниже.",
     TicketKind.SELL_BOOSTS: "Чтобы оформить сделку, заполните форму по кнопке ниже.",
@@ -366,6 +371,7 @@ class TicketsCog(commands.Cog):
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
             await self._post_or_update_summary(channel, session)
+            await self._apply_queue_skip(channel, interaction.user.id)
 
         embed = self._embeds.success(
             "✅ Заявка заполнена",
@@ -441,6 +447,7 @@ class TicketsCog(commands.Cog):
             # UX #1: the order starts on the read-only summary embed, not
             # the interactive editor — "✏️ Редактировать" opens the latter.
             await self._post_or_update_order_summary(channel, session)
+            await self._apply_queue_skip(channel, interaction.user.id)
 
         embed = self._embeds.success(
             "✅ Заявка заполнена",
@@ -460,6 +467,35 @@ class TicketsCog(commands.Cog):
                 return
         message = await channel.send(embed=embed, view=view)
         await self._tickets.record_summary_message(channel.id, message.id)
+
+    async def _apply_queue_skip(self, channel: discord.TextChannel, author_id: int) -> None:
+        """Rename the channel if its author holds an Экспресс-талон (заявка 13.09.2026 п.2).
+
+        Called once the ticket's real author is known — the form submit,
+        not `on_guild_channel_create`'s best-effort `_infer_author_id`
+        guess, which the codebase explicitly never trusts for anything
+        consequential before the form is filled in.
+
+        Never raises into the form-submit flow: the ticket itself is
+        already recorded by the time this runs, and a rename failing (the
+        bot lost "Manage Channels", the channel vanished) must not make a
+        successfully-submitted form look failed.
+        """
+        if self._shop is None:
+            return
+        try:
+            spent = await self._shop.consume_queue_skip(author_id)
+        except Exception:
+            logger.exception("queue_skip lookup failed for %s — channel left unrenamed", author_id)
+            return
+        if not spent or channel.name.startswith(_QUEUE_SKIP_PREFIX):
+            return
+        try:
+            await channel.edit(name=f"{_QUEUE_SKIP_PREFIX}{channel.name}"[:100])
+        except discord.HTTPException:
+            logger.warning(
+                "could not rename channel %s for a spent Экспресс-талон", channel.id, exc_info=True
+            )
 
     # -- Boost-order editor (PLAN.md §11.6) ----------------------------------
 

@@ -9,6 +9,7 @@ orchestration.
 import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
 
 import aiosqlite
 
@@ -25,13 +26,16 @@ from stalbot.infrastructure.cache.repositories.progression import ProgressionRep
 from tests.support.fake_clock import FakeClock
 
 
-def _service(connection: aiosqlite.Connection, *, clock: FakeClock) -> TransactionService:
+def _service(
+    connection: aiosqlite.Connection, *, clock: FakeClock, shop: MagicMock | None = None
+) -> TransactionService:
     return TransactionService(
         PlayersRepository(connection),
         DealsRepository(connection),
         ProgressionRepository(connection),
         IdempotencyRepository(connection),
         clock=clock,
+        shop=shop,
     )
 
 
@@ -184,6 +188,55 @@ async def test_register_writes_referrer_only_on_the_first_deal(
     unchanged = await players.get_by_nick(NormalizedNick("scaryyyyy"))
     assert unchanged is not None
     assert unchanged.referrer_player_id == player.referrer_player_id  # still the first referrer
+
+
+async def test_register_grants_the_shop_referral_welcome_bonus_on_first_bind(
+    connection: aiosqlite.Connection,
+) -> None:
+    """«Личная Франшиза» (заявка 13.09.2026 п.2): a first-time referrer bind is the
+    one moment `ShopService.grant_referral_welcome_bonus` is ever called."""
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    shop = MagicMock()
+    shop.grant_referral_welcome_bonus = AsyncMock(return_value=1)
+    service = _service(connection, clock=clock, shop=shop)
+    players = PlayersRepository(connection)
+
+    await service.register(_request(idempotency_key="i1", referrer_nick="OtherNick"))
+
+    player = await players.get_by_nick(NormalizedNick("scaryyyyy"))
+    referrer = await players.get_by_nick(NormalizedNick("othernick"))
+    assert player is not None and referrer is not None
+    shop.grant_referral_welcome_bonus.assert_awaited_once_with(player.id, referrer.id)
+
+
+async def test_register_does_not_regrant_the_welcome_bonus_on_a_later_deal(
+    connection: aiosqlite.Connection,
+) -> None:
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    shop = MagicMock()
+    shop.grant_referral_welcome_bonus = AsyncMock(return_value=1)
+    service = _service(connection, clock=clock, shop=shop)
+
+    await service.register(_request(idempotency_key="i1", referrer_nick="OtherNick"))
+    await service.register(
+        _request(idempotency_key="i2", referrer_nick="YetAnotherNick", amount=Decimal(1000))
+    )
+
+    shop.grant_referral_welcome_bonus.assert_awaited_once()
+
+
+async def test_register_without_a_shop_still_binds_the_referrer(
+    connection: aiosqlite.Connection,
+) -> None:
+    """`shop=None` (the default) must not stop the ordinary referrer bind from working."""
+    clock = FakeClock(datetime(2026, 8, 2, 12, 0, tzinfo=UTC))
+    service = _service(connection, clock=clock)
+    players = PlayersRepository(connection)
+
+    await service.register(_request(referrer_nick="OtherNick"))
+
+    player = await players.get_by_nick(NormalizedNick("scaryyyyy"))
+    assert player is not None and player.referrer_player_id is not None
 
 
 async def test_register_recomputes_progression_for_player_and_referrer(

@@ -834,3 +834,95 @@ async def test_recent_purchases_is_newest_first_and_respects_the_limit(
 
     assert len(recent) == 1
     assert recent[0].idempotency_key == "click-2"
+
+
+# -- queue skip & referrals (заявка 13.09.2026 п.2, 15.09.2026 decisions) ---
+
+
+async def test_consume_queue_skip_spends_a_live_effect(connection: aiosqlite.Connection) -> None:
+    service, players, progression = _service(connection)
+    await _player_with_coins(connection, players, progression, coins=100)
+    await _category(service)
+    item = await service.add_item("small", "Талон", "Без очереди.", 20, "queue_skip", uses=1)
+    assert item.id is not None
+    await service.buy(_DISCORD_ID, item.id, idempotency_key="click-1")
+
+    first = await service.consume_queue_skip(_DISCORD_ID)
+    second = await service.consume_queue_skip(_DISCORD_ID)
+
+    assert (first, second) == (True, False)
+
+
+async def test_consume_queue_skip_is_false_with_no_active_talon(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, progression = _service(connection)
+    await _player_with_coins(connection, players, progression, coins=100)
+
+    assert await service.consume_queue_skip(_DISCORD_ID) is False
+
+
+async def test_consume_queue_skip_is_false_for_an_unlinked_discord_id(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, _players, _progression = _service(connection)
+
+    assert await service.consume_queue_skip(_DISCORD_ID) is False
+
+
+async def test_consume_queue_skip_ignores_other_effect_kinds(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, progression = _service(connection)
+    await _player_with_coins(connection, players, progression, coins=100)
+    await _category(service)
+    item = await service.add_item(
+        "small", "Скидка", "2%.", 20, "discount_percent", effect_value="2", duration_days=7
+    )
+    assert item.id is not None
+    await service.buy(_DISCORD_ID, item.id, idempotency_key="click-1")
+
+    assert await service.consume_queue_skip(_DISCORD_ID) is False
+
+
+async def test_grant_referral_welcome_bonus_credits_the_new_player(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, progression = _service(connection)
+    referrer_id = await _player_with_coins(
+        connection, players, progression, discord_id=222, nick="franchisor", coins=300
+    )
+    new_player_id = await _player_with_coins(
+        connection, players, progression, discord_id=333, nick="newbie", coins=0
+    )
+    await _category(service)
+    item = await service.add_item(
+        "small", "Франшиза", "Промокод.", 200, "promo_code", duration_days=30
+    )
+    assert item.id is not None
+    await service.buy(222, item.id, idempotency_key="click-1")
+
+    bonus = await service.grant_referral_welcome_bonus(new_player_id, referrer_id)
+
+    assert bonus == 1
+    record = await progression.get(new_player_id)
+    assert record is not None
+    assert record.coins == 1
+
+
+async def test_grant_referral_welcome_bonus_is_zero_without_a_live_franchise(
+    connection: aiosqlite.Connection,
+) -> None:
+    service, players, progression = _service(connection)
+    referrer_id = await _player_with_coins(
+        connection, players, progression, discord_id=222, nick="franchisor", coins=0
+    )
+    new_player_id = await _player_with_coins(
+        connection, players, progression, discord_id=333, nick="newbie", coins=0
+    )
+
+    bonus = await service.grant_referral_welcome_bonus(new_player_id, referrer_id)
+
+    assert bonus == 0
+    record = await progression.get(new_player_id)
+    assert record is None or record.coins == 0

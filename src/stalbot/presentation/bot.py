@@ -201,12 +201,23 @@ class StalbotBot(commands.Bot):
             clock=SystemClock(),
         )
 
+        shop_service = ShopService(
+            ShopRepository(connection),
+            players_repo,
+            progression_repo,
+            CoinLedgerRepository(connection),
+            XpLedgerRepository(connection),
+            clock=SystemClock(),
+        )
+        self.shop_service = shop_service
+
         transaction_service = TransactionService(
             players_repo,
             deals_repo,
             progression_repo,
             IdempotencyRepository(connection),
             clock=SystemClock(),
+            shop=shop_service,
         )
         await self.add_cog(
             TransactionsCog(
@@ -323,15 +334,6 @@ class StalbotBot(commands.Bot):
         coupon_service = CouponService(CouponsRepository(connection), clock=SystemClock())
         await self.add_cog(CouponsCog(coupon_service, self.embed_factory))
 
-        shop_service = ShopService(
-            ShopRepository(connection),
-            players_repo,
-            progression_repo,
-            CoinLedgerRepository(connection),
-            XpLedgerRepository(connection),
-            clock=SystemClock(),
-        )
-        self.shop_service = shop_service
         await self.add_cog(ShopCog(shop_service, self.embed_factory))
         await self.add_cog(ShopAdminCog(shop_service, players_repo, self.embed_factory))
 
